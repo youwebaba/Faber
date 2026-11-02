@@ -1,4 +1,4 @@
-# Sophia Harness implementation contract
+# Faber implementation contract
 
 Bill requested a fresh harness on October 31, 2026, with a Codex-style UI,
 modular tools, local/cloud models, agent delegation, chats/projects, PC access,
@@ -17,7 +17,7 @@ developer build. It does not migrate their data or change their launchers.
 - `renderer/`, `test/ui*.test.mjs`: interface agent. Local HTML/CSS/ES modules,
   sandboxed renderer, no dependency on Electron internals.
 - Documentation and integrated review: coordinator. Agents report changes to
-  `/root/project_librarian` (GPT-6 Luna); only Luna accesses unified memory.
+  the designated GPT-6 Luna librarian; only Luna accesses unified memory.
 - `model-hub/`, `test/hub*.test.mjs`: Hugging Face metadata, download jobs and
   shared agent tools; see [HUGGINGFACE.md](HUGGINGFACE.md). The renderer and
   agents use the same manager, with host-owned networking and encrypted tokens.
@@ -119,9 +119,14 @@ Requests and return values:
   proof that the new renderer has loaded.
 - `models.*` → the separate [Hub request and state contract](HUGGINGFACE.md).
   These requests are explicitly allowlisted in the host and preload.
-- `localModels.list/start/stop` → the [local model contract](LOCAL_MODELS.md).
+- `localModels.list/details/hardware/configure/start/stop/delete` → the
+  [local model contract](LOCAL_MODELS.md).
   These host-owned methods are allowlisted in the bridge; agents share the same
   manager through registered tools. `localModels` events signal lifecycle changes.
+- `addons.list/import/enable/disable/uninstall/reset/rollback/openDirectory` →
+  the local package lifecycle in [ADDONS.md](ADDONS.md). `addons` events carry
+  changed state; unchanged reads do not emit another event. Mutations serialize
+  and code approval covers the complete package. Online sharing is excluded.
 
 Project: `{id,name,path,createdAt}`. Chat:
 `{id,projectId,title,providerId,model,grants:[],voice:{enabled:false,phrase:'Hey Sophia',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
@@ -198,7 +203,8 @@ Provide a sample extension plus a small test proving its tool and UI registratio
 Source/extension actions must describe changed files and preserve user data.
 Installed extensions retain exact-source approvals across restart. Extension
 and updater mutations are serialized across concurrent agents. The source
-updater protects dependency manifests, launchers and `desktop/recovery.mjs`;
+updater protects dependency manifests, launchers, `desktop/bootstrap.cjs`,
+`desktop/packaged-paths.mjs` and `desktop/recovery.mjs`;
 the launcher can run that independent recovery entry without importing the app.
 Ordinary `files_write` refuses writes to the running harness source, including
 symlink aliases. Shell grants remain unrestricted user-account authority.

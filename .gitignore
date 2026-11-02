@@ -1,0 +1,14 @@
+node_modules/
+release/
+.runtime/
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.gguf
+*.safetensors
+*.onnx
+*.partial

@@ -12,7 +12,7 @@ hidden/partial files and filesystem links. Incomplete or failed tracked download
 and unsupported formats are unavailable. File discovery is not a guarantee that
 the model is complete, fits memory or supports the selected runtime.
 
-Start rescans the selected file set and launches the installed llama.cpp server
+Start rescans the selected file set and launches the managed llama.cpp server
 on an authenticated loopback endpoint. It uses the original files directly,
 without importing another copy into Ollama. The host owns the process, waits for
 readiness, and records a reusable OpenAI-compatible connection. Starting never
@@ -26,9 +26,10 @@ file entry before starting it again. An abrupt operating-system or harness
 process crash may leave a server behind; ordinary Stop and app shutdown are
 covered by the process cleanup checks.
 
-The installed Ollama bundle on this PC supplies the server executable. Missing
-runtimes or unsupported architectures produce an actionable error; the harness
-does not download executables or weights automatically. Separate vision-projector
+Installed Faber bundles a pinned runner with CPU, CUDA 13 and Vulkan backends.
+Source mode can use the installed Ollama bundle or a llama.cpp server on PATH.
+Missing runtimes or unsupported architectures produce an actionable error; the
+harness does not download executables or weights automatically. Separate vision-projector
 files are not loaded by this first GGUF launcher. Tool calling depends on the
 model and its chat template. Runtime-native context and hardware constraints
 apply; the harness does not reinstate a context or turn budget.
@@ -42,8 +43,9 @@ Ollama service available. These controls never pull a missing model.
 
 ## Shared host interface
 
-The validated bridge exposes `localModels.list`, `localModels.start` and
-`localModels.stop`. Folder selection uses a scanner-issued `modelId`, not an
+The validated bridge exposes `localModels.list`, `localModels.details`,
+`localModels.hardware`, `localModels.configure`, `localModels.start`,
+`localModels.stop` and `localModels.delete`. Folder selection uses a scanner-issued `modelId`, not an
 arbitrary executable or path. Ollama selection uses an existing local
 `providerId` and installed `model` name. Status includes the configured folder,
 discovered files, managed provider ID and actual lifecycle state. The
@@ -54,3 +56,55 @@ manager to agents. Start/Stop require the existing computer permission. Lifecycl
 active chats using the target model; the runtime also rejects new runs while a
 managed model is unavailable or a lifecycle operation blocks that connection.
 No API keys or raw server credentials are exposed in library/status results.
+
+The additional agent tools are `local_model_details`, `local_model_hardware`
+(read), `local_model_configure` (computer), and `local_model_delete` (files).
+Configure accepts `{mode: 'auto'|'cpu'|'custom', gpuIds: string[], cpuIds: number[],
+threads: number, memoryMap: boolean}`. Details/delete use a scanner-issued model ID.
+
+## Hardware and memory
+
+Expand **Hardware & memory** for Downloaded models (local). Save changes before
+Start; stop the managed model before changing its settings.
+
+- **Auto** lets the runner fit layers to available supported devices.
+- **CPU only** disables GPU layers. CPU orchestration is still required in GPU
+  modes; a GPU checkbox does not make the CPU unused.
+- **Custom** selects supported GPUs by checkbox. CPU selection chooses logical
+  processors, with an optional thread count; zero means automatic. Strict core
+  affinity is unavailable on topologies with more than 64 logical processors.
+- **Allow disk-backed memory** controls memory-mapped model files. Clearing it
+  requests a normal load. Neither option turns SSD/HDD space into VRAM or disables
+  Windows paging. File location determines the backing drive.
+
+Only devices reported by a compatible runtime backend appear. Faber probes
+CUDA/Vulkan rather than inferring support from a GPU's marketing name. A single
+launch uses the selected compatible backend; it does not combine devices across
+CUDA and Vulkan. Missing drivers or unsupported architectures produce errors.
+GPU fit depends on free memory, context and model support.
+
+The picker displays requested settings separately from observed offloaded layers
+and devices. Custom GPU mode stops if actual placement cannot be confirmed,
+instead of quietly continuing on CPU. Settings apply only to Faber's managed
+runner, never to remote APIs, local clusters, or another app's Ollama server.
+
+## Library cards, details and deletion
+
+The Models library scans actual files, including manually copied models, and
+shows a grid with sizes. Active downloads retain progress and speed. A completed
+download record is not evidence that its files still exist.
+
+Click a local card for offline details. Bounded GGUF metadata/tensor-descriptor
+reads report architecture, predominant quantization and stored tensor parameter
+count, including complete original shard sets. No weights are loaded by this
+inspection. Truncated, incompatible or oversized metadata stays unknown; cached
+Hub metadata is explicitly labeled and is not a fresh content-integrity check.
+VRAM uses file bytes plus estimated overhead, not a measured requirement. Publisher
+details provide selectable quantization variants for new downloads.
+
+**Delete** moves only the detected variant's files to Windows Recycle Bin. It
+also works on existing shards of incomplete/broken inactive models. It does not
+delete missing shards, repository directories, sibling variants or Ollama files
+outside the configured library. Loaded files, links, stale selections and
+overlapping downloads are rejected. Partial failures identify moved/remaining
+files. Recycle Bin space is reclaimed only when the user empties it.

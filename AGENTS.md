@@ -1,4 +1,17 @@
-# Sophia Harness
+# Faber
+
+This standalone repository is `https://github.com/youwebaba/Faber`. Work from
+its root; do not push the containing Sophia repository into this remote. Preserve
+unrelated edits, commit only this task's verified source, fetch before pushing,
+and do not force-push. Runtime data and binaries are not source files.
+
+For this PC, the parent clocal.ai memory policy applies via
+`C:/Users/youwe/OneDrive/Desktop/clocal.ai/voice-assistant/tools/PROJECT-MEMORY-PROTOCOL.md`.
+Only the designated isolated GPT-6 Luna librarian accesses that log. If it is
+unavailable on another installation, report that limitation; do not invent a log.
+
+Read `ADDONS.md` before authoring a removable feature. b1 includes only local
+addon management; no online addon sharing, publishing, catalog or OTA updates.
 
 Bill's October 31, 2026 instruction for this application is a fresh harness,
 Codex-style interface and modular backbone. This folder is independent of the

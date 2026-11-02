@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 const allowed=/^(core|desktop|renderer|tools|extensions|model-hub|local-models|test)\/[a-zA-Z0-9_./-]+\.(mjs|cjs|js|json|html|css|ps1)$/;
-export function validUpgradePath(value){return typeof value==='string'&&allowed.test(value)&&!value.split('/').some(p=>p==='.'||p==='..')&&value!=='desktop/recovery.mjs';}
+export function validUpgradePath(value){return typeof value==='string'&&allowed.test(value)&&!value.split('/').some(p=>p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/packaged-paths.mjs'].includes(value.toLowerCase());}
 async function safePath(root,relative){
   if(!validUpgradePath(relative))throw new Error('Invalid recovery path');
   const base=await fs.realpath(root),target=path.resolve(base,relative);let probe=target;

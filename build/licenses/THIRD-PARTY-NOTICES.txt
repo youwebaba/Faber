@@ -1,0 +1,24 @@
+Faber b1.0 local runtime notices
+
+This runtime is an unmodified local snapshot of the llama.cpp components shipped
+with Ollama 0.40.10 for Windows x64. The exact source version, byte lengths and
+SHA-256 file digests are recorded in runtime-manifest.json. No model weights or
+Ollama service are included. NVIDIA/AMD/Intel graphics drivers are not included.
+
+llama.cpp and ggml: MIT; see LLAMA_CPP_LICENSE and LLAMA_CPP_VENDORS_LICENSE.
+cpp-httplib: MIT; see CPP_HTTPLIB_LICENSE.
+LLVM libc++, libunwind and OpenMP: see the included LLVM 18.1.8 notices.
+winpthreads: see WINPTHREADS-LICENSE.txt.
+NVIDIA CUDA 13.0 runtime, cuBLAS, NVRTC and nvJitLink: proprietary NVIDIA software;
+see CUDA-13.0-EULA.html, including the redistribution terms and third-party notices.
+CUDA 13 requires a compatible NVIDIA driver (baseline family 580 or newer).
+The application checks device availability and does not guarantee GPU support.
+
+Microsoft Visual C++ runtime DLLs (14.44.35211.0): Copyright Microsoft Corporation.
+These unmodified app-local runtime components accompany the binary distribution.
+Microsoft redistribution terms and file list:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/
+
+Additional upstream distribution notices are retained as GO_LICENSE.
+Faber does not claim ownership of third-party components or model weights.

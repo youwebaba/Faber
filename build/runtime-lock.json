@@ -1,0 +1,351 @@
+{
+  "schemaVersion": 1,
+  "source": "Installed Ollama 0.40.10 Windows x64 runtime snapshot",
+  "version": "version: 0.7.0-dev (build 1, commit a37cc4610)\r\nbuilt with Clang 18.1.8 for Windows AMD64",
+  "cuda": "13.0 (cudart file version 6.14.11.13000)",
+  "cpu": true,
+  "backends": [
+    "cuda_v13",
+    "vulkan"
+  ],
+  "licenseSources": {
+    "CUDA-13.0-EULA.html": "https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html",
+    "LLVM-18.1.8-LICENSE.txt": "https://releases.llvm.org/18.1.8/LICENSE.TXT",
+    "LIBCXX-18.1.8-LICENSE.txt": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libcxx/LICENSE.TXT",
+    "LIBUNWIND-18.1.8-LICENSE.txt": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/libunwind/LICENSE.TXT",
+    "OPENMP-18.1.8-LICENSE.txt": "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-18.1.8/openmp/LICENSE.TXT",
+    "WINPTHREADS-LICENSE.txt": "https://raw.githubusercontent.com/mingw-w64/mingw-w64/v12.0.0/mingw-w64-libraries/winpthreads/COPYING"
+  },
+  "files": [
+    {
+      "path": "CPP_HTTPLIB_LICENSE",
+      "size": 1097,
+      "sha256": "bb546eae5924d8ee842e0e567e6d533c5824bdebccf605f99a5b3429034e6697"
+    },
+    {
+      "path": "cuda_v13/concrt140.dll",
+      "size": 311688,
+      "sha256": "f203cde3b16c6f020639fa8d94c29a161fd69dcc72da93340ed2aa3a0f61c08f"
+    },
+    {
+      "path": "cuda_v13/cublas64_13.dll",
+      "size": 50285960,
+      "sha256": "680bc3afa553add72d8c15f50ab5d9ec167f389e48c0ca20c0b476f042351853"
+    },
+    {
+      "path": "cuda_v13/cublasLt64_13.dll",
+      "size": 477894536,
+      "sha256": "10bf772740254ad11a582486f38f8ec9ac7b32a8ef54ffcc042d41428df8368c"
+    },
+    {
+      "path": "cuda_v13/cudart64_13.dll",
+      "size": 468360,
+      "sha256": "831acebdf86eff55b7709af4b42430cf3a4c146460d1c71fe0ca64f0da3b3f2f"
+    },
+    {
+      "path": "cuda_v13/ggml-cuda.dll",
+      "size": 136374152,
+      "sha256": "40b51b0911fc81c61f196e99955eb88dcabcc097e3c003d6a05ddc437cd4d637"
+    },
+    {
+      "path": "cuda_v13/msvcp140_1.dll",
+      "size": 23432,
+      "sha256": "e95de1f172ae3816b8233e4ec2434e48372d87af375bf599ebd57209c6cb46d0"
+    },
+    {
+      "path": "cuda_v13/msvcp140_2.dll",
+      "size": 267656,
+      "sha256": "43b8cebb60493c57fe03dc9b186c8b443eb733b05c525b95723fc4ec0e72008f"
+    },
+    {
+      "path": "cuda_v13/msvcp140_atomic_wait.dll",
+      "size": 37768,
+      "sha256": "82e4d29002114cc5d067f6b4b7eda653ec97b9317f0be7adb59e0e8cf943d58a"
+    },
+    {
+      "path": "cuda_v13/msvcp140_codecvt_ids.dll",
+      "size": 19336,
+      "sha256": "08b28d0b3aa5940d045ecdd5bc888da6457f8c164cac75e87d1a78bce8092828"
+    },
+    {
+      "path": "cuda_v13/msvcp140.dll",
+      "size": 545160,
+      "sha256": "ec3c31eb4fcccd84f3e3419a88fd12ed7a92664b80709f243605588378a204f2"
+    },
+    {
+      "path": "cuda_v13/nvJitLink_130_0.dll",
+      "size": 88216968,
+      "sha256": "03335180679032fe3f02b5e24c3d8d251552fc89010f17c78573118d3749b589"
+    },
+    {
+      "path": "cuda_v13/nvrtc-builtins64_130.dll",
+      "size": 4469640,
+      "sha256": "90c596c65e467f1554f3718952eee46d6921793566ba14ab1bb86ed7e268fdd2"
+    },
+    {
+      "path": "cuda_v13/nvrtc64_130_0.alt.dll",
+      "size": 91026824,
+      "sha256": "8acc188cce68351268a2bf364596e767f31375d3638c44952b7ea03289c8fb39"
+    },
+    {
+      "path": "cuda_v13/nvrtc64_130_0.dll",
+      "size": 90959752,
+      "sha256": "95d3cecce09ac9c2d5ea15c12d645b5be03fab56551d3f0478522cf6c13d509d"
+    },
+    {
+      "path": "cuda_v13/vccorlib140.dll",
+      "size": 339848,
+      "sha256": "24e01f12018fecc4096580ef687c2068b894edf7d333c8ab82c9def468ccf2c4"
+    },
+    {
+      "path": "cuda_v13/vcruntime140_1.dll",
+      "size": 37256,
+      "sha256": "805abeacd9d76e973973fe00b746a4f4380d5cc5c0b19b6a7d4df3d9ab81e21a"
+    },
+    {
+      "path": "cuda_v13/vcruntime140_threads.dll",
+      "size": 25992,
+      "sha256": "a8ae3921f2046bcdc30193cb458f4f4b2bcd4e85c147124893875af3bc9e22d7"
+    },
+    {
+      "path": "cuda_v13/vcruntime140.dll",
+      "size": 112008,
+      "sha256": "ddadb3538819dfff856cfa8835aef5d38682dfd881fe7f409a95b8f0af17001b"
+    },
+    {
+      "path": "ggml-base.dll",
+      "size": 821640,
+      "sha256": "14f8ec3977ffd56d2e76290408003cc4cd70016a7ed17da9cfe893ddc63f1832"
+    },
+    {
+      "path": "ggml-cpu-alderlake.dll",
+      "size": 1733512,
+      "sha256": "c018fa3ff24002bffc8b8612002e606358bcca40960b7b28e5117cd561e344bd"
+    },
+    {
+      "path": "ggml-cpu-cannonlake.dll",
+      "size": 2020232,
+      "sha256": "68c879226db46dcc86541125515feb9499ef094b89e54885e3380c40d1d3a7a0"
+    },
+    {
+      "path": "ggml-cpu-cascadelake.dll",
+      "size": 1990024,
+      "sha256": "e7a479f53f54abef749b8972c4a24176dafefa8f13c2a83587418272a4443ad4"
+    },
+    {
+      "path": "ggml-cpu-cooperlake.dll",
+      "size": 1988488,
+      "sha256": "c420bcdef01071f00f44fad95fef5fab7fa6590f71c7e98ed01a51910e2ef65f"
+    },
+    {
+      "path": "ggml-cpu-haswell.dll",
+      "size": 1740680,
+      "sha256": "f13c4e220e411ffbe68530e1a9ffb683df5c5a5dc94fcaa7d7a5d8a51bd7b0a0"
+    },
+    {
+      "path": "ggml-cpu-icelake.dll",
+      "size": 1997704,
+      "sha256": "75d1fdd44bad59470b9e765a68dc8a8f09d2e99a75618cad71547c89be6013b7"
+    },
+    {
+      "path": "ggml-cpu-ivybridge.dll",
+      "size": 1619336,
+      "sha256": "6cf00f7190ee8735e8056291aa6607f6658f25463f22275cba4c5ff538fa285c"
+    },
+    {
+      "path": "ggml-cpu-piledriver.dll",
+      "size": 1625480,
+      "sha256": "127d0a8ad7736abb4464a917810111c2c262a2913c7c84bd55a98f4579f18079"
+    },
+    {
+      "path": "ggml-cpu-sandybridge.dll",
+      "size": 1638792,
+      "sha256": "4ac03d29bbdfde47bec8ed786b3932979ddbfd6984862a10cbc74e2fc15f7336"
+    },
+    {
+      "path": "ggml-cpu-sapphirerapids.dll",
+      "size": 2289544,
+      "sha256": "d7b384acc98c54531a08d0098b0ce58762fac9ed78a9b1efd18c668ed27b6120"
+    },
+    {
+      "path": "ggml-cpu-skylakex.dll",
+      "size": 2013064,
+      "sha256": "eb074fb6279837ed80cf8e1df6c3441005913302a6f4cd98fdd370f33bc99f79"
+    },
+    {
+      "path": "ggml-cpu-sse42.dll",
+      "size": 1264008,
+      "sha256": "3e4c0f22093296fdc76dcebda289bb0cb2a959109f7532ffe992455931fad625"
+    },
+    {
+      "path": "ggml-cpu-x64.dll",
+      "size": 1250696,
+      "sha256": "504961c5050e8b72c514b8edfcbff7976ca7c1286d478815f77ccee655cb6fdd"
+    },
+    {
+      "path": "ggml-cpu-zen4.dll",
+      "size": 1996168,
+      "sha256": "b47e2ddb8252b12a0fbcc9214b1f79a013e0fc53626de364e5bd71aa254c7d99"
+    },
+    {
+      "path": "ggml.dll",
+      "size": 49032,
+      "sha256": "97c8b39b90448d6840bdee877be8d44aba5df84b164451cfe012f06aa186be23"
+    },
+    {
+      "path": "GO_LICENSE",
+      "size": 182211,
+      "sha256": "4285a95875d7a3ae3790910d59ee88f82339d0ba37b1cbadde4124113bd04308"
+    },
+    {
+      "path": "libc++.dll",
+      "size": 1767816,
+      "sha256": "e5f598c010d471ed9f81034da287a9b8eeb8f2e27053fc6fc35ce1f50b4509fe"
+    },
+    {
+      "path": "libllama-common.dll",
+      "size": 4363144,
+      "sha256": "09c0266544bcf8489148c864fcee25bf2290cc8b4cd79fd2a542885877e3a045"
+    },
+    {
+      "path": "libllama-quantize-impl.dll",
+      "size": 83848,
+      "sha256": "aad6adff14a2e67573d2f15af7fbe2e9e77cd964dc3dc5e30f9a9919db68d237"
+    },
+    {
+      "path": "libllama-server-impl.dll",
+      "size": 2822536,
+      "sha256": "6879f2fad146b39ca0b7b94597d574d6b3a122269ccda331314d70746d0e8f9b"
+    },
+    {
+      "path": "libllama.dll",
+      "size": 3917192,
+      "sha256": "96a590dd1a1a13c25d3d40dbfba7e5114fd691be4d318a1a7c0b7ee6a02636df"
+    },
+    {
+      "path": "libmtmd.dll",
+      "size": 1529224,
+      "sha256": "3994e9a920e29adb116cff78d899f8627547bc9d07838403fd71b56e3500374a"
+    },
+    {
+      "path": "libomp.dll",
+      "size": 965000,
+      "sha256": "b9bcac009984c8ee5f60a8d108e916470f9ff36ae1d2bb32852a12263c597894"
+    },
+    {
+      "path": "libunwind.dll",
+      "size": 107912,
+      "sha256": "17252031a8b325165b254db3801fde22d818d0e6d841fa309bce184fc27deb07"
+    },
+    {
+      "path": "libwinpthread-1.dll",
+      "size": 390024,
+      "sha256": "3621b55b0d4272fe7f01d1c0516a1ffae956444be66a96348cf745d68a64daf6"
+    },
+    {
+      "path": "licenses/CUDA-13.0-EULA.html",
+      "size": 104862,
+      "sha256": "5ae52d9dce29312969fdc93613b09e674308bcfc7ac242045ca6f699dbfc59d7"
+    },
+    {
+      "path": "licenses/LIBCXX-18.1.8-LICENSE.txt",
+      "size": 16703,
+      "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b"
+    },
+    {
+      "path": "licenses/LIBUNWIND-18.1.8-LICENSE.txt",
+      "size": 16706,
+      "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d"
+    },
+    {
+      "path": "licenses/LLVM-18.1.8-LICENSE.txt",
+      "size": 15141,
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee"
+    },
+    {
+      "path": "licenses/OPENMP-18.1.8-LICENSE.txt",
+      "size": 19741,
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4"
+    },
+    {
+      "path": "licenses/THIRD-PARTY-NOTICES.txt",
+      "size": 1420,
+      "sha256": "eb26a666b636652c7c729394fda35b1cc7bc55231a09ee0be943c9ef4bd1866a"
+    },
+    {
+      "path": "licenses/WINPTHREADS-LICENSE.txt",
+      "size": 2883,
+      "sha256": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+    },
+    {
+      "path": "LLAMA_CPP_LICENSE",
+      "size": 1099,
+      "sha256": "bcd8ec749126d45cb06737d0690295d73df4b6e7e194205bcf91190368f27285"
+    },
+    {
+      "path": "LLAMA_CPP_VENDORS_LICENSE",
+      "size": 7424,
+      "sha256": "7547ae6372a35e7382898dd9f5519ebc16e93095f69c2466b5b74b617c33d4da"
+    },
+    {
+      "path": "llama-server.exe",
+      "size": 22920,
+      "sha256": "e4df46adeadd70e0148e47f4fa5157614419bc09bd63f9dfce359a4b66ecf0d5"
+    },
+    {
+      "path": "vulkan/concrt140.dll",
+      "size": 311688,
+      "sha256": "b56e56c8bd258bb854373462e910edded9c3f12a880f49dd27546a63e5e1c3ec"
+    },
+    {
+      "path": "vulkan/ggml-vulkan.dll",
+      "size": 39998344,
+      "sha256": "8e105e5ce49fa32d4232af456f745ed14cad34d117bdd6a6afc4414c2f3feadb"
+    },
+    {
+      "path": "vulkan/msvcp140_1.dll",
+      "size": 23432,
+      "sha256": "e748fb3052df2482646a50cb39909c4cb98b618327f275a7ac0301a0db94ba24"
+    },
+    {
+      "path": "vulkan/msvcp140_2.dll",
+      "size": 267656,
+      "sha256": "aa364d35fa5eeaf4c31f1e6348fd8fc8fcde144c454ca43ff9f37484b5ce35f9"
+    },
+    {
+      "path": "vulkan/msvcp140_atomic_wait.dll",
+      "size": 37768,
+      "sha256": "0319cf68742ac8690bcec3300d9315389feeefbd83576c73dc171fa09c0cbb25"
+    },
+    {
+      "path": "vulkan/msvcp140_codecvt_ids.dll",
+      "size": 19336,
+      "sha256": "80e255ff5b3d8d80fb777edc4f340e4991f91f0d5467d4193dca8e5c345a4b9f"
+    },
+    {
+      "path": "vulkan/msvcp140.dll",
+      "size": 545160,
+      "sha256": "2055ec2b93986693fc6cdac084bde5dfb88e3e0448f09713952e389c5ac1f05c"
+    },
+    {
+      "path": "vulkan/vccorlib140.dll",
+      "size": 339848,
+      "sha256": "1ab0511ba0d56cc9c30dfb8e473a127ce2fe819ca4b51a918adf31a831e0cc12"
+    },
+    {
+      "path": "vulkan/vcruntime140_1.dll",
+      "size": 37256,
+      "sha256": "446bc6a00eeb6b78c705e43ec0732a70543ac9a278e9a5e7aaed5b490900b8f2"
+    },
+    {
+      "path": "vulkan/vcruntime140_threads.dll",
+      "size": 25992,
+      "sha256": "61086100c27fa15b7227dd179682f4a2db29789be65ca98eec3635cf4e68351a"
+    },
+    {
+      "path": "vulkan/vcruntime140.dll",
+      "size": 112008,
+      "sha256": "4cac4036810b01bc607cf8acb226b651754c052edddaa1ba308aaa1c040cf41f"
+    }
+  ]
+}

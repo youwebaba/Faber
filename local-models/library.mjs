@@ -50,12 +50,12 @@ async function ggufHeader(root, target, expected) {
 function describe(root, group) {
   const { format, stem, split, entries } = group;
   entries.sort((a, b) => (a.index || 0) - (b.index || 0) || a.relativePath.localeCompare(b.relativePath));
-  let reason = entries.find(file => file.reason)?.reason;
-  if (!reason && split) {
+  let reason = entries.find(file => file.reason)?.reason,complete=true;
+  if (split) {
     const total = entries[0].total;
-    if (entries.some(file => !file.valid || file.total !== total || file.index < 1 || file.index > total) || total < 1) reason = 'Invalid or inconsistent original shard numbering';
-    else if (new Set(entries.map(file => file.index)).size !== entries.length || entries.length !== total) reason = `Incomplete or duplicate shard set: found ${entries.length} of ${total}`;
-  } else if (!reason && entries.length !== 1) reason = 'Duplicate case-colliding model filenames';
+    if (entries.some(file => !file.valid || file.total !== total || file.index < 1 || file.index > total) || total < 1) {complete=false;reason ||= 'Invalid or inconsistent original shard numbering';}
+    else if (new Set(entries.map(file => file.index)).size !== entries.length || entries.length !== total) {complete=false;reason ||= `Incomplete or duplicate shard set: found ${entries.length} of ${total}`;}
+  } else if (entries.length !== 1) {complete=false;reason ||= 'Duplicate case-colliding model filenames';}
   if (!reason && format !== 'gguf') reason = 'Safetensors requires a compatible runtime or conversion to GGUF; it cannot be started here';
   const sizeBytes = entries.reduce((sum, file) => sum + file.sizeBytes, 0);
   if (!Number.isSafeInteger(sizeBytes)) reason = 'Model file sizes exceed the supported numeric range';
@@ -65,7 +65,7 @@ function describe(root, group) {
     label: split ? `${stem} (${entries.length}/${entries[0].total} shards)` : entries[0].relativePath,
     relativePath: entries[0].relativePath, format, files: entries.map(file => file.relativePath),
     sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : null, mtimeMs: Math.max(...entries.map(file => file.mtimeMs)),
-    available: !reason, ...(reason ? { reason } : {}),
+    available: !reason,complete, ...(reason ? { reason } : {}),
   };
 }
 

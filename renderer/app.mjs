@@ -1,6 +1,7 @@
 import { PERMISSIONS, isActive, latestRun, visibleChats, safeImage, displayText, parseArguments, statusLabel, extensionActions, streamText, reconcileStreams, sameMessage, chatApprovals } from './ui-helpers.mjs';
 import { createModelsBrowser } from './models.mjs';
 import { createConnections, providerKindLabel } from './connections.mjs';
+import { createAddonManager } from './addons.mjs';
 import { callUsage } from './chat-media.mjs';
 import { createAttachmentDrafts, attachmentMessage, FILE_ACCEPT } from './file-attachments.mjs';
 import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStreams, interfaceError } from './ui-refresh.mjs';
@@ -27,6 +28,7 @@ const icons = {
   compose: ['m14 4 6 6', 'm5 13 10-10 6 6-10 10-7 1Z', 'M3 6v15h15'],
   tools: ['m14 6 4-3 3 3-3 4', 'M14 6a6 6 0 0 0-7 7l-4 4a2.8 2.8 0 0 0 4 4l4-4a6 6 0 0 0 7-7'],
   models: ['m12 3 9 5-9 5-9-5Z', 'm3 12 9 5 9-5', 'm3 16 9 5 9-5'],
+  addons: ['M4 4h6v5a2 2 0 1 0 4 0V4h6v6h-5a2 2 0 1 0 0 4h5v6h-6v-5a2 2 0 1 0-4 0v5H4v-6h5a2 2 0 1 0 0-4H4Z'],
   paperclip: ['m21 11-9 9a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9-9'],
   plus: ['M12 5v14', 'M5 12h14'], close: ['m6 6 12 12', 'M6 18 18 6'],
   settings: ['m9 3-.8 3-3 .8-2 3 2 2-.2 3.2 3 1.8 1 3.2h4l1-3.2 3-1.8-.2-3.2 2-2-2-3-3-.8L13 3Z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'],
@@ -70,7 +72,7 @@ function renderImageDrafts() {
 function notify(message, error = false) { $('#notice-text').textContent = message; $('#notice').classList.toggle('error', error); $('#notice').hidden = false; $('#live-status').textContent = message; }
 async function act(callback) { try { return await callback(); } catch (error) { notify(error.message || String(error), true); } }
 async function request(method, params = {}) {
-  if (!bridge) throw new Error('The desktop bridge is unavailable. Open Sophia with its desktop launcher.');
+  if (!bridge) throw new Error('The desktop bridge is unavailable. Open Faber with its desktop launcher.');
   const tracked = !['app.reloadUI', 'app.uiState', 'app.uiStateAck'].includes(method);
   if (tracked) pendingRequests++;
   try { const value = await bridge.request(method, params); if (method === 'models.state') downloadDirectory = value.downloadDirectory; return value; }
@@ -140,8 +142,8 @@ function renderTranscript() {
   if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); transcriptChatId = identity; }
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
-    const welcome = el('div', 'welcome'); welcome.append(el('div', 'welcome-symbol', 's'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
-    welcome.append(el('p', '', currentProject() ? `Start a conversation in ${currentProject().name}. Sophia can explore files, run tools, and bring in other agents.` : 'Choose a project folder, connect a model, and work with Sophia on your own computer.'));
+    const welcome = el('div', 'welcome'); welcome.append(el('div', 'welcome-symbol', 'f'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
+    welcome.append(el('p', '', currentProject() ? `Start a conversation in ${currentProject().name}. Faber can explore files, run tools, and bring in other agents.` : 'Choose a project folder, connect a model, and work with Faber on your own computer.'));
     if (!currentProject()) welcome.append(button('Add a project', showProjectForm, 'button primary'));
     else {
       const hints = el('div', 'welcome-hints');
@@ -182,7 +184,7 @@ function createMessageNode(message) {
     const details = el('details', 'tool-message'); details.dataset.messageId = message.id; details.append(el('summary', '', message.toolName || 'Tool result')); appendResult(details, message.content, message.image); return details;
   }
   const article = el('article', `message ${message.fromChatId ? 'agent-message' : message.role}`); article.dataset.messageId = message.id;
-  const author = message.fromChatId ? `Agent: ${state.chats.find(chat => chat.id === message.fromChatId)?.title || 'another chat'}` : message.role === 'user' ? 'You' : 'Sophia';
+  const author = message.fromChatId ? `Agent: ${state.chats.find(chat => chat.id === message.fromChatId)?.title || 'another chat'}` : message.role === 'user' ? 'You' : 'Faber';
   const heading = el('div', 'message-heading', author);
   if (message.createdAt) { const time = el('time', '', new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); time.dateTime = message.createdAt; heading.append(time); }
   article.append(heading);
@@ -206,7 +208,7 @@ function renderStream() {
   const text = streamText(streams.get(run?.id)?.text, run, chat?.messages || []);
   let article = transcript.querySelector('.streaming');
   if (!text) { article?.remove(); return; }
-  if (!article) { article = el('article', 'message assistant streaming'); article.append(el('div', 'message-heading', 'Sophia'), el('div', 'message-content')); transcript.insertBefore(article, transcript.querySelector('.run-note')); }
+  if (!article) { article = el('article', 'message assistant streaming'); article.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); transcript.insertBefore(article, transcript.querySelector('.run-note')); }
   article.lastChild.replaceChildren(document.createTextNode(text), el('span', 'stream-cursor'));
   if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
 }
@@ -325,7 +327,7 @@ function checkedRow(label, checked, description) {
 }
 function actions(...buttons) { const footer = el('div', 'form-actions'); footer.append(...buttons); return footer; }
 function showProjectForm() {
-  const body = modal('Add a project'); body.append(el('p', 'hint', 'Select a folder for this project. Your chat history stays in Sophia’s private local data folder.'));
+  const body = modal('Add a project'); body.append(el('p', 'hint', 'Select a folder for this project. Your chat history stays in Faber’s private local data folder.'));
   const name = field('Project name', '', 'text'); const path = field('Folder path', '', 'text', 'Leave blank to choose a folder in the system picker.'); const form = el('div', 'form-grid'); form.append(name.wrapper, path.wrapper); body.append(form);
   body.append(actions(button('Cancel', closeModal), button('Add project', async () => { const project = await request('project.create', { name: name.input.value.trim() || 'Untitled project', ...(path.input.value.trim() ? { path: path.input.value.trim() } : {}) }); if (!project) return; await refresh(); selectChat(null, project.id); closeModal(); await newChat(); }, 'button primary'))); name.input.focus();
 }
@@ -342,14 +344,15 @@ function showSettings() {
   for (const provider of state.providers) { const row = button('', () => showProviderForm(provider), 'provider-row'); const text = el('span'); text.append(el('strong', '', provider.name), el('small', '', `${providerKindLabel(provider.kind)} · ${provider.baseUrl}`)); row.append(text, el('span', '', 'Edit')); models.append(row); }
   models.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => showProviderForm()))); body.append(models);
   modelsBrowser.mountSettings(body);
-  const about = el('section', 'modal-section'); about.append(el('h3', '', 'Sophia Harness'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
+  const addons = el('section', 'modal-section'); addons.append(el('h3', '', 'Local addons'), el('p', 'hint', 'Manage addons installed from this computer. No account or online catalog is required.'), button('Manage addons', () => addonManager.show())); body.append(addons);
+  const about = el('section', 'modal-section'); about.append(el('h3', '', 'Faber Harness'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
   const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
   about.append(el('p', 'hint', 'Refresh interface keeps chats, downloads, loaded models, and composer drafts running. Backend changes still need Restart app.'), actions(button('Tools & extensions', () => showTools('extensions')), reload, button('Restart app', () => request('app.restart')))); body.append(about);
 }
 function showProviderForm(provider) { connections.showForm(provider); }
 function showModelPicker() { connections.showPicker(); }
 const permissionDescriptions = {
-  files: 'Write files and authorize access to other project folders.', shell: 'Run commands with your Windows user permissions.', computer: 'Take screenshots, control this computer, and use microphone or speech tools.', network: 'Make requests to external services.', upgrade: 'Stage or activate changes to Sophia and its extensions.',
+  files: 'Write files and authorize access to other project folders.', shell: 'Run commands with your Windows user permissions.', computer: 'Take screenshots, control this computer, and use microphone or speech tools.', network: 'Make requests to external services.', upgrade: 'Stage or activate changes to Faber and its extensions.',
 };
 function showChatSettings() {
   const chat = currentChat(); if (!chat) return;
@@ -358,7 +361,7 @@ function showChatSettings() {
   const permissions = el('section', 'modal-section'); permissions.append(el('h3', '', 'Permissions'), el('p', 'hint', 'Read tools can inspect this workspace. Other actions ask each run unless you grant access here. Grants are real host authority, not an operating-system sandbox.'));
   const checks = PERMISSIONS.map(permission => { const check = checkedRow(statusLabel(permission), chat.grants.includes(permission), permissionDescriptions[permission]); check.wrapper.classList.add('permission-row'); permissions.append(check.wrapper); return { permission, ...check }; }); body.append(permissions);
   const speech = el('section', 'modal-section'); speech.append(el('h3', '', 'Voice'));
-  const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Sophia', 'text', 'Used only while the voice assistant is listening for this chat.');
+  const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Faber', 'text', 'Used only while the voice assistant is listening for this chat.');
   const enabled = checkedRow('Enable activation for this chat', Boolean(chat.voice?.enabled), 'This phrase can select this chat while assistant mode is running.');
   const speak = checkedRow('Read replies aloud', chat.voice?.speakReplies !== false); speech.append(phrase.wrapper, enabled.wrapper, speak.wrapper); body.append(speech);
   body.append(actions(button('Archive chat', async () => { await request('chat.archive', { chatId: chat.id }); await refresh(); selectChat(null); closeModal(); }, 'button danger'), button('Save changes', async () => {
@@ -370,7 +373,7 @@ function showVoice() {
   const body = modal('Voice'); const chat = currentChat();
   body.append(el('p', 'hint', 'Dictation adds speech to your draft. Assistant mode listens for this chat’s activation phrase, then sends your request. Windows microphone and speech support must be available.'));
   if (!chat) { body.append(button('Create a chat', async () => { await newChat(); if (currentChat()) showVoice(); }, 'button primary')); return; }
-  const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Sophia'); const speak = checkedRow('Read replies aloud', chat.voice?.speakReplies !== false); body.append(phrase.wrapper, speak.wrapper);
+  const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Faber'); const speak = checkedRow('Read replies aloud', chat.voice?.speakReplies !== false); body.append(phrase.wrapper, speak.wrapper);
   const status = el('p', 'hint', voice.chatId === chat.id ? `Current state: ${statusLabel(voice.status)}` : 'Microphone is off for this chat.'); body.append(status);
   const start = async mode => { if (!phrase.input.value.trim()) throw new Error('Enter an activation phrase.'); await request('chat.update', { id: chat.id, voice: { ...chat.voice, enabled: true, phrase: phrase.input.value.trim(), speakReplies: speak.input.checked } }); await request('voice.start', { chatId: chat.id, mode }); closeModal(); await refresh(); };
   body.append(actions(button('Stop voice', async () => { await request('voice.stop', { chatId: chat.id }); closeModal(); }), button('Dictate', () => start('dictation')), button('Start assistant', () => start('assistant'), 'button primary')));
@@ -378,7 +381,7 @@ function showVoice() {
 function showTools(tab = 'tools') {
   const body = modal('Tools & extensions'); const tabs = el('div', 'tab-row'); tabs.append(button('Tools', () => showTools('tools'), tab === 'tools' ? 'selected' : ''), button('Extensions', () => showTools('extensions'), tab === 'extensions' ? 'selected' : '')); body.append(tabs);
   if (tab === 'tools') {
-    body.append(el('p', 'hint', 'Run a registered tool in the current chat. The same permissions and approvals apply when Sophia uses it.'));
+    body.append(el('p', 'hint', 'Run a registered tool in the current chat. The same permissions and approvals apply when Faber uses it.'));
     const search = el('input', 'search-input tool-search'); search.placeholder = 'Find a tool…'; search.setAttribute('aria-label', 'Find a tool'); body.append(search); const list = el('div'); body.append(list);
     const update = () => { list.replaceChildren(); const tools = state.tools.filter(tool => `${tool.name} ${tool.description}`.toLowerCase().includes(search.value.toLowerCase()));
       if (!tools.length) list.append(el('p', 'hint', 'No matching tools are registered.'));
@@ -511,6 +514,8 @@ async function initializeInterface() {
 
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings });
 const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings });
+const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
+$('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
 $('#open-models').addEventListener('click', () => act(() => modelsBrowser.open()));
 $('#new-chat').addEventListener('click', () => act(newChat));
 $('#add-project').addEventListener('click', showProjectForm);
@@ -579,4 +584,4 @@ function handleBridgeEvent(event) {
 if (bridge) {
   bridge.subscribe(event => { if (bootstrapping) startupEvents.push(event); else handleBridgeEvent(event); });
   initializeInterface();
-} else { bootstrapping = false; render(); notify('Open Sophia with its desktop launcher to connect this interface to the runtime.', true); }
+} else { bootstrapping = false; render(); notify('Open Faber with its desktop launcher to connect this interface to the runtime.', true); }

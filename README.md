@@ -1,18 +1,49 @@
-# Sophia Harness
+# Faber b1.0
 
-A new Windows desktop workspace for local and API-connected AI agents. Bill's
+A Windows desktop workspace for local and API-connected AI agents. Bill's
 October 31, 2026 direction is a fresh harness with a Codex-style interface,
 shared tools, agent delegation, voice, and upgrades the agents can author.
 This application lives beside the original Sophia and the Hermes developer app.
 
-This is a working developer build. The [verification record](VERIFICATION.md)
-distinguishes tested behavior from remaining hardware and release checks.
+This is Beta 1.0. The [verification record](VERIFICATION.md) distinguishes tested
+behavior from remaining hardware and release checks.
+
+## Beta desktop release
+
+The b1.0 installer installs **Faber.exe** and shortcuts without a terminal window.
+It includes Electron and a local model runner with CPU, CUDA and Vulkan backends;
+model weights are downloaded separately. Existing `SophiaHarness` profile data
+and the selected model library remain in their original locations.
+
+**Models** provides a grid of local variants and download cards. Click a card for
+details. The library scans real files; a completed transfer record alone does
+not prove a model is still present. **Delete** moves the selected variant's actual
+files to Windows Recycle Bin, including existing files of an incomplete variant.
+It refuses active models and overlapping downloads. Emptying Recycle Bin is a
+separate user action; deletion does not immediately reclaim the model's space.
+
+The managed local model picker offers automatic, CPU and custom hardware modes,
+GPU and CPU resource selection, threads, and disk-backed model memory. These
+settings control the harness-owned runner, not remote API servers or another
+application's Ollama server. Requested settings and observed placement are shown
+separately. Memory mapping is not disk-as-VRAM and cannot disable Windows paging.
+There is no new harness context or turn limit.
+
+**Addons** manages local feature packages and their tools/buttons. See
+[ADDONS.md](ADDONS.md) for the import format, trust model, reset/removal and
+AI-authoring contract. Online addon sharing and OTA updates are not included.
+
+The installed base seeds an editable, versioned workbench for reviewed core
+self-upgrades. A subsequent installer preserves the existing profile and addons,
+and starts its own version's workbench rather than silently applying old core
+patches to new application code. Source-mode setup remains available below.
+See [INSTALLING.md](INSTALLING.md) for installation, updates, recovery and builds.
 
 ## Run
 
 Requires Windows, Node.js 24 or later, and the npm dependencies in the lockfile.
-Use `Start-Sophia-Harness.cmd` to install the pinned desktop dependencies and
-launch the app. For manual setup, run `npm ci`, `npm exec -- install-electron`,
+Use `Start-Faber.cmd` to launch the built executable when present, or set up and
+launch the source app. For manual setup, run `npm ci`, `npm exec -- install-electron`,
 then `npm start` in this folder. `npm test` runs deterministic checks. `npm run smoke`
 checks the desktop with isolated data; it does not prove a model can complete
 arbitrary tasks.

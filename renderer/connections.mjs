@@ -19,8 +19,8 @@ export function connectionPayload(values) {
 export function createConnections({ request, refresh, getState, getChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.sophia?.subscribe }) {
   let disposePicker = () => {};
   const notice = provider => provider?.kind === 'ollama'
-    ? 'Uses your Ollama server with the same Sophia tools, approvals, and upgrade controls.'
-    : 'Conversation text and tool results are sent to this API endpoint. Cloud API usage is billed by the provider. Sophia’s tools, approvals, and upgrade controls remain available.';
+    ? 'Uses your Ollama server with the same Faber tools, approvals, and upgrade controls.'
+    : 'Conversation text and tool results are sent to this API endpoint. Cloud API usage is billed by the provider. Faber’s tools, approvals, and upgrade controls remain available.';
   function suggestions(model, kind) {
     const root = el('div', 'connection-suggestions');
     root.append(el('p', 'hint', 'Suggested OpenAI model IDs. Availability depends on your API account; you can also list models or enter an exact ID.'));
@@ -114,7 +114,7 @@ export function createConnections({ request, refresh, getState, getChat, newChat
     function updateDetail() {
       const current = selectedProvider(); const active = isLocal();
       model.wrapper.hidden = active; recommended.hidden = active || current?.kind !== 'openai-responses'; listButton.hidden = active;
-      detail.textContent = provider.input.value === LOCAL_FILES ? 'Runs downloaded GGUF files locally with the bundled model server. Sophia’s tools, approvals, and upgrade controls remain available.' : `${current?.baseUrl || ''}${current?.reasoningEffort ? ` · Reasoning: ${current.reasoningEffort}` : ''}\n${notice(current)}`;
+      detail.textContent = provider.input.value === LOCAL_FILES ? 'Runs downloaded GGUF files locally with the bundled model server. Faber’s tools, approvals, and upgrade controls remain available.' : `${current?.baseUrl || ''}${current?.reasoningEffort ? ` · Reasoning: ${current.reasoningEffort}` : ''}\n${notice(current)}`;
       local.configure(current, model.input.value, active); useButton.disabled = applying || active && !local.selection().canUse;
     }
     provider.input.addEventListener('change', () => { nextList(); model.input.value = selectedProvider()?.model || ''; result.replaceChildren(); result.hidden = true; updateDetail(); });

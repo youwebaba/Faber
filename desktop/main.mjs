@@ -7,7 +7,8 @@ import {createRuntime} from '../core/runtime.mjs';
 import {containedPath,fileTools} from '../tools/files.mjs';
 import {shellTool} from '../tools/process.mjs';
 import {nativeAction,nativeTools} from './native.mjs';
-import {createExtensions,extensionTools} from './extensions.mjs';
+import {extensionTools} from './extensions.mjs';
+import {createAddons,addonTools} from './addons.mjs';
 import {createUpgrades,upgradeTools} from './upgrades.mjs';
 import {createVoice} from './voice.mjs';
 import {atomicWrite} from './recovery.mjs';
@@ -16,26 +17,32 @@ import {huggingFacePage} from './huggingface-page.mjs';
 import {validateRequestPayload} from './request-payload.mjs';
 import {createLocalModels} from '../local-models/index.mjs';
 import {createUIReload} from './ui-reload.mjs';
+import {packagedRuntime} from './packaged-paths.mjs';
 
-const sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const bootstrap=globalThis.__FABER_BOOTSTRAP__;
+const sourceDir=bootstrap?.sourceDir||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const smokeModels=process.argv.includes('--smoke-models');
 const smokeFeatures=process.argv.includes('--smoke-features');
 const smokeLocalModels=process.argv.includes('--smoke-local-models');
 const smokeUIReload=process.argv.includes('--smoke-ui-reload');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload;
-const dataDir=smoke?await fs.mkdtemp(path.join(os.tmpdir(),'SophiaHarness-smoke-')):path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'SophiaHarness');
+const smokeInstalled=process.argv.includes('--smoke-installed');
+const smokeFaber=process.argv.includes('--smoke-faber');
+const smokePackage=process.argv.includes('--smoke-package');
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled;
+const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'SophiaHarness'));
 await fs.mkdir(dataDir,{recursive:true});
 app.setPath('userData',dataDir);
-if(!app.requestSingleInstanceLock()){app.quit();process.exit(0);}
+if(!bootstrap?.hasLock&&!app.requestSingleInstanceLock()){app.quit();process.exit(0);}
 app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.show();window.focus();}});
-protocol.registerSchemesAsPrivileged([{scheme:'sophia',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
+if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'sophia',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
 const modelMethods=new Set(['models.state','models.search','models.inspect','models.download','models.cancel','models.settings.save','models.chooseDirectory','models.openDirectory','models.openPage']);
-const localMethods=new Set(['localModels.list','localModels.start','localModels.stop']);
+const localMethods=new Set(['localModels.list','localModels.start','localModels.stop','localModels.details','localModels.hardware','localModels.configure','localModels.delete']);
+const addonMethods=new Set(['addons.list','addons.import','addons.enable','addons.disable','addons.uninstall','addons.reset','addons.rollback','addons.openDirectory']);
 const uiMethods=new Set(['app.reloadUI','app.uiState','app.uiStateAck']);
-const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.stop','chat.archive','provider.save','provider.test','approval.resolve','tool.run','settings.update','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart',...modelMethods,...localMethods,...uiMethods]);
+const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.stop','chat.archive','provider.save','provider.test','approval.resolve','tool.run','settings.update','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart',...modelMethods,...localMethods,...uiMethods,...addonMethods]);
 let window,runtime,voice,extensions,modelHub,localModels,uiReload,featureFixture,reloadFixture,quitting=false,voiceBusy=false,voiceOperations=0;
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('sophia:event',event);};
-async function confirm(message){const result=await dialog.showMessageBox(window,{type:'warning',title:'Sophia Harness — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
+async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
 let secretQueue=Promise.resolve();
 async function secrets(){try{return JSON.parse(await fs.readFile(secretFile,'utf8'));}catch(error){if(error.code==='ENOENT')return {};throw error;}}
@@ -43,6 +50,8 @@ const host={
   async getSecret(id){const values=await secrets();if(!values[id])return '';if(!safeStorage.isEncryptionAvailable())throw new Error('Windows credential encryption is unavailable');return safeStorage.decryptString(Buffer.from(values[id],'base64'));},
   setSecret(id,value){const result=secretQueue.catch(()=>{}).then(async()=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Cannot save API key: Windows credential encryption is unavailable');if(typeof id!=='string'||!id||['__proto__','constructor','prototype'].includes(id))throw new Error('Invalid secret ID');const values=await secrets();if(value)values[id]=safeStorage.encryptString(value).toString('base64');else delete values[id];await atomicWrite(secretFile,JSON.stringify(values));});secretQueue=result;return result;},
   async chooseDirectory(){const result=await dialog.showOpenDialog(window,{properties:['openDirectory','createDirectory']});return result.canceled?null:result.filePaths[0];},
+  async chooseAddon(kind){if(smokeFaber)return path.join(dataDir,'faber-smoke-addon.faber-addon.json');if(!['file','folder'].includes(kind))throw new Error('Choose an add-on file or folder');const result=await dialog.showOpenDialog(window,{title:'Import Faber add-on',properties:[kind==='folder'?'openDirectory':'openFile'],...(kind==='file'?{filters:[{name:'Faber add-on package',extensions:['faber-addon.json','json']}]}:{})});return result.canceled?null:result.filePaths[0];},
+  async trashItem(target){if(!smokeFaber)return shell.trashItem(target);const fixtureRoot=path.join(path.dirname(dataDir),`${path.basename(dataDir)}-models`);if(path.dirname(target)!==fixtureRoot)throw new Error('Smoke recycle outside fixture');const bin=path.join(dataDir,'fixture-recycle');await fs.mkdir(bin,{recursive:true});await fs.rename(target,path.join(bin,path.basename(target)));},
   async openPath(target){if(typeof target!=='string'||!path.isAbsolute(target)||target.includes('\0'))throw new Error('Choose an absolute local path');await fs.stat(target);const error=await shell.openPath(target);if(error)throw new Error(error);return {opened:true};},
   async openExternal(url){await shell.openExternal(huggingFacePage(url));return {opened:true};},
   desktop:nativeAction,
@@ -54,10 +63,10 @@ const host={
   },
   assertProviderAvailable:(providerId,model)=>localModels?.assertProviderAvailable(providerId,model),
   reloadExtensions:()=>extensions.reload(),
-  async restart(){if(!await confirm('Restart Sophia Harness? Running chats will stop.'))return {restarting:false};app.relaunch();app.quit();return {restarting:true};}
+  async restart(){if(!await confirm('Restart Faber? Running chats will stop.'))return {restarting:false};app.relaunch();app.quit();return {restarting:true};}
 };
 app.on('window-all-closed',()=>app.quit());
-async function shutdown(){voice?.close();const results=await Promise.allSettled([modelHub?.close(),runtime?.close(),secretQueue]);try{await localModels?.close();}catch(error){console.error('Local model shutdown failed:',error);}await featureFixture?.close();await reloadFixture?.close();for(const result of results)if(result.status==='rejected')console.error('Shutdown failed:',result.reason);}
+async function shutdown(){voice?.close();const results=await Promise.allSettled([modelHub?.close(),runtime?.close(),secretQueue]);try{await extensions?.close();}catch(error){console.error('Addon shutdown failed:',error);}try{await localModels?.close();}catch(error){console.error('Local model shutdown failed:',error);}await featureFixture?.close();await reloadFixture?.close();for(const result of results)if(result.status==='rejected')console.error('Shutdown failed:',result.reason);}
 app.on('before-quit',event=>{if(quitting)return;event.preventDefault();quitting=true;shutdown().finally(()=>app.quit());});
 void app.whenReady().then(async()=>{
 const reloadSmoke=smokeUIReload?await import('../test/desktop-ui-reload-smoke.mjs'):null;
@@ -77,22 +86,23 @@ protocol.handle('sophia',async request=>{
 runtime=await createRuntime({dataDir,sourceDir,host});
 const featureSmoke=smokeFeatures?await import('../test/desktop-features-smoke.mjs'):null;
 if(featureSmoke)featureFixture=await featureSmoke.createFeatureSmoke(dataDir);
-const modelSmoke=smokeModels?await import('../test/desktop-models-smoke.mjs'):null;
+const modelSmoke=smokeModels||smokeFaber?await import('../test/desktop-models-smoke.mjs'):null;
 modelHub=await createModelHub({dataDir,sourceDir,host,emit:event=>runtime.emit(event),...(reloadFixture?{fetchImpl:reloadFixture.fetchImpl}:featureFixture?{fetchImpl:featureFixture.fetchImpl}:modelSmoke?{fetchImpl:modelSmoke.createHubSmokeFetch()}: {})});
-const localSmoke=smokeLocalModels||smokeUIReload?await import('../test/desktop-local-models-smoke.mjs'):null;
+const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber?await import('../test/desktop-local-models-smoke.mjs'):null;
 const localFixture=localSmoke?await localSmoke.createLocalModelSmoke(dataDir,modelHub):null;
-localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),...localFixture?.options});
-extensions=createExtensions({dataDir,runtime,confirm});
+if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
+localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options});
+extensions=createAddons({dataDir,runtime,confirm,chooseAddon:host.chooseAddon,openPath:host.openPath,emit:event=>runtime.emit(event)});
 const upgrades=createUpgrades({sourceDir:reloadFixture?.sourceDir||featureFixture?.upgradeSourceDir||sourceDir,dataDir,confirm:reloadFixture?async()=>true:confirm,onApplied:({id})=>runtime.emit({type:'uiUpdate',id})});
 // Recognition errors can leave a live session; only an explicit off event clears the reload barrier.
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
-runtime.registerTools([...fileTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools()]);
+runtime.registerTools([...fileTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
-if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Sophia Harness',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
+if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 runtime.subscribe(emit);
-window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:'Sophia Harness',backgroundColor:'#101114',show:!smoke,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
+window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:'Faber b1.0',backgroundColor:'#101114',show:!smoke,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
 window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
 window.webContents.on('will-navigate',event=>event.preventDefault());
 window.webContents.on('will-attach-webview',event=>event.preventDefault());
@@ -104,10 +114,13 @@ ipcMain.handle('sophia:request',async(event,method,params={})=>{
   if(method==='voice.status')return voice.action('status');
   if(modelMethods.has(method))return modelHub.request(method,params);
   if(localMethods.has(method))return localModels.request(method,params);
+  if(addonMethods.has(method))return extensions.request(method,params);
   return runtime.request(method,params);
 });
 await window.loadURL('sophia://app/index.html');
 if(extensionStartupError)runtime.emit({type:'error',error:`Extensions could not load: ${extensionStartupError}`});
+if(smokeInstalled){try{console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
+if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(smoke){
   try{
     const fixture=path.join(dataDir,'fixture');await fs.mkdir(fixture);await fs.writeFile(path.join(fixture,'hello.txt'),'Sophia Harness isolated smoke fixture\n');
@@ -117,7 +130,7 @@ if(smoke){
     if(!result.bridge||!result.projects||!result.chats||result.nodeExposed)throw new Error('Smoke bridge check failed');
     await new Promise(resolve=>setTimeout(resolve,500));
     const screenshot=path.join(dataDir,'smoke.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-    const flows=smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
+    const flows=smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
     console.log(JSON.stringify({ok:true,dataDir,screenshot,...result,...flows}));
     app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}

@@ -1,4 +1,5 @@
 import { formatBytes, requestGate } from './model-helpers.mjs';
+import { createHardwareControls } from './hardware.mjs';
 
 export const LOCAL_FILES = '__local_files__';
 export function isLocalOllama(provider) {
@@ -50,7 +51,9 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   const progress = el('progress'); progress.id = 'local-model-progress'; progress.setAttribute('aria-label', 'Local model operation'); progress.hidden = true;
   const error = el('p', 'error-text hint'); error.id = 'local-model-error'; error.setAttribute('role', 'alert'); error.hidden = true;
   const controls = el('div', 'local-model-actions');
+  const hardware = createHardwareControls({ request, el, onChange: () => render() });
   root.append(label, directory, detail, status, progress, error, controls, el('p', 'hint', 'Start loads the model without changing this chat. Stop unloads the model; it does not stop a chat run. Use in this chat applies your selection to the next run.'));
+  root.append(hardware.root);
   let state = {}, provider, configuredModel = '', choices = [], enabled = false, disposed = false, loadingList = false, operation, connectionEpoch = 0, optionsSignature;
   const nextList = requestGate();
   const selected = () => choices.find(item => item.value === select.value);
@@ -80,7 +83,8 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     if ((!choice || choice.source === 'download') && state.runtime?.available === false) status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
     if (isLocalOllama(provider) && state.ollama?.error) status.textContent += ` Ollama: ${state.ollama.error}`;
     progress.hidden = !(ownOperation || info.busy);
-    start.disabled = Boolean(operation) || !info.canStart;
+    hardware.setContext(state, choice?.source === 'download');
+    start.disabled = Boolean(operation) || !info.canStart || choice?.source === 'download' && hardware.isDirty();
     stop.disabled = operation?.type === 'stop' || !(info.canStop || ownOperation && operation.type === 'start');
     refreshButton.disabled = loadingList;
     onChange();
@@ -96,6 +100,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   }
   async function operate(type) {
     const choice = selected(); if (!choice) return;
+    if (type === 'start' && choice.source === 'download' && hardware.isDirty()) { showError('Save hardware settings before starting this model.'); return; }
     const requestProvider = provider; const value = select.value; const epoch = connectionEpoch;
     const params = choice.source === 'download' ? type === 'start' ? { modelId: choice.id } : {} : { providerId: requestProvider.id, model: choice.id };
     const token = { value, type, label: type === 'start' ? 'Starting model…' : 'Stopping model…' }; operation = token; showError(''); render();

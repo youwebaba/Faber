@@ -41,6 +41,21 @@ async function until(hub, predicate, timeout = 3000) {
 const finish = (hub, job) => until(hub, state => state.downloads.some(item => item.id === job.id && !['queued', 'downloading'].includes(item.status)) && published.get(hub).some(event => event.state.downloads.some(item => item.id === job.id && !['queued', 'downloading'].includes(item.status)))).then(state => state.downloads.find(item => item.id === job.id));
 const args = { repoId: id, revision: commit, files: ['model.safetensors'] };
 
+test('local file reservations reject active downloads and serialize new download/directory operations',async t=>{
+  let transferEntered;const entered=new Promise(resolve=>transferEntered=resolve);
+  const {hub,root}=await fixture(t,{transfer:async(_url,options)=>{transferEntered();return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));}});
+  const directory=(await hub.request('models.state')).downloadDirectory;await fs.mkdir(directory,{recursive:true});
+  const job=await hub.request('models.download',args);await entered;
+  await assert.rejects(hub.withModelFiles(directory,[`${id}/${commit}/model.safetensors`],()=>assert.fail('active download must block deletion')),/active download/);
+  await hub.request('models.cancel',{id:job.id});
+  let release,locked;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>locked=resolve);
+  const holding=hub.withModelFiles(directory,['manual.gguf'],async()=>{locked();await gate;return 'recycled';});await started;
+  let settingsDone=false;const setting=hub.request('models.settings.save',{downloadDirectory:path.join(root,'other-models')}).then(()=>settingsDone=true);
+  const controller=new AbortController();let effects=0;const canceled=hub.withModelFiles(directory,['manual.gguf'],()=>effects++,controller.signal);const rejected=assert.rejects(canceled,/abort/i);controller.abort();
+  await new Promise(resolve=>setTimeout(resolve,20));assert.equal(settingsDone,false);release();assert.equal(await holding,'recycled');await setting;await rejected;assert.equal(effects,0);
+  await assert.rejects(hub.withModelFiles(directory,['manual.gguf'],()=>effects++),/ENOENT|changed/);assert.equal(effects,0);
+});
+
 test('opening an empty configured download folder creates it after validation', async t => {
   const opened=[];const {hub,root}=await fixture(t,{host:{openPath:async directory=>{assert.ok((await fs.stat(directory)).isDirectory());opened.push(directory);return {opened:true};}}});
   const initial=(await hub.request('models.state')).downloadDirectory;await assert.rejects(fs.access(initial));
@@ -81,6 +96,7 @@ test('verified transfer publishes selected pinned file, emits state and survives
   assert.equal(result.status, 'completed', result.error); assert.equal(result.progress, 1); assert.equal(result.downloadedBytes, bytes.length);
   assert.deepEqual(await fs.readFile(path.join(result.directory, 'model.safetensors')), bytes);
   assert.equal(result.files[0].verifiedSha256, sha(bytes)); assert.ok(calls.some(call => call.url.includes(`/resolve/${commit}/model.safetensors`)));
+  assert.deepEqual(result.modelMetadata,{parameters:1000,parameterSource:'Hub safetensors.total',quantization:null});
   assert.ok(events.some(event => event.type === 'models' && event.state.downloads.some(item => item.status === 'completed')));
   await hub.close();
   const restarted = await createModelHub(options); assert.equal((await restarted.request('models.state')).downloads[0].status, 'completed'); await restarted.close();

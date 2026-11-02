@@ -32,6 +32,7 @@ async function fixture(t, extra = {}) {
   const secrets = new Map(), children = [], events = [], readiness = { ready: false }, calls = [];
   const runtime = { async request(method, args) { calls.push(method); if (method === 'state.get') return structuredClone(state); if (method === 'provider.save') { secrets.set(args.id, args.apiKey); const provider = { ...args, hasKey: true }; delete provider.apiKey; const existing = state.providers.find(item => item.id === args.id); if (existing) Object.assign(existing, provider); else state.providers.push(provider); return provider; } throw new Error(method); } };
   const options = { dataDir: path.join(root, 'data'), runtime, getHubState: async () => ({ downloadDirectory: directory, downloads: [] }), executable: process.execPath, pollMs: 5, loadTimeoutMs: 1000,
+    hardwareRunner:async(_executable,args)=>({code:0,stdout:args[0]==='--help'?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices':args[0]==='--version'?'Synthetic fixture runtime':'Available devices:\n  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)',stderr:''}),
     emit: event => events.push(event),
     spawnImpl(executable, args, options) {
       const child = new EventEmitter(); Object.assign(child, { pid: 12345 + children.length, exitCode: null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), args, options, executable }); children.push(child); return child;
@@ -89,4 +90,45 @@ test('explicit control-only tool run can stop an idle model while normal model r
   const f = await fixture(t); f.readiness.ready = true; await f.manager.request('localModels.start', { modelId: (await f.manager.request('localModels.list')).models[0].id }); const ready = await until(f.manager, 'ready');
   f.state.runs.push({ id: 'tool-ui', providerId: ready.process.providerId, model: ready.process.model, status: 'running', modelCalls: [] });
   const result = await f.manager.tools().find(tool => tool.name === 'local_model_stop').execute({}, { runId: 'tool-ui', signal: new AbortController().signal }); assert.equal(result.process.status, 'stopped');
+});
+
+test('hardware defaults persist and exact selected GPU/core settings reach only the managed process with observed placement',async t=>{
+  const f=await fixture(t);const hardware=await f.manager.request('localModels.hardware');assert.equal(hardware.gpus[0].id,'CUDA0');assert.equal(hardware.observed,null);
+  const configuration={mode:'custom',gpuIds:['CUDA0'],cpuIds:[0],threads:1,memoryMap:false};
+  await f.manager.request('localModels.configure',configuration);await f.manager.close();
+  const manager=await createLocalModels(f.options);t.after(()=>manager.close());
+  assert.deepEqual((await manager.request('localModels.hardware')).configuration,configuration);
+  const model=(await manager.request('localModels.list')).models[0];await manager.request('localModels.start',{modelId:model.id});
+  const child=f.children.at(-1);assert.ok(child.args.includes('--cpu-mask'));assert.equal(child.args[child.args.indexOf('--device')+1],'CUDA0');assert.equal(child.args[child.args.indexOf('--load-mode')+1],'none');
+  child.stderr.write('using device CUDA');child.stdout.write('unrelated stdout line\n');child.stderr.write('0 (Fixture GPU)\n');child.stderr.write('ordinary model metadata\n'.repeat(10000));child.stderr.write('load_tensors: offloaded 4/8 layers to GPU\n');f.readiness.ready=true;
+  const ready=await until(manager,'ready');assert.deepEqual(ready.process.requested,configuration);assert.equal(ready.process.observed.backend,'gpu');assert.equal(ready.process.observed.gpuLayers,4);
+  await assert.rejects(manager.request('localModels.configure',configuration),/Stop the managed/);
+  await assert.rejects(manager.request('localModels.configure',{...configuration,providerId:'unrelated'}),/Unknown|Unexpected|property/i);
+});
+
+test('custom GPU start refuses unconfirmed CPU fallback and does not register a provider',async t=>{
+  const f=await fixture(t);await f.manager.request('localModels.configure',{mode:'custom',gpuIds:['CUDA0'],cpuIds:[],threads:0,memoryMap:true});
+  await f.manager.request('localModels.start',{modelId:(await f.manager.request('localModels.list')).models[0].id});f.children[0].stderr.write('offloaded 0/8 layers to GPU');f.readiness.ready=true;
+  const failed=await until(f.manager,'failed');assert.match(failed.process.error,/placement could not be confirmed/);assert.equal(f.children[0].exitCode,0);assert.equal(f.state.providers.length,1);
+});
+
+test('Recycle Bin operation moves exact complete shards, preserves sibling variants and returns partial failures honestly',async t=>{
+  const f=await fixture(t);await f.manager.close();const moved=[];const recycle=path.join(f.root,'fake-recycle-bin');await fs.mkdir(recycle);
+  for(const name of ['chosen-00001-of-00002.gguf','chosen-00002-of-00002.gguf','other-Q8.gguf'])await fs.writeFile(path.join(f.directory,name),header());
+  const manager=await createLocalModels({...f.options,withModelFiles:async(directory,files,operation)=>{assert.equal(directory,await fs.realpath(f.directory));assert.equal(files.length,2);return operation();},trashItem:async file=>{moved.push(path.basename(file));await fs.rename(file,path.join(recycle,path.basename(file)));}});t.after(()=>manager.close());
+  const model=(await manager.request('localModels.list')).models.find(item=>item.files.length===2);
+  const result=await manager.request('localModels.delete',{modelId:model.id});assert.equal(result.deleted,true);assert.deepEqual(result.files,model.files);assert.equal(moved.length,2);await fs.access(path.join(f.directory,'other-Q8.gguf'));assert.ok(result.models.every(item=>item.id!==model.id));
+  await assert.rejects(manager.request('localModels.delete',{modelId:model.id}),/changed|left/);
+});
+
+test('deletion rejects loaded renamed files and missing coordination but recycles only found incomplete/invalid files',async t=>{
+  const f=await fixture(t);const first=(await f.manager.request('localModels.list')).models[0];
+  await assert.rejects(f.manager.request('localModels.delete',{modelId:first.id}),/coordination/);await f.manager.close();
+  let effects=0;const manager=await createLocalModels({...f.options,withModelFiles:async(_root,_files,operation)=>operation(),trashItem:async file=>{effects++;await fs.rename(file,file+'.recycled');}});t.after(()=>manager.close());
+  await manager.request('localModels.start',{modelId:first.id});await fs.rename(path.join(f.directory,first.relativePath),path.join(f.directory,'renamed.gguf'));
+  const renamed=(await manager.request('localModels.list')).models[0];await assert.rejects(manager.request('localModels.delete',{modelId:renamed.id}),/Stop the loaded/);assert.equal(effects,0);await manager.request('localModels.stop');
+  await fs.writeFile(path.join(f.directory,'incomplete-00001-of-00002.gguf'),header());const incomplete=(await manager.request('localModels.list')).models.find(item=>!item.complete);
+  const removed=await manager.request('localModels.delete',{modelId:incomplete.id});assert.equal(removed.deleted,true);assert.deepEqual(removed.files,['incomplete-00001-of-00002.gguf']);assert.equal(effects,1);await fs.access(path.join(f.directory,'renamed.gguf'));
+  await fs.writeFile(path.join(f.directory,'invalid.gguf'),'broken fixture');const invalid=(await manager.request('localModels.list')).models.find(item=>item.relativePath==='invalid.gguf');assert.equal(invalid.available,false);
+  assert.equal((await manager.request('localModels.delete',{modelId:invalid.id})).deleted,true);assert.equal(effects,2);
 });

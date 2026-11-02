@@ -1,7 +1,75 @@
-# Harness verification
+# Faber verification
 
-Developer-build verification, October 31, 2026. This records observed checks,
-not production acceptance or general autonomous reliability.
+This records observed checks, not general autonomous reliability. The historical
+developer-build entries below are retained; the b1 release evidence supersedes
+their source-only packaging and hardware limitations where explicitly tested.
+
+## Faber b1.0, November 2, 2026
+
+Work is in the standalone private Faber repository on `codex/b1-local-desktop`,
+based on `50cac21172e7f4b3662ef179e9e150095fca589a`. The original Sophia checkout,
+normal harness profile, model configuration and user model files were preserved.
+
+The combined deterministic suite passed 188 checks with one optional native-input
+fixture skipped (189 total) after the real GPU logging correction. Additional
+addon migration regression coverage and the final packaged results are recorded
+in the release evidence alongside the installer. Coverage includes shared tools,
+removed context/turn budgets, images and reported usage, hardware capabilities,
+safe Recycle Bin deletion/reservations, bounded offline GGUF metadata, addon
+approval/lifecycle/rollback/cancellation, and editable workbench recovery.
+
+The actual Electron feature smoke exercised local addon import/disable/enable/
+uninstall, hardware selections, card grids, offline tensor metadata and a
+fixture-only recycle implementation preserving sibling variants. It did not
+delete a real model. Reports and reviewed frames:
+`C:\Users\youwe\AppData\Local\Temp\Faber-smoke-4qncpT\faber-smoke-report.json`
+and the corrected visible hardware frame in `Faber-smoke-Ll6Uyn`.
+
+The built Faber.exe exercised ASAR bootstrap into a writable copied workbench,
+57 shared tools, real native-script paths, bundled CUDA detection, staged tests
+using its embedded Node (no external Node), and immutable recovery after a
+deliberately broken isolated workbench. Report:
+`C:\Users\youwe\AppData\Local\Temp\Faber-smoke-mKrZjJ\packaged-report.json`.
+The copied-workbench suite also passed under Electron's embedded Node runtime.
+
+A real GPU proof used only a temporary hard link to the pre-existing
+3,825,807,040-byte llama2-uncensored:7b GGUF. Offline metadata reported llama,
+Q4_0 and 6,738,415,616 stored tensor parameters. The bundled CUDA 13 runner
+loaded in 4,897 ms with 33/33 layers verified on CUDA0 (RTX 5070). Requested
+logical CPUs 0–3, four threads and mapped model memory reached the owned process.
+One loopback generation returned usage of 37 input and 12 output tokens. The
+model did not follow the exact requested word; this proves inference, not task
+quality or reliable tool use. Total device memory changed from 1,837 to 6,702 MiB
+and returned to 1,837 MiB after Stop; those totals include other applications.
+The process exited, temporary key/hard link were removed, and the original file's
+size, inode and modification time were unchanged. Zero model downloads or paid
+API calls. Report:
+`C:\Users\youwe\AppData\Local\Temp\SophiaHarness-local-live-1yx5AD\report.json`.
+
+That proof initially caught missing placement logs: this runner emits library
+information at verbosity 4 while its server defaults to 3. Supported launches
+now request level 4 and retain bounded diagnostics; custom mode still requires
+actual observed GPU layers/devices. The fix does not force all layers or override
+the runtime's fit algorithm.
+
+Actual isolated NSIS tests passed fresh b1 install → beta.2 fixture upgrade →
+b1 rollback → uninstall. Project/chat content, an encrypted fake key, an addon,
+an external fixture model directory and the older workbench survived. Registration,
+test-owned shortcuts and program files were removed on uninstall. The beta.2
+fixture changes version metadata with the same data schema; future schema
+migrations still require their own checks. Preflight rejected a pre-existing
+Faber installation/process/shortcuts; normal profile paths were never launched.
+Report:
+`C:\Users\youwe\AppData\Local\Temp\Faber-installer-proof-11a0b88e72c949cf93d18c5fef1ae8f0\installer-proof.json`.
+Final artifact hashes and the repeated final installer proof are stored in the
+ignored `release/artifact-report.json`, outside the self-referential build inputs.
+
+The Windows x64 beta is unsigned. CPU/CUDA/Vulkan binaries and their notices are
+pinned and checked by the runtime manifest; actual inference was tested only on
+the stated NVIDIA GPU/model. AMD/Intel/Vulkan, multi-GPU, large Qwen models,
+physical microphone/clipboard/native input, clean alternate Windows machines and
+paid cloud inference were not re-tested for b1. No online addon sharing or OTA
+was built. Trusted addon/shell code is not sandboxed.
 
 ## Initial environment checks
 
@@ -341,5 +409,5 @@ automatic source-file watching are not implemented.
 - Unapplied upgrade stages last for the current session. Rollback persists, but
   the standalone recovery command requires the app to be closed. Dependencies,
   launchers and the recovery entry use the normal development workflow.
-- This is a source-launched developer app, without a signed packaged installer.
-  Existing Sophia/Hermes data and deployment were not migrated.
+- The b1 installer is unsigned; the older native Sophia/Hermes data and deployment
+  were not migrated. Its historical harness profile remains at `SophiaHarness`.

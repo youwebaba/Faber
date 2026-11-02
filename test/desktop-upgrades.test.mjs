@@ -27,7 +27,7 @@ test('upgrade runs real staged tests, applies explicitly, then rolls back preser
 });
 test('upgrade rejects forbidden paths, failed tests, changed stage and unverified additions',async t=>{
   const {dataDir,manager}=await fixture(t);
-  for(const name of ['../outside.mjs','core/../desktop/main.mjs','package.json','node_modules/x.mjs','desktop/recovery.mjs'])await assert.rejects(manager.stage([{path:name,content:'x'}]),/Invalid/);
+  for(const name of ['../outside.mjs','core/../desktop/main.mjs','package.json','node_modules/x.mjs','desktop/recovery.mjs','desktop/Recovery.mjs','desktop/bootstrap.cjs','desktop/Bootstrap.cjs','desktop/packaged-paths.mjs'])await assert.rejects(manager.stage([{path:name,content:'x'}]),/Invalid/);
   const failed=await manager.stage([{path:'core/value.mjs',content:'export const value=3;'}]);assert.equal((await manager.verify(failed.id)).verified,false);await assert.rejects(manager.apply(failed.id),/Verify/);
   const changed=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);await manager.verify(changed.id);
   await fs.writeFile(path.join(dataDir,'upgrades',changed.id,'stage','core','value.mjs'),'tampered');await assert.rejects(manager.apply(changed.id),/changed/);

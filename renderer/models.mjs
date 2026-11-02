@@ -1,4 +1,5 @@
 import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest } from './model-helpers.mjs';
+import { createDiskLibrary } from './library.mjs';
 
 export function createModelsBrowser({ request, subscribe, el, button, field, actions, notify, showSettings }) {
   let hub = { downloadDirectory: '', hasToken: false, downloads: [] };
@@ -31,13 +32,15 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
   const columns = el('div', 'model-columns'); const results = el('div', 'model-results'); results.id = 'model-results'; results.setAttribute('aria-label', 'Search results');
   const detail = el('section', 'model-detail'); detail.id = 'model-detail'; detail.setAttribute('aria-label', 'Model details');
   detail.append(el('div', 'model-detail-empty', 'Select a model to inspect its files, sizes, and available estimates.'));
-  columns.append(results, detail); browse.append(columns); panel.append(browse);
+  detail.hidden = true; results.tabIndex = -1; columns.append(results, detail); browse.append(columns); panel.append(browse);
   const downloads = el('section', 'model-downloads'); downloads.id = 'model-downloads'; downloads.hidden = true;
   const libraryHeading = el('div', 'model-library-heading'); const directory = el('p', 'hint');
   const openRoot = button('Open download folder', () => request('models.openDirectory'));
   libraryHeading.append(directory, openRoot); downloads.append(libraryHeading);
-  const libraryNote = el('p', 'hint', 'Completed downloads are files, not installed models. Load them with a runtime that supports their architecture and format.'); downloads.append(libraryNote);
-  const jobs = el('div', 'model-jobs'); downloads.append(jobs); panel.append(downloads);
+  const libraryNote = el('p', 'hint', 'Files found on disk and active downloads. Stop a model before deleting it. Recycle Bin storage is freed when you empty the bin.'); downloads.append(libraryNote);
+  const diskLibrary = createDiskLibrary({ request, el, button, actions, notify, inspect: async repoId => { showTab('browse'); await inspect(repoId); } }); downloads.append(diskLibrary.root);
+  const history = el('details', 'model-transfer-history'); history.append(el('summary', '', 'Past transfer records'), el('p', 'hint', 'Records do not prove files are still on disk. Use the disk library above for current model files.'));
+  const jobs = el('div', 'model-jobs'); history.append(jobs); downloads.append(history); panel.append(downloads);
   const footer = el('div', 'model-footer'); const transferStatus = el('span', 'hint'); const viewTransfers = button('View downloads', () => showTab('downloads'), 'text-button');
   footer.append(transferStatus, viewTransfers); panel.append(footer);
   document.querySelector('.workspace').append(panel);
@@ -52,15 +55,21 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
   }
   function accept(value) {
     hub = value;
+    diskLibrary.update(hub);
     renderDownloads();
     if (settingsView?.root.isConnected) settingsView.updateStatus();
   }
-  subscribe?.(event => { if (event.type === 'models') { eventVersion++; accept(event.state); } });
+  let terminalJobs = '';
+  subscribe?.(event => {
+    if (event.type === 'models') { eventVersion++; accept(event.state); const terminal = event.state.downloads.filter(job => ['completed', 'failed', 'canceled', 'interrupted'].includes(job.status)).map(job => `${job.id}:${job.status}`).join('|'); if (terminal !== terminalJobs) { terminalJobs = terminal; if (!panel.hidden) diskLibrary.refresh(); } }
+    if (event.type === 'localModels' && !panel.hidden) diskLibrary.refresh();
+  });
   function showTab(tab) {
     activeTab = tab;
     browse.hidden = tab !== 'browse'; downloads.hidden = tab !== 'downloads';
     browseTab.classList.toggle('selected', tab === 'browse'); downloadsTab.classList.toggle('selected', tab === 'downloads');
     browseTab.setAttribute('aria-pressed', String(tab === 'browse')); downloadsTab.setAttribute('aria-pressed', String(tab === 'downloads'));
+    if (tab === 'downloads') diskLibrary.refresh();
   }
   function close() {
     const wasOpen = !panel.hidden;
@@ -71,7 +80,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
   async function open() {
     panel.hidden = false; document.body.classList.add('models-open'); document.body.classList.remove('sidebar-open');
     document.querySelector('#open-models').classList.add('selected');
-    try { await refresh(); } catch (error) { notify(errorText(error), true); }
+    try { await refresh(); await diskLibrary.refresh(); } catch (error) { notify(errorText(error), true); }
     if (!loaded) { loaded = true; await search(); }
     if (activeTab === 'browse') query.focus();
   }
@@ -101,6 +110,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     link.addEventListener('click', event => { event.preventDefault(); request('models.openPage', { repoId }).catch(error => notify(errorText(error), true)); }); return link;
   }
   async function inspect(repoId) {
+    detail.hidden = false; columns.classList.add('has-detail');
     const current = nextInspect(); inspected = undefined; selected.clear();
     for (const row of results.children) row.setAttribute('aria-pressed', String(row.dataset.repoId === repoId));
     detail.replaceChildren(el('p', 'hint', 'Loading file metadata…')); detail.scrollTop = 0;
@@ -116,7 +126,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     detail.replaceChildren();
     let quantization;
     const variantButtons = [];
-    const header = el('div', 'model-detail-heading'); header.append(el('h2', 'model-repo', model.id), pageLink(model.id)); detail.append(header);
+    const header = el('div', 'model-detail-heading'); header.append(button('Back to model grid', () => { detail.hidden = true; columns.classList.remove('has-detail'); results.focus(); }, 'text-button'), el('h2', 'model-repo', model.id), pageLink(model.id)); detail.append(header);
     if (model.gated) detail.append(el('p', 'hint', 'This repository restricts access. Accept its terms on Hugging Face and add an authorized token in Settings before downloading.'));
     const information = model.quantizations?.length ? el('details', 'model-information') : detail;
     if (information !== detail) information.append(el('summary', '', 'Model information and estimates'));
@@ -188,13 +198,14 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     openRoot.disabled = !hub.downloadDirectory;
     const active = hub.downloads.filter(job => downloadProgress(job).active);
     downloadsTab.textContent = `Downloads & library${hub.downloads.length ? ` (${hub.downloads.length})` : ''}`;
-    transferStatus.textContent = active.length ? `${active.length} active download${active.length === 1 ? '' : 's'} · ${formatBytes(active.reduce((sum, job) => sum + (Number.isFinite(job.speedBytesPerSecond) ? job.speedBytesPerSecond : 0), 0))}/s` : hub.downloads.length ? 'No transfers running' : 'No model files downloaded through Sophia yet';
+    transferStatus.textContent = active.length ? `${active.length} active download${active.length === 1 ? '' : 's'} · ${formatBytes(active.reduce((sum, job) => sum + (Number.isFinite(job.speedBytesPerSecond) ? job.speedBytesPerSecond : 0), 0))}/s` : hub.downloads.length ? 'No transfers running' : 'No model files downloaded through Faber yet';
     viewTransfers.hidden = !hub.downloads.length;
-    const ids = new Set(hub.downloads.map(job => job.id));
+    const past = hub.downloads.filter(job => !downloadProgress(job).active);
+    const ids = new Set(past.map(job => job.id));
     for (const [id, row] of jobNodes) if (!ids.has(id)) { row.node.remove(); jobNodes.delete(id); }
     jobs.querySelector('.model-library-empty')?.remove();
-    if (!hub.downloads.length) jobs.append(el('p', 'model-library-empty hint', 'Downloads appear here when you or an agent starts one. Completed files remain in this library after restarting Sophia.'));
-    for (const job of hub.downloads) {
+    if (!past.length) jobs.append(el('p', 'model-library-empty hint', 'No completed or interrupted transfer records.'));
+    for (const job of past) {
       let row = jobNodes.get(job.id);
       if (!row) {
         const node = el('article', 'model-job'); node.dataset.id = job.id;
