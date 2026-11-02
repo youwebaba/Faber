@@ -1,0 +1,13 @@
+// Controlled child process for the opt-in Electron smoke; never loads weights.
+import http from 'node:http';
+import fs from 'node:fs/promises';
+const arg = name => process.argv[process.argv.indexOf(name) + 1];
+const key = await fs.readFile(arg('--api-key-file'), 'utf8');
+const alias = arg('--alias'), started = Date.now();
+if (arg('--model').includes('Failure')) { process.stderr.write('Controlled incompatible model fixture'); process.exit(2); }
+http.createServer((request, response) => {
+  response.setHeader('Content-Type', 'application/json');
+  if (request.url === '/health') { response.statusCode = Date.now() - started < 1200 ? 503 : 200; response.end('{}'); return; }
+  if (request.url === '/v1/models' && request.headers.authorization === `Bearer ${key}`) { response.end(JSON.stringify({ data: [{ id: alias }] })); return; }
+  response.statusCode = 403; response.end('{}');
+}).listen(Number(arg('--port')), '127.0.0.1');

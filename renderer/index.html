@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Sophia</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="models.css">
+  <link rel="stylesheet" href="connections.css">
+  <link rel="stylesheet" href="chat-media.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
+      <div class="brand-row"><span class="brand-mark" aria-hidden="true">s</span><span class="brand">Sophia</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
+      <button id="new-chat" class="nav-button new-chat" data-icon="compose">New chat <kbd>Ctrl N</kbd></button>
+      <button id="open-tools" class="nav-button" data-icon="tools">Tools & extensions</button>
+      <button id="open-models" class="nav-button" data-icon="models">Models</button>
+      <div class="section-heading"><span>Projects</span><button id="add-project" class="icon-button" title="Add project" aria-label="Add project" data-icon="plus"></button></div>
+      <nav id="project-list" class="project-list" aria-label="Project navigation"></nav>
+      <div class="sidebar-bottom"><button id="open-settings" class="nav-button" data-icon="settings">Settings</button><div class="app-footnote">Your workspace. Your assistant.</div></div>
+    </aside>
+    <main class="workspace">
+      <header class="workspace-header">
+        <button id="show-sidebar" class="icon-button" title="Show sidebar" aria-label="Show sidebar" data-icon="panel"></button>
+        <div class="breadcrumb"><span id="project-name">Workspace</span><span class="slash">/</span><button id="chat-title" title="Rename chat">New chat</button></div>
+        <span class="models-header-label">Models</span>
+        <div class="header-actions"><button id="chat-options" class="icon-button" title="Chat settings" aria-label="Chat settings" data-icon="sliders"></button><button id="toggle-activity" class="icon-button" title="Show activity" aria-label="Toggle activity" data-icon="activity" aria-expanded="true"></button></div>
+      </header>
+      <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="dismiss-notice" class="icon-button" aria-label="Dismiss notification" data-icon="close"></button></div>
+      <div class="chat-layout">
+        <section class="conversation" aria-label="Conversation">
+          <div id="transcript" class="transcript" tabindex="0" aria-label="Chat messages"></div>
+          <div class="composer-wrap">
+            <div id="approval-list" class="approval-list" aria-live="polite"></div>
+            <div id="voice-status" class="voice-status" role="status" hidden></div>
+            <form id="composer" class="composer">
+              <div id="image-drafts" class="image-drafts" aria-label="Attached files" hidden></div>
+              <p id="image-draft-status" class="image-draft-status" role="status" hidden></p>
+              <label for="prompt" class="sr-only">Message Sophia</label>
+              <textarea id="prompt" rows="2" placeholder="Ask Sophia, attach files, or paste an image…" spellcheck="true"></textarea>
+              <div class="composer-toolbar">
+                <button type="button" id="attach-files" class="icon-button" aria-label="Attach files" title="Attach images or UTF-8 text/code files" data-icon="paperclip"></button>
+                <input type="file" id="file-picker" multiple hidden aria-label="Choose files to attach">
+                <button type="button" id="composer-tools" class="icon-button" aria-label="Run a tool" title="Run a tool" data-icon="plus"></button>
+                <button type="button" id="model-picker" class="model-picker" title="Choose a model or add an API connection"><span class="model-choice"><span id="provider-label">No connection</span><span id="model-label">Choose a model</span></span><span aria-hidden="true">⌄</span></button>
+                <div class="composer-spacer"></div>
+                <button type="button" id="voice-button" class="icon-button" aria-label="Voice controls" title="Voice controls" data-icon="mic"></button>
+                <button type="button" id="stop-run" class="send-button" aria-label="Stop run" title="Stop run" data-icon="stop" hidden></button>
+                <button type="submit" id="send-message" class="send-button" aria-label="Send message" title="Send message" data-icon="arrow"></button>
+              </div>
+            </form>
+            <div class="composer-caption"><span id="permission-caption">Actions ask for approval</span><span>Enter to send <span aria-hidden="true">·</span> Shift Enter for a new line</span></div>
+          </div>
+        </section>
+        <aside id="activity-rail" class="activity-rail" aria-label="Agent activity"><div class="rail-heading"><h2>Activity</h2><button id="close-activity" class="icon-button" title="Hide activity" aria-label="Hide activity" data-icon="close"></button></div><div id="activity-content"></div></aside>
+      </div>
+    </main>
+  </div>
+  <dialog id="modal" aria-labelledby="modal-title"><div class="modal-header"><h2 id="modal-title"></h2><button id="close-modal" class="icon-button" aria-label="Close dialog" data-icon="close"></button></div><div id="modal-body"></div></dialog>
+  <div id="live-status" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

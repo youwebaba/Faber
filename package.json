@@ -1,0 +1,17 @@
+{
+  "name": "sophia-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "electron . --smoke",
+    "smoke:live": "electron . --smoke-live",
+    "smoke:models": "electron . --smoke-models",
+    "smoke:features": "electron . --smoke-features"
+  },
+  "engines": { "node": ">=24" },
+  "devDependencies": { "electron": "45.2.1" }
+}

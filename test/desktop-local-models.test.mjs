@@ -1,0 +1,92 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { createLocalModels } from '../local-models/index.mjs';
+import { checkTool } from '../core/registry.mjs';
+
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const header = () => { const bytes = Buffer.alloc(24); bytes.write('GGUF'); bytes.writeUInt32LE(3, 4); return bytes; };
+
+test('Ollama aliases share active-run and synchronous lifecycle guards by endpoint and model', async t => {
+  const state = { providers: [
+    { id: 'one', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', hasKey: false },
+    { id: 'two', kind: 'ollama', baseUrl: 'http://localhost:11434/', hasKey: false },
+  ], runs: [{ id: 'active', providerId: 'one', model: 'fixture:latest', status: 'running', modelCalls: [{}] }] };
+  let requests = 0;
+  const runtime = { request: async () => structuredClone(state) };
+  const f = await fixture(t, { runtime, fetchImpl: async (_url, options) => { requests++; return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })); } });
+  await assert.rejects(f.manager.request('localModels.stop', { providerId: 'two', model: 'fixture' }), /Stop chats/); assert.equal(requests, 0);
+  state.runs = []; const controller = new AbortController();
+  const stopping = f.manager.request('localModels.stop', { providerId: 'two', model: 'fixture' }, controller.signal);
+  assert.throws(() => f.manager.assertProviderAvailable('one', 'fixture:latest'), /finish loading or stopping/);
+  while (!requests) await pause(1); controller.abort(new Error('fixture canceled')); await assert.rejects(stopping, /fixture canceled/);
+  assert.doesNotThrow(() => f.manager.assertProviderAvailable('one', 'fixture:latest'));
+});
+async function fixture(t, extra = {}) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sophia-local-manager-')), directory = path.join(root, 'models'); await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'fixture-Q4_K_M.gguf'), header());
+  const state = { providers: [{ id: 'unrelated', name: 'Preserve this', kind: 'openai', baseUrl: 'https://example.com/v1', model: 'unrelated' }], runs: [], chats: [{ id: 'chat', providerId: 'unrelated', model: 'unrelated' }] };
+  const secrets = new Map(), children = [], events = [], readiness = { ready: false }, calls = [];
+  const runtime = { async request(method, args) { calls.push(method); if (method === 'state.get') return structuredClone(state); if (method === 'provider.save') { secrets.set(args.id, args.apiKey); const provider = { ...args, hasKey: true }; delete provider.apiKey; const existing = state.providers.find(item => item.id === args.id); if (existing) Object.assign(existing, provider); else state.providers.push(provider); return provider; } throw new Error(method); } };
+  const options = { dataDir: path.join(root, 'data'), runtime, getHubState: async () => ({ downloadDirectory: directory, downloads: [] }), executable: process.execPath, pollMs: 5, loadTimeoutMs: 1000,
+    emit: event => events.push(event),
+    spawnImpl(executable, args, options) {
+      const child = new EventEmitter(); Object.assign(child, { pid: 12345 + children.length, exitCode: null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), args, options, executable }); children.push(child); return child;
+    },
+    killProcess: async child => { if (child && child.exitCode === null) { child.exitCode = 0; child.emit('close', 0); } },
+    fetchImpl: async (url, options) => { const child = children.at(-1); if (String(url).endsWith('/health')) return Response.json(readiness.ready ? { status: 'ok' } : { error: 'Loading' }, { status: readiness.ready ? 200 : 503 }); const key = await fs.readFile(child.args[child.args.indexOf('--api-key-file') + 1], 'utf8'); assert.equal(options.headers.Authorization, `Bearer ${key}`); return Response.json({ data: [{ id: child.args[child.args.indexOf('--alias') + 1] }] }); }, ...extra };
+  const manager = await createLocalModels(options);
+  t.after(async () => { await manager.close(); await fs.rm(root, { recursive: true, force: true }); });
+  return { manager, options, root, directory, state, secrets, children, events, readiness, calls };
+}
+async function until(manager, status) { for (let i = 0; i < 300; i++) { const state = await manager.request('localModels.list'); if (state.process.status === status) return state; await pause(5); } throw new Error(`Expected ${status}`); }
+
+test('owned GGUF lifecycle uses validated files, registers only after readiness, preserves chat/provider and unloads process', async t => {
+  const f = await fixture(t); const listed = await f.manager.request('localModels.list'); for (const tool of f.manager.tools()) checkTool(tool);
+  const started = await f.manager.request('localModels.start', { modelId: listed.models[0].id }); assert.equal(started.process.status, 'loading'); assert.equal(f.state.providers.length, 1); assert.equal(f.state.chats[0].providerId, 'unrelated');
+  const child = f.children[0]; assert.equal(child.options.windowsHide, true); assert.ok(child.args.includes('--offline')); assert.ok(child.args.includes('--no-webui')); assert.ok(child.args.includes('--no-mmproj')); assert.equal(child.args[child.args.indexOf('--host') + 1], '127.0.0.1'); assert.ok(!child.args.includes('--ctx-size'));
+  await assert.rejects(f.manager.request('localModels.start', { modelId: listed.models[0].id }), /Stop the current/);
+  f.readiness.ready = true; const ready = await until(f.manager, 'ready'); assert.equal(f.state.providers.length, 2); assert.equal(ready.process.providerId, ready.managedProviderId); f.manager.assertProviderAvailable(ready.process.providerId, ready.process.model);
+  f.state.runs.push({ id: 'busy', providerId: ready.process.providerId, model: ready.process.model, modelCalls: [{}], status: 'running' });
+  await assert.rejects(f.manager.request('localModels.stop'), /Stop chats/); assert.equal(child.exitCode, null); f.manager.assertProviderAvailable(ready.process.providerId, ready.process.model);
+  f.state.runs[0].status = 'completed'; const stopped = await f.manager.request('localModels.stop'); assert.equal(stopped.process.status, 'stopped'); assert.equal(child.exitCode, 0); assert.throws(() => f.manager.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/);
+  await assert.rejects(fs.access(child.args[child.args.indexOf('--api-key-file') + 1])); assert.ok(!JSON.stringify(f.events).includes(f.secrets.get(ready.process.providerId)));
+  await f.manager.close(); const reopened = await createLocalModels(f.options); try { assert.equal((await reopened.request('localModels.list')).managedProviderId, ready.managedProviderId); assert.throws(() => reopened.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/); } finally { await reopened.close(); }
+});
+
+test('Stop while loading fences readiness, controls own process once and never registers a late provider', async t => {
+  const f = await fixture(t); const model = (await f.manager.request('localModels.list')).models[0]; await f.manager.request('localModels.start', { modelId: model.id });
+  await Promise.all([f.manager.request('localModels.stop'), f.manager.request('localModels.stop')]); f.readiness.ready = true; await pause(20);
+  assert.equal(f.state.providers.length, 1); assert.equal(f.children[0].exitCode, 0); assert.equal((await f.manager.request('localModels.list')).process.status, 'stopped');
+});
+
+test('changed file IDs and contradictory selections fail before spawn', async t => {
+  const f = await fixture(t); const model = (await f.manager.request('localModels.list')).models[0]; await fs.appendFile(path.join(f.directory, model.relativePath), 'changed');
+  await assert.rejects(f.manager.request('localModels.start', { modelId: model.id }), /changed/);
+  await assert.rejects(f.manager.request('localModels.start', { modelId: model.id, providerId: 'unrelated', model: 'x' }), /either/);
+  await assert.rejects(f.manager.request('localModels.stop', { providerId: 'unrelated' }), /both/); assert.equal(f.children.length, 0);
+});
+
+test('close during asynchronous startup preparation prevents orphan process and key', async t => {
+  let release, entered; const pending = new Promise(resolve => { release = resolve; }), observed = new Promise(resolve => { entered = resolve; });
+  const f = await fixture(t); const model = (await f.manager.request('localModels.list')).models[0]; await f.manager.close();
+  const manager = await createLocalModels({ ...f.options, getHubState: async () => { entered(); await pending; return { downloadDirectory: f.directory, downloads: [] }; } });
+  const starting = manager.request('localModels.start', { modelId: model.id }); const rejected = assert.rejects(starting, /shutting down/); await observed;
+  const closing = manager.close(); release(); await Promise.all([rejected, closing]); assert.equal(f.children.length, 0);
+  assert.ok(!(await fs.readdir(path.join(f.root, 'data', 'local-models'))).some(name => name.endsWith('.key')));
+});
+
+test('generated local key is redacted from process failure diagnostics and key file is removed', async t => {
+  const f = await fixture(t); await f.manager.request('localModels.start', { modelId: (await f.manager.request('localModels.list')).models[0].id });
+  const child = f.children[0], keyPath = child.args[child.args.indexOf('--api-key-file') + 1], key = await fs.readFile(keyPath, 'utf8'); child.stderr.write(`load failed; key=${key}`); child.exitCode = 1; child.emit('close', 1);
+  const failed = await until(f.manager, 'failed'); assert.ok(failed.process.error.includes('[redacted]')); assert.ok(!JSON.stringify(f.events).includes(key)); await assert.rejects(fs.access(keyPath));
+});
+
+test('explicit control-only tool run can stop an idle model while normal model runs remain guarded', async t => {
+  const f = await fixture(t); f.readiness.ready = true; await f.manager.request('localModels.start', { modelId: (await f.manager.request('localModels.list')).models[0].id }); const ready = await until(f.manager, 'ready');
+  f.state.runs.push({ id: 'tool-ui', providerId: ready.process.providerId, model: ready.process.model, status: 'running', modelCalls: [] });
+  const result = await f.manager.tools().find(tool => tool.name === 'local_model_stop').execute({}, { runId: 'tool-ui', signal: new AbortController().signal }); assert.equal(result.process.status, 'stopped');
+});
