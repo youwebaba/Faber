@@ -44,6 +44,16 @@ export function providerMessages(messages, kind) {
   return result;
 }
 
+export function providerBody({provider,messages,tools}){
+  if(provider.kind==='openai-responses')return responsesBody({provider,messages,tools});
+  const ollama=provider.kind==='ollama',options=provider.chatOptions||{};
+  return {model:provider.model,messages:providerMessages(messages,provider.kind),stream:true,
+    ...(ollama?{think:Object.hasOwn(options,'thinking')?options.thinking:false,...(options.contextTokens!==null&&options.contextTokens!==undefined?{options:{num_ctx:options.contextTokens}}:{})}:{stream_options:{include_usage:true}}),
+    ...(options.thinkingMode==='llama_cpp'&&typeof options.thinking==='boolean'?{chat_template_kwargs:{enable_thinking:options.thinking}}:{}),
+    ...(tools.length?{tools:tools.map(tool=>({type:'function',function:{name:tool.name,description:tool.description,parameters:tool.parameters}}))}:{}),
+  };
+}
+
 async function* lines(body, signal) {
   if (!body) throw new Error('Provider returned an empty response body');
   const decoder = new TextDecoder();
@@ -103,11 +113,7 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
   try { response = await fetchImpl(`${validateBaseUrl(provider.baseUrl)}${ollama ? '/api/chat' : responses ? '/responses' : '/chat/completions'}`, {
     method: 'POST', signal: requestSignal, redirect: 'error',
     headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
-    body: JSON.stringify(responses ? responsesBody({ provider, messages, tools }) : { model: provider.model, messages: providerMessages(messages, provider.kind), stream: true,
-      ...(ollama ? { think: false } : {}),
-      ...(!ollama ? { stream_options: { include_usage: true } } : {}),
-      ...(tools.length ? { tools: tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } })) } : {}),
-    }),
+    body: JSON.stringify(providerBody({provider,messages,tools})),
   }); } finally { clearTimeout(timer); }
   if (!response.ok) throw await requestError(response, secret);
   if (responses) {
@@ -125,6 +131,8 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
     try { frame = JSON.parse(data); } catch { throw new Error('Provider returned malformed streaming JSON'); }
     const usage = providerUsage(ollama ? frame : frame.usage, provider.kind);
     if (Object.keys(usage).length) yield { type: 'usage', usage };
+    const generationMs=ollama?frame.eval_duration/1000000:frame.timings?.predicted_ms;
+    if(Number.isFinite(generationMs)&&generationMs>0)yield {type:'timing',timing:{generationMs}};
     if (frame.error) throw new Error(`Provider error: ${typeof frame.error === 'string' ? frame.error : frame.error.message || 'unknown error'}`);
     if (ollama) {
       if (frame.message?.content) yield { type: 'delta', text: frame.message.content };

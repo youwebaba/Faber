@@ -9,7 +9,7 @@ import { fileTools } from '../tools/files.mjs';
 import { shellTool } from '../tools/process.mjs';
 
 const sourceDir = fileURLToPath(new URL('..', import.meta.url));
-const directory = await mkdtemp(join(tmpdir(), 'sophia-live-smoke-'));
+const directory = await mkdtemp(join(tmpdir(), 'faber-live-smoke-'));
 const dataDir = join(directory, 'data'), workspace = join(directory, 'workspace');
 await mkdir(workspace);
 await writeFile(join(workspace, 'README.txt'), 'This isolated harness smoke fixture contains the verification token HARNESS_FILE_READY.\n');
@@ -65,7 +65,7 @@ try {
   if (!succeeded) { report.evidenceDirectory = directory; await writeFile(join(directory, 'report.json'), JSON.stringify(report, null, 2)); }
   console.log(JSON.stringify(report, null, 2));
   if (succeeded) {
-    assert.ok(relative(resolve(tmpdir()), resolve(directory)).startsWith('sophia-live-smoke-'));
+    assert.ok(relative(resolve(tmpdir()), resolve(directory)).startsWith('faber-live-smoke-'));
     await rm(directory, { recursive: true, force: true });
   }
 }

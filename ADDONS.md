@@ -1,8 +1,14 @@
-# Local addons in Faber b1.0
+# Local addons in Faber b1.1
 
 Open **Addons** in the sidebar or **Manage addons** in Settings. Import a local
 folder or a `.faber-addon.json` package. No catalog, publishing, account system,
 online sharing, or automatic addon updates are included in this beta.
+
+[Lightpanda Browser](LIGHTPANDA.md) ships as the first removable addon. Its
+dedicated WSL2 runtime has an explicit setup action. A per-profile installation
+record respects Disable, Uninstall and manual folder removal across updates.
+Its verified cleanup hook removes the owned runtime before Uninstall or Reset
+data; normal addon preferences otherwise follow the rules below.
 
 Addons are executable trusted JavaScript with the Windows account's authority.
 The native trust prompt covers the exact package hash before importing code.
@@ -20,7 +26,7 @@ itself. Package validation, path checks, and hashes are not malware detection.
   only that feature's private data. Reset before uninstall for a clean removal.
 - **Roll back** restores the previously installed code version after review.
   It does not undo private-data migrations or external effects.
-- **Open addons folder** opens `%LOCALAPPDATA%/SophiaHarness/addons`. Every addon
+- **Open addons folder** opens the current profile's `addons` folder. Every addon
   has its own `<id>/` folder. Removing that folder manually prevents activation
   at the next startup. Missing, changed, or invalid packages do not prevent
   other valid addons from loading. Changed bytes require fresh approval.
@@ -31,8 +37,8 @@ forcibly stop arbitrary background work or undo arbitrary filesystem changes
 performed by JavaScript running in its host. Async initialization has a deadline;
 synchronous code that blocks the host still requires closing the application.
 
-Private feature data is kept separately in
-`%LOCALAPPDATA%/SophiaHarness/addon-data/<id>/`. Approval records and immutable
+Private feature data is kept separately in the current profile's
+`addon-data/<id>/` folder. Approval records and immutable
 version caches are in `addon-manager/`. Do not include private data, credentials,
 chat history, model weights, or dependencies in packages.
 
@@ -82,7 +88,10 @@ into chat. All models see registered tools through the same validated registry.
 
 Tools receive the usual `ctx` plus `ctx.addon.id` and `ctx.addon.dataDir`. Store
 feature-specific settings in that directory, respect `ctx.signal`, and release
-optional resources in an exported `deactivate()` function. Avoid changing shared
+optional resources in an exported `deactivate(context)` function. An optional
+`uninstall(context)` hook cleans up owned external resources before code removal;
+Faber uses the previously approved cached module, not changed/unapproved bytes.
+The context contains `id`, `dataDir` and optional bundled `resources`. Avoid changing shared
 state destructively; a code rollback cannot reverse such a migration.
 
 ## Single-file package format

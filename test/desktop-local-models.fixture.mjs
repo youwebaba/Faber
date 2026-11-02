@@ -9,5 +9,6 @@ http.createServer((request, response) => {
   response.setHeader('Content-Type', 'application/json');
   if (request.url === '/health') { response.statusCode = Date.now() - started < 1200 ? 503 : 200; response.end('{}'); return; }
   if (request.url === '/v1/models' && request.headers.authorization === `Bearer ${key}`) { response.end(JSON.stringify({ data: [{ id: alias }] })); return; }
+  if (request.url === '/props' && request.headers.authorization === `Bearer ${key}`) { response.end(JSON.stringify({default_generation_settings:{n_ctx:process.argv.includes('--ctx-size')?Number(arg('--ctx-size')):2048}})); return; }
   response.statusCode = 403; response.end('{}');
 }).listen(Number(arg('--port')), '127.0.0.1');

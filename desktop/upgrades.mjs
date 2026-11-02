@@ -20,7 +20,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,onAp
       if(stat.isDirectory())for(const name of readdirSync(file).sort())visit(`${relative}/${name}`);
       else result.set(relative,hash(readFileSync(file)));
     }
-    for(const name of ['core','desktop','tools','extensions','model-hub','local-models','package.json','package-lock.json'])visit(name);
+    for(const name of ['core','desktop','tools','extensions','model-hub','local-models','bundled-addons','package.json','package-lock.json'])visit(name);
     return result;
   }
   let baseline,baselineError,mutating=false;
@@ -46,7 +46,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,onAp
     return result;
   }
   async function sourceInventory(){
-    const files=[];for(const folder of ['core','desktop','renderer','tools','extensions','model-hub','local-models','test']){try{files.push(...(await inventory(path.join(sourceDir,folder))).map(p=>`${folder}/${p}`));}catch(error){if(error.code!=='ENOENT')throw error;}}
+    const files=[];for(const folder of ['core','desktop','renderer','tools','extensions','model-hub','local-models','bundled-addons','test']){try{files.push(...(await inventory(path.join(sourceDir,folder))).map(p=>`${folder}/${p}`));}catch(error){if(error.code!=='ENOENT')throw error;}}
     for(const name of ['package.json','package-lock.json'])if(await readOrNull(path.join(sourceDir,name))!==null)files.push(name);
     return files.sort();
   }
@@ -80,7 +80,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,onAp
       const id=crypto.randomUUID(),directory=path.join(dataDir,'upgrades',id,'stage');
       const baseline=new Map();for(const relative of await sourceInventory())baseline.set(relative,hash(await fs.readFile(path.join(sourceDir,relative))));
       await fs.mkdir(directory,{recursive:true});
-      for(const folder of ['core','desktop','renderer','tools','extensions','model-hub','local-models','test']){
+      for(const folder of ['core','desktop','renderer','tools','extensions','model-hub','local-models','bundled-addons','test']){
         const from=path.join(sourceDir,folder);
         try{await fs.cp(from,path.join(directory,folder),{recursive:true,filter:async file=>{if((await fs.lstat(file)).isSymbolicLink())throw new Error('Upgrade source cannot contain symlinks');return true;}});}catch(e){if(e.code!=='ENOENT')throw e;}
       }

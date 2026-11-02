@@ -4,9 +4,10 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
+import {getProfileDirectory} from './profile-path.cjs';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 const allowed=/^(core|desktop|renderer|tools|extensions|model-hub|local-models|test)\/[a-zA-Z0-9_./-]+\.(mjs|cjs|js|json|html|css|ps1)$/;
-export function validUpgradePath(value){return typeof value==='string'&&allowed.test(value)&&!value.split('/').some(p=>p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/packaged-paths.mjs'].includes(value.toLowerCase());}
+export function validUpgradePath(value){return typeof value==='string'&&allowed.test(value)&&!value.split('/').some(p=>p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/packaged-paths.mjs','desktop/profile-path.cjs'].includes(value.toLowerCase());}
 async function safePath(root,relative){
   if(!validUpgradePath(relative))throw new Error('Invalid recovery path');
   const base=await fs.realpath(root),target=path.resolve(base,relative);let probe=target;
@@ -39,7 +40,7 @@ export async function restoreUpgrade({dataDir,sourceDir,record,signal}){
 if(process.argv.includes('--rollback-last')&&path.resolve(process.argv[1]??'')===fileURLToPath(import.meta.url)){
   try{
     const sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-    const dataDir=path.join(process.env.LOCALAPPDATA??path.join(os.homedir(),'AppData','Local'),'SophiaHarness');
+    const dataDir=getProfileDirectory(process.env.LOCALAPPDATA??path.join(os.homedir(),'AppData','Local'));
     const record=await readRecoveryRecord(dataDir,sourceDir);console.log(JSON.stringify(await restoreUpgrade({dataDir,sourceDir,record}),null,2));
   }catch(error){console.error(error.message);process.exitCode=1;}
 }

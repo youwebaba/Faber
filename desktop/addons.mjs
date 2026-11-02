@@ -110,13 +110,13 @@ export async function readAddonPackage(filename) {
   return packageFromFiles(files);
 }
 
-export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit = () => {},loadTimeoutMs=10000}) {
+export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit = () => {},loadTimeoutMs=10000,bundledSource,bundledResources={}}) {
   const directory = path.join(dataDir,'addons'), storage = path.join(dataDir,'addon-manager'), dataRoot = path.join(dataDir,'addon-data');
-  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map();
+  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map(), bundledSeen = new Set();
   let rows = [], warnings = [], initialized = false, legacyMigrated = false, registryInitialized = false, queue = Promise.resolve(), restartRequired = false, publishedSnapshot, savedState;
   const snapshot = () => ({directory,addons:structuredClone(rows),warnings:[...warnings],restartRequired});
   const publish = () => {const state=snapshot(),serialized=JSON.stringify(state);if(serialized===publishedSnapshot)return;publishedSnapshot=serialized;try {emit({type:'addons',state});} catch { /* UI lifetime is independent of host state. */ }};
-  const persist = async() => {const text=JSON.stringify({schemaVersion:1,legacyMigrated,records:Object.fromEntries(records)},null,2);if(text===savedState)return;await atomicWrite(stateFile,text);savedState=text;};
+  const persist = async() => {const text=JSON.stringify({schemaVersion:1,legacyMigrated,records:Object.fromEntries(records),bundledSeen:[...bundledSeen]},null,2);if(text===savedState)return;await atomicWrite(stateFile,text);savedState=text;};
   async function setup() {
     for (const root of [directory,storage,dataRoot]) {
       try {if ((await fs.lstat(root)).isSymbolicLink()) throw new Error('Addon storage cannot be a filesystem link');} catch(error) {if(error.code !== 'ENOENT') throw error;}
@@ -145,8 +145,8 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     if (!entry) return;
     entry.controller.abort(new Error('Addon disabled')); restartRequired = true;
     let timer;
-    const cleanup = Promise.allSettled([...entry.pending, ...(typeof entry.module.deactivate === 'function' ? [Promise.resolve().then(() => entry.module.deactivate())] : [])]);
-    try {await Promise.race([cleanup,new Promise(resolve => {timer=setTimeout(resolve,1000);})]);} finally {clearTimeout(timer);}
+    const cleanup = Promise.allSettled([...entry.pending, ...(typeof entry.module.deactivate === 'function' ? [Promise.resolve().then(() => entry.module.deactivate(entry.context))] : [])]);
+    try {await Promise.race([cleanup,new Promise(resolve => {timer=setTimeout(resolve,entry.context?.resources?120000:1000);})]);} finally {clearTimeout(timer);}
   }
   async function replace(entries) {await runtime.replaceExtensionTools([...entries.values()].flatMap(entry => entry.tools),[...entries.values()].map(entry => entry.metadata));registryInitialized=true;}
   async function importModule(filename,signal) {
@@ -166,10 +166,11 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     if (candidate.metadata.id !== pkg.manifest.id || candidate.metadata.version !== pkg.manifest.version) throw new Error('Addon module identity differs from addon.json');
     if (candidate.tools.some(tool => !pkg.manifest.permissions.includes(tool.permission))) throw new Error('Addon tools request undeclared permissions');
     const privateData = await containedPath(dataRoot,pkg.manifest.id,{missing:true});
-    const entry = {module,metadata:{...candidate.metadata,name:pkg.manifest.name,description:pkg.manifest.description || ''},digest:pkg.digest,controller:new AbortController(),pending:new Set()};
+    const context={id:pkg.manifest.id,dataDir:privateData,resources:bundledResources[pkg.manifest.id]};
+    const entry = {module,context,metadata:{...candidate.metadata,name:pkg.manifest.name,description:pkg.manifest.description || ''},digest:pkg.digest,controller:new AbortController(),pending:new Set()};
     entry.tools = candidate.tools.map(tool => ({...tool,execute:async(args,ctx) => {
       const signal = ctx.signal ? AbortSignal.any([ctx.signal,entry.controller.signal]) : entry.controller.signal; signal.throwIfAborted();
-      const result = Promise.resolve().then(async() => {signal.throwIfAborted(); await fs.mkdir(privateData,{recursive:true}); return tool.execute(args,{...ctx,signal,addon:{id:pkg.manifest.id,dataDir:privateData}});});
+      const result = Promise.resolve().then(async() => {signal.throwIfAborted(); await fs.mkdir(privateData,{recursive:true}); return tool.execute(args,{...ctx,signal,addon:context});});
       entry.pending.add(result);result.then(()=>entry.pending.delete(result),()=>entry.pending.delete(result));
       return untilAborted(result,signal);
     }}));
@@ -252,11 +253,25 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
       const saved=JSON.parse(await fs.readFile(stateFile,'utf8'));
       if(saved.schemaVersion!==1 || !plain(saved.records))throw new Error('Invalid addon manager state');
       legacyMigrated=saved.legacyMigrated===true;
+      if(saved.bundledSeen!==undefined&&(!Array.isArray(saved.bundledSeen)||saved.bundledSeen.some(id=>!idPattern.test(id))))throw new Error('Invalid bundled addon state');
+      for(const id of saved.bundledSeen||[])bundledSeen.add(id);
       for(const [id,record] of Object.entries(saved.records)) {
         if(!idPattern.test(id)||!plain(record)||typeof record.enabled!=='boolean'||!/^[a-f0-9]{64}$/.test(record.digest)||record.previous!==undefined&&!/^[a-f0-9]{64}$/.test(record.previous))throw new Error('Invalid addon approval record');
         records.set(id,record);
       }
-    }catch(error){if(error.code!=='ENOENT'){records.clear();warnings.push('Saved addon approvals could not be read. Addons require approval again.');}}
+    }catch(error){if(error.code!=='ENOENT'){records.clear();bundledSeen.add('lightpanda');warnings.push('Saved addon approvals could not be read. Addons require approval again.');}}
+    if(bundledSource) try {
+      const catalog=JSON.parse(await fs.readFile(path.join(bundledSource,'catalog.json'),'utf8'));
+      if(catalog.schemaVersion!==1||!Array.isArray(catalog.addons))throw new Error('Invalid bundled addon catalog');
+      for(const item of catalog.addons) {
+        if(!idPattern.test(item.id)||!/^[a-f0-9]{64}$/.test(item.digest))throw new Error('Invalid bundled addon identity');
+        if(bundledSeen.has(item.id))continue;
+        bundledSeen.add(item.id);await persist();
+        if(records.has(item.id)||await fs.lstat(path.join(directory,item.id)).then(()=>true,()=>false))continue;
+        try{const pkg=await readFolder(path.join(bundledSource,item.id),item.id);if(pkg.digest!==item.digest)throw new Error('Installer-owned addon hash differs');await installPackage(pkg,undefined,{approved:true});}
+        catch(error){warnings.push('Bundled addon '+item.id+': '+error.message);}
+      }
+    }catch(error){warnings.push(`Bundled addon catalog unavailable; factory seeding skipped: ${error.message}`);}
     if(!legacyMigrated) {
       let legacy=[];
       try {legacy=JSON.parse(await fs.readFile(path.join(dataDir,'extensions','approved.json'),'utf8'));if(!Array.isArray(legacy))throw new Error('Invalid legacy extension approvals');}
@@ -285,7 +300,12 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     if(record)records.set(id,{...record,enabled:false});await persist();return refresh();
   }
   async function uninstall(id,signal) {
-    signal?.throwIfAborted();await disable(id,signal);signal?.throwIfAborted();
+    signal?.throwIfAborted();
+    const record=records.get(id);let module=active.get(id)?.module;
+    if(!module&&record?.digest)try{const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);if(pkg.digest!==record.digest)throw new Error('Approved uninstall hook changed on disk');module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);}catch(error){warnings.push(`Addon ${id}: cleanup hook skipped because approved cache was unavailable or invalid (${error.message}). Only addon files will be removed; check any external runtime manually.`);}
+    await disable(id,signal);signal?.throwIfAborted();
+    if(typeof module?.uninstall==='function'){const timeout=AbortSignal.timeout(120000);await untilAborted(module.uninstall({id,dataDir:await containedPath(dataRoot,id,{missing:true}),resources:bundledResources[id],signal}),signal?AbortSignal.any([signal,timeout]):timeout);}
+    signal?.throwIfAborted();
     await removeOwned(directory,id);records.delete(id);await persist();
     await removeOwned(storage,`versions/${id}`);
     const legacy=await containedPath(storage,'legacy',{missing:true});
@@ -294,6 +314,15 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
   }
   async function reset(id,signal) {
     signal?.throwIfAborted(); if(active.has(id))throw new Error('Disable this addon before resetting its data');
+    // Runtime ownership records must outlive cleanup; never orphan a bundled service by erasing them first.
+    const record=records.get(id);
+    if(bundledResources[id]&&record?.digest){
+      const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);
+      if(pkg.digest!==record.digest)throw new Error('Approved reset cleanup hook changed on disk; private data was preserved');
+      const module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);
+      if(typeof module.uninstall==='function'){const timeout=AbortSignal.timeout(120000),cleanupSignal=signal?AbortSignal.any([signal,timeout]):timeout;await untilAborted(module.uninstall({id,dataDir:await containedPath(dataRoot,id,{missing:true}),resources:bundledResources[id],signal:cleanupSignal}),cleanupSignal);}
+    }
+    signal?.throwIfAborted();
     await removeOwned(dataRoot,id);return refresh();
   }
   async function rollback(id,signal) {

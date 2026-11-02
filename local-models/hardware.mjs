@@ -61,14 +61,14 @@ export function createHardware({executable,backendDirectories=[],runner=runProce
   let selectedBackend,help,version;
   async function probe(signal) {
     const cpus=cpuInfo().map((cpu,id)=>({id,name:`Logical CPU ${id}`,model:cpu.model}));
-    const base={runtime:{available:!!executable,...(executable?{executable}:{reason:'Install a compatible local runtime before starting a model.'})},cpus,memory:{totalBytes:os.totalmem(),freeBytes:os.freemem()},gpus:[],capabilities:{gpuSelection:false,cpuAffinity:false,threads:false,memoryMap:false},warnings:[],checkedAt:new Date().toISOString()};
+    const base={runtime:{available:!!executable,...(executable?{executable}:{reason:'Install a compatible local runtime before starting a model.'})},cpus,memory:{totalBytes:os.totalmem(),freeBytes:os.freemem()},gpus:[],capabilities:{gpuSelection:false,cpuAffinity:false,threads:false,memoryMap:false,contextSize:false},warnings:[],checkedAt:new Date().toISOString()};
     if(!executable)return base;
     const run=(args,backendFile)=>runner(executable,args,{cwd:path.dirname(executable),env:runnerEnvironment(executable,backendFile),signal,timeout:15000,maxOutput:1024*1024});
     if(help===undefined){const result=await run(['--help']);if(result.code!==0)throw new Error('Local runtime capability probe failed');help=result.stdout+'\n'+result.stderr;const info=await run(['--version']);version=(info.stdout+' '+info.stderr).trim().slice(0,300);}
     base.runtime.version=version;
     base.loadMode=/--load-mode\b/.test(help);
     base.placementLogging=/--verbosity\b/.test(help);
-    base.capabilities={gpuSelection:/--device\b/.test(help)&&/--n-gpu-layers\b/.test(help),cpuAffinity:cpus.length<=64&&/--cpu-mask-batch\b/.test(help)&&/--cpu-strict-batch\b/.test(help),threads:/--threads-batch\b/.test(help),memoryMap:base.loadMode||/--no-mmap\b/.test(help)};
+    base.capabilities={gpuSelection:/--device\b/.test(help)&&/--n-gpu-layers\b/.test(help),cpuAffinity:cpus.length<=64&&/--cpu-mask-batch\b/.test(help)&&/--cpu-strict-batch\b/.test(help),threads:/--threads-batch\b/.test(help),memoryMap:base.loadMode||/--no-mmap\b/.test(help),contextSize:/--ctx-size\b/.test(help)&&/--parallel\b/.test(help)};
     if(cpus.length>64)base.warnings.push('Core affinity across Windows processor groups is not supported here; use automatic cores and a thread count.');
     const root=path.dirname(executable),directories=[...backendDirectories,...['cuda_v13','cuda_v12','rocm_v7_1','vulkan'].map(name=>path.join(root,name))];
     const candidates=[];

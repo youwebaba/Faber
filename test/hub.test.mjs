@@ -16,7 +16,7 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const published = new WeakMap();
 const raw = (siblings = [{ rfilename: 'model.safetensors', size: bytes.length, lfs: { size: bytes.length, sha256: sha(bytes) } }]) => ({ id, sha: commit, siblings, safetensors: { total: 1000, parameters: { F32: 1000 } }, downloads: 123, tags: ['safetensors'] });
 async function fixture(t, { metadata = raw(), transfer, host: extraHost = {} } = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sophia-hub-test-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'faber-hub-test-'));
   const dataDir = path.join(root, 'data'), sourceDir = path.join(root, 'source');
   await fs.mkdir(sourceDir);
   const secrets = new Map(), events = [], calls = [];

@@ -16,7 +16,7 @@ export function connectionPayload(values) {
     ...(values.clearKey ? { apiKey: '' } : values.apiKey ? { apiKey: values.apiKey } : {}) };
 }
 
-export function createConnections({ request, refresh, getState, getChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.sophia?.subscribe }) {
+export function createConnections({ request, refresh, getState, getChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.faber?.subscribe }) {
   let disposePicker = () => {};
   const notice = provider => provider?.kind === 'ollama'
     ? 'Uses your Ollama server with the same Faber tools, approvals, and upgrade controls.'
@@ -103,7 +103,7 @@ export function createConnections({ request, refresh, getState, getChat, newChat
     function selectedProvider() { return getState().providers.find(item => item.id === provider.input.value); }
     const isLocal = () => provider.input.value === LOCAL_FILES || isLocalOllama(selectedProvider());
     let useButton, applying = false;
-    const local = createLocalPicker({ request, subscribe, el, onChange: () => { if (useButton) useButton.disabled = applying || isLocal() && !local.selection().canUse; }, onManagedProvider: id => {
+    const local = createLocalPicker({ request, subscribe, el, getContextTokens: () => getChat()?.contextTokens ?? null, onChange: () => { if (useButton) useButton.disabled = applying || isLocal() && !local.selection().canUse; }, onManagedProvider: id => {
       if (id && provider.input.value === id) { provider.input.value = LOCAL_FILES; updateDetail(); }
       if (id) [...provider.input.options].find(option => option.value === id)?.remove();
     } });

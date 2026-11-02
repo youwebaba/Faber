@@ -50,7 +50,7 @@ test('unknown models and remote/credentialed providers reject before a load requ
 });
 
 test('offline standard endpoint starts the existing executable hidden then validates installed names', async t => {
-  const directory = await fs.mkdtemp(path.join(tmpdir(), 'sophia-ollama-helper-'));
+  const directory = await fs.mkdtemp(path.join(tmpdir(), 'faber-ollama-helper-'));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const executable = path.join(directory, 'fixture.exe'); await fs.writeFile(executable, 'fixture only, never executed');
   let fixture, starts = 0;

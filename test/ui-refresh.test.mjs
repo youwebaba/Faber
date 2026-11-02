@@ -10,7 +10,7 @@ const textFile = content => ({ name: 'source.js', type: 'text/plain', size: new 
 
 test('refresh notices strip only the known Electron request wrapper and preserve the actual reason', () => {
   const reason = 'Backend changes are pending. Restart the app to activate them; this page and its drafts remain open.';
-  assert.equal(interfaceError(new Error(`Error invoking remote method 'sophia:request': Error: ${reason}`)), reason);
+  assert.equal(interfaceError(new Error(`Error invoking remote method 'faber:request': Error: ${reason}`)), reason);
   assert.equal(interfaceError(reason), reason);
   const other = "Error invoking remote method 'other:request': Error: Keep this diagnostic";
   assert.equal(interfaceError(other), other);

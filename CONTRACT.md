@@ -3,8 +3,8 @@
 Bill requested a fresh harness on October 31, 2026, with a Codex-style UI,
 modular tools, local/cloud models, agent delegation, chats/projects, PC access,
 voice activation and upgrades authored by agents. Local inference is the first
-live target. This is a new application beside the original Sophia and Hermes
-developer build. It does not migrate their data or change their launchers.
+live target. Faber is a separate application. It does not migrate other
+applications' data or change their launchers.
 
 ## Implementation ownership
 
@@ -48,9 +48,12 @@ Host hooks: `getSecret(id)`, `setSecret(id, value)`, `chooseDirectory()`,
 `reloadExtensions()`, `restart()`, and `openExternal(url)` for validated Hugging
 Face model pages. Hooks are optional; missing hooks produce
 an honest unavailable result. Host connects native voice events to the UI.
-The optional synchronous `assertProviderAvailable(providerId, model)` hook
+The optional synchronous `assertProviderAvailable(providerId, model, options)` hook
 rejects a new run before message mutation when local lifecycle state prevents
-use of that connection/model.
+use of that connection/model or its selected context size differs from the loaded
+capacity. `providerControls(providerId, model)` declares host-owned managed
+runtime capacity and thinking support; a connection name or URL is not proof of
+ownership. See [CHAT_CONTROLS.md](CHAT_CONTROLS.md) for native parameter semantics.
 
 Each tool is `{name, description, parameters, permission, execute(args, ctx)}`.
 Names use underscores for provider compatibility. Permission is one of `read`,
@@ -69,8 +72,8 @@ The provider adapter forwards image tool results for vision-capable models.
 
 ## Renderer bridge
 
-Preload exposes only `window.sophia.request(method, params)` and
-`window.sophia.subscribe(listener)`. The host validates frame/sender and
+Preload exposes only `window.faber.request(method, params)` and
+`window.faber.subscribe(listener)`. The host validates frame/sender and
 allowlists request methods. No Node access, eval, arbitrary navigation or remote
 script in the renderer. Model text/tool output renders as text or sanitized DOM.
 
@@ -79,8 +82,14 @@ Requests and return values:
 - `state.get` → state snapshot.
 - `project.create` `{name,path?}` → project; omitted path uses a native picker.
 - `project.update` `{id,name?}` → project.
+- `project.archive` / `project.delete` `{projectId}` → result; records only,
+  never workspace files. Delete requires stopped chats.
 - `chat.create` `{projectId,title?}` → chat.
-- `chat.update` `{id,title?,providerId?,model?,grants?,voice?}` → chat.
+- `chat.update` `{id,title?,providerId?,model?,grants?,voice?,contextTokens?,thinking?}`
+  → chat. Context is a positive integer or null (default); thinking is boolean or
+  null (provider default). Unsupported explicit values are rejected.
+- `chat.controls` `{chatId}` → provider capabilities, selected options, context
+  estimate and measured managed capacity when available.
 - `chat.send` `{chatId,text,images?}` → `{runId}` immediately; events carry progress.
   `images` is an optional array of PNG/JPEG/WebP base64 data URLs, with up to
   eight images and 8 MiB of encoded strings in total. Runtime validation precedes
@@ -88,6 +97,12 @@ Requests and return values:
   The IPC envelope allows 12 MiB for this method; other requests retain 4 MiB.
 - `chat.stop` `{chatId}` → result, including descendant cancellation.
 - `chat.archive` `{chatId}` → result.
+- `chat.forceStop` `{chatId}` → settled cancellation for its chat/run tree.
+- `chat.move` `{chatId,projectId}` → result; moves its stopped child-chat tree.
+- `chat.delete` `{chatId}` → result; removes its stopped child-chat tree and
+  run/approval records. The renderer captures the target and requires the shared
+  large red Delete confirmation. Delete/move/force-stop and project lifecycle
+  methods are user bridge operations, not model tools.
 - `provider.save` `{id?,name,kind,baseUrl,model,apiKey?,reasoningEffort?}` → redacted
   provider. `kind` is `openai-responses` (Responses), `openai` (OpenAI-compatible
   Chat Completions), or `ollama` (native local API). Responses reasoning effort
@@ -129,7 +144,7 @@ Requests and return values:
   and code approval covers the complete package. Online sharing is excluded.
 
 Project: `{id,name,path,createdAt}`. Chat:
-`{id,projectId,title,providerId,model,grants:[],voice:{enabled:false,phrase:'Hey Sophia',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
+`{id,projectId,title,providerId,model,grants:[],voice:{enabled:false,phrase:'Hey Faber',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
 Message: `{id,role,content,createdAt,toolCalls?,toolName?,toolCallId?,status?,images?}`.
 User `images` are durable attachments, distinct from the singular `image` on a
 tool screenshot. Adapters encode user attachments in the original user message.

@@ -1,0 +1,48 @@
+import fs from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import net from 'node:net';
+import {spawn} from 'node:child_process';
+import {checked} from './process.mjs';
+const hash=async file=>{const h=crypto.createHash('sha256');for await(const bytes of createReadStream(file))h.update(bytes);return h.digest('hex');};
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+export function linuxPath(filename){if(!/^[a-zA-Z]:[\\/]/.test(filename))throw Error('Lightpanda runtime requires a local drive path');return `/mnt/${filename[0].toLowerCase()}/${filename.slice(3).replaceAll('\\','/')}`;}
+export async function noLinks(filename){let current=path.resolve(filename);while(true){try{if((await fs.lstat(current)).isSymbolicLink())throw Error('Lightpanda paths cannot contain links');}catch(error){if(error.code!=='ENOENT')throw error;}const parent=path.dirname(current);if(parent===current)return;current=parent;}}
+async function freePort(){const server=net.createServer();await new Promise((resolve,reject)=>server.once('error',reject).listen(0,'127.0.0.1',resolve));const port=server.address().port;await new Promise(resolve=>server.close(resolve));return port;}
+export function createOwnedRuntime({dataDir,resources,command=checked,spawnImpl=spawn}) {
+  const directory=path.resolve(dataDir),ownerFile=path.join(directory,'wsl-owner.json'),installDir=path.join(directory,'runtime'),distro=`FaberLightpanda-${crypto.createHash('sha256').update(directory.toLowerCase()).digest('hex').slice(0,16)}`;
+  let child,endpoint,closed=false;
+  const wsl=(args,signal,timeout)=>command('wsl.exe',args,{signal,timeout:timeout||30000});
+  async function owner(){let value;try{value=JSON.parse(await fs.readFile(ownerFile,'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;}if(value.distro!==distro||value.installDir!==installDir||!/^[a-f0-9]{64}$/.test(value.token)||!['installing','ready'].includes(value.phase))throw Error('Invalid Lightpanda ownership record');await noLinks(directory);return value;}
+  async function registration(){
+    const script=`$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); if(Test-Path -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss') { Get-ChildItem -LiteralPath 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss' -ErrorAction SilentlyContinue | ForEach-Object {Get-ItemProperty -LiteralPath $_.PSPath} | Where-Object {$_.DistributionName -eq '${distro}'} | Select-Object DistributionName,BasePath | ConvertTo-Json -Compress }`;
+    const text=await command('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{timeout:15000});
+    if(!text)return null;const value=JSON.parse(text);if(Array.isArray(value)||value.DistributionName!==distro)throw Error('Ambiguous Lightpanda WSL registration');const base=path.resolve(String(value.BasePath).replace(/^\\\\\?\\/,''));if(base.toLowerCase()!==installDir.toLowerCase())throw Error('Lightpanda distro belongs to another folder; it will not be changed');return value;
+  }
+  async function verifyOwned({incomplete=false}={}){const value=await owner();if(!value)throw Error('No owned Lightpanda runtime; run Setup first');const registered=await registration();if(!registered)return {value,registered:null};if(!(incomplete&&value.phase==='installing')){const marker=await wsl(['--distribution',distro,'--user','root','--exec','cat','/etc/faber-lightpanda-owner']);if(marker!==value.token)throw Error('Lightpanda ownership marker differs; refusing to stop or remove this distro');}return {value,registered};}
+  async function verifyResources(){if(!resources)throw Error('Bundled Lightpanda resources are unavailable');const lock=JSON.parse(await fs.readFile(path.join(resources,'runtime-lock.json'),'utf8'));if(lock.version!=='1.0.2'||lock.sourceCommit!=='c5f7bb29b127040c899d4e181b5709f76fc71a6f')throw Error('Unsupported Lightpanda runtime lock');for(const name of ['lightpanda','ubuntu-base.tar.gz','cacert.pem']){const record=lock.files.find(file=>file.name===name);if(!record||await hash(path.join(resources,name))!==record.sha256)throw Error(`Lightpanda payload integrity mismatch: ${name}`);}return lock;}
+  async function status(){const value=await owner();return {platform:'WSL2 (not native Windows)',configured:!!value,installed:value?.phase==='ready',distro:value?.distro||distro,running:!!child&&child.exitCode===null,endpoint:endpoint||null,setupRequired:!value,notice:'Requires existing WSL2. Setup creates only this dedicated runtime; it never enables Windows features or uses another distro.'};}
+  async function setup(signal){
+    signal?.throwIfAborted();if(closed)throw Error('Lightpanda addon is disabled');await noLinks(directory);await fs.mkdir(directory,{recursive:true});
+    const previous=await owner();if(previous){const existing=await verifyOwned({incomplete:true});if(existing.registered&&previous.phase==='ready')return status();if(existing.registered)throw Error('Previous Lightpanda setup is incomplete. Remove its owned runtime before retrying.');await fs.rm(ownerFile);}
+    await wsl(['--list','--quiet'],signal);if(await registration())throw Error('Unowned distro already has the selected name');await verifyResources();
+    try{await fs.mkdir(installDir);}catch(error){if(error.code==='EEXIST')throw Error('Runtime directory already exists without ownership; refusing to overwrite it');throw error;}
+    const value={schemaVersion:1,distro,installDir,token:crypto.randomBytes(32).toString('hex'),phase:'installing'};await fs.writeFile(ownerFile,JSON.stringify(value),{flag:'wx'});
+    try{
+      await wsl(['--import',distro,installDir,path.join(resources,'ubuntu-base.tar.gz'),'--version','2'],undefined,120000);signal?.throwIfAborted();
+      const script='set -eu; mkdir -p /opt/lightpanda /etc/ssl/certs; cp "$1" /opt/lightpanda/lightpanda; chmod 755 /opt/lightpanda/lightpanda; cp "$2" /etc/ssl/certs/ca-certificates.crt; printf "%s" "$3" > /etc/faber-lightpanda-owner; chmod 644 /etc/faber-lightpanda-owner; useradd --system --create-home --home-dir /home/lightpanda --shell /usr/sbin/nologin lightpanda; printf "[automount]\\nenabled=false\\n[interop]\\nenabled=false\\nappendWindowsPath=false\\n[user]\\ndefault=lightpanda\\n" > /etc/wsl.conf';
+      await wsl(['--distribution',distro,'--user','root','--exec','/bin/sh','-c',script,'faber-setup',linuxPath(path.join(resources,'lightpanda')),linuxPath(path.join(resources,'cacert.pem')),value.token],signal,30000);
+      await wsl(['--terminate',distro],undefined);await pause(300);const version=await wsl(['--distribution',distro,'--user','lightpanda','--exec','/opt/lightpanda/lightpanda','version'],signal);if(!/^1\.0\.2/.test(version))throw Error('Installed Lightpanda returned an unexpected version');
+      value.phase='ready';await fs.writeFile(ownerFile,JSON.stringify(value));await wsl(['--terminate',distro]);return {...await status(),version};
+    }catch(error){try{const own=await verifyOwned({incomplete:true});if(own.registered)await wsl(['--unregister',distro],undefined,60000);await fs.rm(installDir,{recursive:true,force:true});await fs.rm(ownerFile,{force:true});}catch(cleanup){error.message+=` Cleanup requires attention: ${cleanup.message}`;}throw error;}
+  }
+  async function start(signal){if(closed)throw Error('Lightpanda addon is disabled');if(child&&child.exitCode===null)return endpoint;const own=await verifyOwned();if(!own.registered||own.value.phase!=='ready')throw Error('Run Lightpanda Setup first');const port=await freePort();signal?.throwIfAborted();
+    child=spawnImpl('wsl.exe',['--distribution',distro,'--user','lightpanda','--exec','env','LIGHTPANDA_DISABLE_TELEMETRY=1','/opt/lightpanda/lightpanda','serve','--host','127.0.0.1','--port',String(port),'--log-format','logfmt','--log-level','error'],{windowsHide:true,stdio:['ignore','pipe','pipe']});let failure='';child.stdout?.on('data',()=>{});child.stderr?.on('data',bytes=>{failure=(failure+bytes).slice(-6000);});child.on('error',error=>{failure=error.message;});const active=child;endpoint=`ws://127.0.0.1:${port}`;
+    try{for(let i=0;i<100;i++){signal?.throwIfAborted();if(closed)throw Error('Lightpanda addon is disabled');if(active.exitCode!==null)throw Error(`Lightpanda did not start: ${failure||active.exitCode}`);const connected=await new Promise(resolve=>{const socket=net.connect({host:'127.0.0.1',port});socket.setTimeout(150);socket.once('connect',()=>{socket.destroy();resolve(true);});socket.once('error',()=>resolve(false));socket.once('timeout',()=>{socket.destroy();resolve(false);});});if(connected)return endpoint;await pause(100);}await stop();throw Error('Lightpanda did not expose its loopback CDP endpoint');}catch(error){await stop();throw error;}
+  }
+  async function stop(){if(!child)return;const own=await verifyOwned();if(own.registered)await wsl(['--terminate',distro]);child=null;endpoint=null;}
+  async function uninstall(signal){signal?.throwIfAborted();const value=await owner();if(!value)return {removed:false};const own=await verifyOwned({incomplete:true});signal?.throwIfAborted();if(own.registered)await wsl(['--unregister',distro],undefined,60000);child=null;endpoint=null;await noLinks(installDir);await fs.rm(installDir,{recursive:true,force:true});await fs.rm(ownerFile,{force:true});return {removed:true,distro};}
+  return {status,setup,start,stop,uninstall,verifyOwned,close:async()=>{closed=true;await stop();}};
+}
+

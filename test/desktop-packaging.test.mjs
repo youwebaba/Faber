@@ -4,6 +4,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { prepareWorkbench, packagedRuntime } from '../desktop/packaged-paths.mjs';
+import {getProfileDirectory} from '../desktop/profile-path.cjs';
+import {validUpgradePath} from '../desktop/recovery.mjs';
+
+test('fresh profile uses Faber while an existing profile stays at its original path',()=>{
+  const base=path.resolve('fixture-appdata');let existing;
+  assert.equal(getProfileDirectory(base,{exists:filename=>{existing=filename;return false;}}),path.join(base,'Faber'));
+  assert.equal(getProfileDirectory(base,{exists:()=>true}),existing);
+  assert.equal(validUpgradePath('desktop/profile-path.cjs'),false);
+});
 
 test('packaged workbench is seeded once, preserves edits, and keeps prior installer versions', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'Faber-package-test-')); t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -34,5 +43,15 @@ test('runtime packaging rejects unlocked binaries and changed reviewed bytes',as
   await fs.writeFile(path.join(root,'build','runtime-lock.json'),JSON.stringify(manifest));await fs.writeFile(path.join(directory,'runtime-manifest.json'),JSON.stringify(manifest));await fs.writeFile(path.join(directory,'runner.exe'),bytes);
   await verifyRuntime(root);await fs.writeFile(path.join(directory,'unreviewed.dll'),'x');await assert.rejects(verifyRuntime(root),/Unreviewed/);await fs.unlink(path.join(directory,'unreviewed.dll'));
   await fs.writeFile(path.join(directory,'runner.exe'),'changed');await assert.rejects(verifyRuntime(root),/integrity mismatch/);
+});
+
+test('Lightpanda packaging rejects added payloads and altered pinned source/binary bytes',async t=>{
+  const {createHash}=await import('node:crypto'),{verifyLightpanda}=await import('../desktop/lightpanda-integrity.cjs');
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-browser-lock-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const directory=path.join(root,'.runtime/lightpanda');await fs.mkdir(directory,{recursive:true});await fs.mkdir(path.join(root,'build'));await fs.mkdir(path.join(root,'bundled-addons'));
+  const bytes=Buffer.from('pinned browser fixture'),lock={files:[{name:'lightpanda',bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')}]};
+  await fs.writeFile(path.join(root,'build/lightpanda-lock.json'),JSON.stringify(lock));await fs.writeFile(path.join(directory,'runtime-lock.json'),JSON.stringify(lock));await fs.writeFile(path.join(directory,'lightpanda'),bytes);await fs.writeFile(path.join(root,'bundled-addons/catalog.json'),JSON.stringify({addons:[]}));
+  await verifyLightpanda(root);await fs.writeFile(path.join(directory,'extra'),'unapproved');await assert.rejects(verifyLightpanda(root),/Unreviewed/);await fs.unlink(path.join(directory,'extra'));
+  await fs.writeFile(path.join(directory,'lightpanda'),'changed');await assert.rejects(verifyLightpanda(root),/integrity mismatch/);
 });
 

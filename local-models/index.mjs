@@ -12,10 +12,11 @@ import {createHardware,defaultConfiguration,configurationSchema,validateConfigur
 import {outputPath} from '../model-hub/paths.mjs';
 import {recycleModel} from './recycle.mjs';
 import {localModelDetails} from './details.mjs';
+import {contextTokensSchema} from '../core/controls.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const id = { type: 'string', minLength: 1, maxLength: 300 };
-const schemas = { 'localModels.list': object({ providerId: id }), 'localModels.start': object({ modelId: id, providerId: id, model: id }), 'localModels.stop': object({ providerId: id, model: id }) };
+const schemas = { 'localModels.list': object({ providerId: id }), 'localModels.start': object({ modelId: id, providerId: id, model: id, contextTokens:contextTokensSchema }), 'localModels.stop': object({ providerId: id, model: id }) };
 schemas['localModels.hardware']=object({});schemas['localModels.configure']=configurationSchema;schemas['localModels.delete']=object({modelId:id},['modelId']);
 schemas['localModels.details']=object({modelId:id},['modelId']);
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -55,6 +56,10 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
   const ollamaTransitions = new Map();
   let providers = (await runtime.request('state.get')).providers;
   const unsubscribe = runtime.subscribe?.(event => { if (event.type === 'state') providers = event.state.providers; });
+  function ownedConnection(providerId,model){
+    const provider=providers.find(item=>item.id===providerId),expected=current?{baseUrl:`${current.baseUrl}/v1`,model:current.alias}:store.state.connection;
+    return !!expected&&provider?.kind==='openai'&&provider.baseUrl===expected.baseUrl&&model===expected.model;
+  }
   function endpoint(providerId, configurations = providers) {
     const provider = configurations.find(item => item.id === providerId);
     if (provider?.kind !== 'ollama') return providerId;
@@ -63,7 +68,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
   }
   const modelKey = (providerId, model, configurations) => `${endpoint(providerId, configurations)}\n${model.includes(':') ? model : `${model}:latest`}`;
   const snapshot = () => structuredClone({ ...library, configuration:store.state.configuration, installed: [], loaded: [], managedProviderId: store.state.providerId,
-    runtime: { available: !!executableFile, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Sophia.' } : {}) }, process: processState });
+    runtime: { available: !!executableFile, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
   function publish() { try { emit({ type: 'localModels', state: snapshot() }); } catch { /* Detached UI does not own the process. */ } }
   async function scan() { const hub = await getHubState(); library = await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads }); return library; }
   const hardwareState=async signal=>({...await hardware.inspect(signal),configuration:structuredClone(store.state.configuration),observed:processState.observed||null});
@@ -101,15 +106,34 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       }
       signal.throwIfAborted();
       if (current !== operation || operation.didExit) throw new Error('Local model process changed during startup');
+      let contextCapacityTokens=null,thinkingSupported=false;
+      try {
+        const response=await fetchImpl(`${operation.baseUrl}/props`,{redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(1500)]),headers:{Authorization:`Bearer ${operation.key}`}});
+        if(response.ok){
+          let size=0;const chunks=[];
+          for await(const chunk of response.body){size+=chunk.length;if(size>1024*1024)throw new Error('Runtime properties exceed inspection limit');chunks.push(chunk);}
+          const properties=JSON.parse(Buffer.concat(chunks).toString('utf8')),value=properties.default_generation_settings?.n_ctx;
+          if(Number.isSafeInteger(value)&&value>0)contextCapacityTokens=value;
+          const template=typeof properties.chat_template==='string'?properties.chat_template.replace(/\{#[\s\S]*?#\}/g,''):'';
+          // Template-declared parameter support; the model still determines how it responds.
+          thinkingSupported=/\{%[^%]*\benable_thinking\b[^%]*%\}|\{\{[^}]*\benable_thinking\b[^}]*\}\}/.test(template);
+        }else await response.body?.cancel();
+      }catch(error){signal.throwIfAborted();}
+      if(contextCapacityTokens===null){const match=[...(operation.placementLogs+operation.logTails.join('\n')).matchAll(/n_ctx_slot\s*=\s*(\d+)/g)].at(-1);const value=Number(match?.[1]);if(Number.isSafeInteger(value)&&value>0)contextCapacityTokens=value;}
+      if(operation.contextTokens!==null&&contextCapacityTokens!==operation.contextTokens)throw new Error(`Requested ${operation.contextTokens} context tokens, but the runtime reported ${contextCapacityTokens??'no verified capacity'}. The model was stopped; choose a supported context size and start again.`);
+      signal.throwIfAborted();
+      if(current!==operation||operation.didExit)throw new Error('Local model process changed during context inspection');
       const observed=observePlacement(operation.placementLogs+operation.logTails.join('\n'));
       if(operation.requested.mode==='custom'&&(!observed.verified||!observed.gpuLayers||operation.requested.gpuIds.some(id=>!observed.devices.includes(id))))throw new Error('Selected GPU placement could not be confirmed. The model was stopped instead of silently falling back; inspect runtime compatibility or choose Automatic/CPU mode.');
       const providerId = store.state.providerId || randomUUID();
       if (!store.state.providerId) { store.state.providerId = providerId; await store.save(store.state); }
       signal.throwIfAborted();
-      await runtime.request('provider.save', { id: providerId, name: 'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
+      const saved=await runtime.request('provider.save', { id: providerId, name: 'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
+      providers=[...providers.filter(provider=>provider.id!==providerId),saved];
+      store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,thinkingSupported};await store.save(store.state);
       signal.throwIfAborted();
       operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
-      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed }; publish();
+      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
     } catch (error) {
       if (current !== operation) return;
       const stopped = operation.controller.signal.aborted;
@@ -121,7 +145,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       processState = { status: stopped ? 'stopped' : 'failed', operationId: operation.id, modelId: model.id, stage: stopped ? 'Stopped' : 'Unable to load', ...(!stopped ? { error: redact(error.message, operation).slice(-5000) } : {}) }; publish();
     }
   }
-  async function startFile(modelId, originSignal, callerRunId) {
+  async function startFile(modelId, originSignal, callerRunId, contextTokens=null) {
     if (closed) throw new Error('Local model manager is closed');
     if (!executableFile) throw new Error(snapshot().runtime.reason);
     if (starting || stopping || current ||deleting||configuring|| ['loading', 'stopping'].includes(processState.status)) throw new Error('Stop the current local model and finish pending file/settings actions before starting another.');
@@ -134,6 +158,11 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if (!model) throw new Error('Model files changed or left the configured folder. Refresh the local model list.');
       if (!model.available || model.format !== 'gguf') throw new Error(model.reason || 'Only complete GGUF models can start in this runtime');
       const detected=await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=launchArguments(requested,detected);
+      if(contextTokens!==null){
+        if(!detected.capabilities.contextSize)throw new Error('This runtime does not support configurable context size; use provider default or update the runtime.');
+        // One slot gives each queued request the selected capacity instead of dividing it across slots.
+        hardwareArgs.push('--ctx-size',String(contextTokens),'--parallel','1');
+      }
       const files=await Promise.all(model.files.map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
       originSignal.throwIfAborted();
       const operationId = randomUUID(), keyFile = path.join(dataDir, 'local-models', `${operationId}.key`), key = randomBytes(32).toString('hex');
@@ -141,9 +170,9 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       try { await fs.writeFile(keyFile, key, { mode: 0o600, flag: 'wx' }); }
       catch (error) { if (error.code !== 'EEXIST') await fs.rm(keyFile, { force: true }).catch(() => {}); throw error; }
       if (originSignal?.aborted) { await fs.rm(keyFile, { force: true }); originSignal.throwIfAborted(); }
-      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',logTails:['',''],requested,files, didExit: false, originSignal };
+      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',logTails:['',''],requested,files,contextTokens, didExit: false, originSignal };
       current = operation;
-      processState = { status: 'loading', operationId, modelId, stage: 'Loading GGUF into local runtime',requested }; publish();
+      processState = { status: 'loading', operationId, modelId, stage: 'Loading GGUF into local runtime',requested,contextTokens }; publish();
       operation.abortOrigin = () => { operation.controller.abort(originSignal.reason); void Promise.resolve().then(() => stopFile()).catch(() => {}); };
       originSignal?.addEventListener('abort', operation.abortOrigin, { once: true });
       const env = hardware.environment();
@@ -162,7 +191,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
         for (const [index,stream] of [child.stdout, child.stderr].entries()) stream?.setEncoding('utf8').on('data', chunk => {
           operation.logs = redact(operation.logs + chunk, operation).slice(-8000);
           const lines=(operation.logTails[index]+redact(chunk,operation)).split(/\r?\n/);operation.logTails[index]=lines.pop().slice(-2000);
-          for(const line of lines)if(/using device|offloaded\s+\d+\s*\//i.test(line))operation.placementLogs=(operation.placementLogs+line+'\n').slice(-16000);
+          for(const line of lines)if(/using device|offloaded\s+\d+\s*\/|n_ctx_slot\s*=/i.test(line))operation.placementLogs=(operation.placementLogs+line+'\n').slice(-16000);
         });
       } catch (error) { operation.spawnError = redact(error.message, operation); operation.didExit = true; }
       operation.loading = ready(operation, model);
@@ -240,8 +269,8 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     }
     if (method === 'localModels.list') { await scan(); return { ...snapshot(), ...(args.providerId ? await ollama.list(args.providerId) : {}) }; }
     if (method === 'localModels.start') {
-      if (args.modelId && !args.providerId && !args.model) return startFile(args.modelId, signal, callerRunId);
-      if (!args.modelId && args.providerId && args.model) return ollamaAction('start', args, signal, callerRunId);
+      if (args.modelId && !args.providerId && !args.model) return startFile(args.modelId, signal, callerRunId,args.contextTokens??null);
+      if (!args.modelId && args.providerId && args.model) {if(args.contextTokens!=null)throw new Error('Configure Ollama context in the chat; local Start only loads the existing model.');return ollamaAction('start', args, signal, callerRunId);}
       throw new Error('Choose either a folder modelId or an installed providerId and model');
     }
     if (!args.providerId && !args.model) return stopFile(false, callerRunId);
@@ -249,8 +278,14 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     throw new Error('Choose both providerId and model for an Ollama stop');
   }
   return { request,
-    assertProviderAvailable(providerId, model) {
+    providerControls(providerId,model){
+      if(providerId!==store.state.providerId||!ownedConnection(providerId,model))return undefined;
+      return {context:{configurable:!!executableFile,mode:'managed',capacityTokens:processState.status==='ready'&&processState.model===model?processState.contextCapacityTokens:null,requiresRestart:true},thinking:{supported:store.state.connection?.thinkingSupported===true,mode:'llama_cpp',effective:null}};
+    },
+    assertProviderAvailable(providerId, model, options={}) {
       if (providerId === store.state.providerId && (closed || starting || stopping || processState.status !== 'ready' || processState.model !== model)) throw new Error('Start this downloaded local model and wait until it is ready before sending a chat.');
+      if(providerId===store.state.providerId&&!ownedConnection(providerId,model))throw new Error('The managed local connection was edited. Stop and start the downloaded model to restore its connection, or use a separate API connection.');
+      if(providerId===store.state.providerId&&options.contextTokens!=null&&options.contextTokens!==processState.contextCapacityTokens)throw new Error(`Restart this downloaded local model with the chat's selected ${options.contextTokens}-token context before sending. Current capacity: ${processState.contextCapacityTokens??'unknown'}.`);
       if (ollamaTransitions.has(modelKey(providerId, model))) throw new Error('Wait for this local model to finish loading or stopping before sending a chat.');
     },
     tools: () => [

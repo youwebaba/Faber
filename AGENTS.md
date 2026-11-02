@@ -1,7 +1,7 @@
 # Faber
 
 This standalone repository is `https://github.com/youwebaba/Faber`. Work from
-its root; do not push the containing Sophia repository into this remote. Preserve
+its root; do not push the containing repository into this remote. Preserve
 unrelated edits, commit only this task's verified source, fetch before pushing,
 and do not force-push. Runtime data and binaries are not source files.
 
@@ -15,7 +15,7 @@ addon management; no online addon sharing, publishing, catalog or OTA updates.
 
 Bill's October 31, 2026 instruction for this application is a fresh harness,
 Codex-style interface and modular backbone. This folder is independent of the
-older native Sophia and pinned-Hermes developer build. Do not apply their glass
+older native and pinned-Hermes developer builds. Do not apply their glass
 UI or Hermes milestone requirements to this new application. Preserve their
 source, launchers and runtime data.
 

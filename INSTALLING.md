@@ -1,12 +1,17 @@
-# Installing Faber b1.0
+# Installing Faber b1.1
 
-Run `Faber-Setup-b1.0-x64.exe`. This is a per-user Windows x64 installation with
+Run `Faber-Setup-b1.1-x64.exe`. This is a per-user Windows x64 installation with
 Desktop/Start menu shortcuts and a normal `Faber.exe`; no terminal needs to stay
 open. Electron and the local model runtime are included. Node.js, npm and Ollama
 are not required to use the installed app's managed GGUF path. Model weights are
 separate: choose a download folder in Settings, download a compatible GGUF in
 Models, then select **Downloaded models (local)**, Start, and **Use in this chat**.
 The initial Local Ollama connection is optional and needs a separate Ollama server.
+
+The bundled [Lightpanda addon](LIGHTPANDA.md) uses a dedicated WSL2 distribution.
+Its setup is separate from launching Faber; local chat and model controls do not
+require WSL. The addon can be disabled or uninstalled in Addons. Online addon
+sharing and over-the-air updates are not included.
 
 The beta installer is unsigned. Windows may display an unknown-publisher warning.
 Only use the artifact from the trusted project source; signing is not configured.
@@ -22,16 +27,16 @@ addon publishing, account system or online addon catalog is included.
 | Location | Contents |
 | --- | --- |
 | Selected installation folder | Faber.exe, immutable bootstrap, bundled source and runner |
-| `%LOCALAPPDATA%\SophiaHarness` | Existing profile: chats, encrypted keys, settings, downloads and update records |
+| `%LOCALAPPDATA%\Faber` (new profiles) | Chats, encrypted keys, settings, downloads and update records |
 | Profile `addons\<id>` | Installed addon source visible in File Explorer |
 | Profile `addon-data\<id>` | Private per-addon data retained by uninstall |
 | Profile `addon-manager` | Approved code hashes and one prior addon version |
 | Configured model downloads folder | Model weights; can be chosen in Settings |
 | `%LOCALAPPDATA%\FaberWorkbench\<version>` | Editable source and tests used by staged core/UI self-upgrades |
 
-The historical `SophiaHarness` profile name is intentional, preserving existing
-data. The older native Sophia/Hermes applications are separate. Avoid running the
-old source-launched harness and installed Faber concurrently against this profile.
+An existing b1 profile stays in its original folder and is reused automatically.
+No live profile is moved or overwritten during rebranding. Avoid running a
+source-launched Faber and installed Faber concurrently against the same profile.
 
 Each new internal application version seeds its own editable workbench. Older
 workbenches and approved core modifications are retained, but are not automatically
@@ -65,6 +70,7 @@ reviewed runtime snapshot identified by `build/runtime-lock.json`:
 npm ci
 npm exec -- install-electron
 npm run prepare:runtime
+node scripts/prepare-lightpanda.mjs
 npm test
 npm run build:installer
 ```
@@ -76,7 +82,14 @@ not downloaded implicitly. Maintainers must review compatible binaries and
 licenses before deliberately recording a new runtime lock. Generated dependencies,
 weights, local data, `.runtime` and `release` stay outside Git.
 
-Output is `release\Faber-Setup-b1.0-x64.exe`; the unpacked executable is
+Lightpanda preparation retrieves the pinned upstream Linux binary, matching
+source, minimal Linux root filesystem and certificate bundle identified in
+`build/lightpanda-lock.json`. Packaging verifies those resources; see
+[LIGHTPANDA.md](LIGHTPANDA.md) for licenses, setup and ownership checks.
+After deliberately editing a bundled addon's source, review the change and run
+`npm run prepare:addons` to update its shipped approval digest before packaging.
+
+Output is `release\Faber-Setup-b1.1-x64.exe`; the unpacked executable is
 `release\win-unpacked\Faber.exe`. Installer revision, appId and versioned workbench
 semantics are tested separately from deterministic unit fixtures. The optional
 live GPU proof requires an existing model and explicit command-line flags; it is

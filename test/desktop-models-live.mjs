@@ -9,7 +9,7 @@ import {createModelHub} from '../model-hub/index.mjs';
 if(!process.argv.includes('--allow-tiny-public-download'))throw new Error('Explicit --allow-tiny-public-download is required; this downloads exactly the documented 453864-byte public fixture.');
 const repoId='hf-internal-testing/tiny-random-gpt2',revision='71034c5d8bde858ff824298bdedc65515b97d2b9';
 const expectedBytes=453864,expectedHash='8111d5afb0715dbf5a31396d31432cb56370ba23f6650a035ea0fc8a20b4e500';
-const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'SophiaHarness-hf-live-'));
+const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-hf-live-'));
 const sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const hub=await createModelHub({dataDir,sourceDir,host:{getSecret:async()=>'',setSecret:async()=>{throw new Error('Live fixture must not save credentials');}},emit:()=>{}});
 try{

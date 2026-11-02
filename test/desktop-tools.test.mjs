@@ -52,9 +52,9 @@ test('cancel kills process and its child tree',async t=>{
 });
 
 test('voice routing requires enabled phrase, resolves selected duplicate, and honors phrase boundary',()=>{
-  const chats=[{id:'a',voice:{enabled:true,phrase:'Hey Sophia'}},{id:'b',voice:{enabled:true,phrase:'Hey Sophia'}},{id:'c',voice:{enabled:false,phrase:'Computer'}}];
-  assert.deepEqual(activationTarget(chats,'hey sophia, summarize','b'),{chatId:'b',text:'summarize'});
-  assert.equal(activationTarget(chats,'Hey Sophianna hello','a'),null);
+  const chats=[{id:'a',voice:{enabled:true,phrase:'Hey Faber'}},{id:'b',voice:{enabled:true,phrase:'Hey Faber'}},{id:'c',voice:{enabled:false,phrase:'Computer'}}];
+  assert.deepEqual(activationTarget(chats,'hey faber, summarize','b'),{chatId:'b',text:'summarize'});
+  assert.equal(activationTarget(chats,'Hey Fabernna hello','a'),null);
   assert.equal(activationTarget(chats,'Computer hello','c'),null);
-  assert.throws(()=>activationTarget(chats,'Hey Sophia hello','missing'),/Several chats/);
+  assert.throws(()=>activationTarget(chats,'Hey Faber hello','missing'),/Several chats/);
 });

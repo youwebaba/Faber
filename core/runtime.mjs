@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { openStore } from './store.mjs';
 import { checkTool, toolMetadata, validate, permissions } from './registry.mjs';
-import { streamProvider, testProvider, validateBaseUrl, validateCredentialTransport } from './provider.mjs';
+import { streamProvider, providerBody, testProvider, validateBaseUrl, validateCredentialTransport } from './provider.mjs';
 import { validateChatImages, imageBytesLimit } from './images.mjs';
 import { cleanUsage } from './usage.mjs';
 import { inspectionCalls, inspectionContent, chatInspection, agentInspection } from './inspection.mjs';
+import {contextTokensSchema,thinkingSchema,configuredControls} from './controls.mjs';
+import {estimateInputTokens,callMetrics,estimateBasis} from './metrics.mjs';
 
 const now = () => new Date().toISOString();
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -56,11 +58,12 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     for (const event of run.toolEvents) if (['running', 'waiting_approval'].includes(event.status)) { event.status = 'interrupted'; event.endedAt = now(); }
   }
   for (const run of state.runs) for (const call of run.modelCalls || []) if (call.status === 'running') { call.status = 'interrupted'; call.endedAt = now(); }
-  for (const chat of state.chats) repairInterruptedTools(chat);
+  for (const chat of state.chats) { repairInterruptedTools(chat); chat.contextTokens??=null;if(chat.thinking===undefined)chat.thinking=state.providers.find(provider=>provider.id===chat.providerId)?.kind==='ollama'?false:null;validate(chat.contextTokens,contextTokensSchema);validate(chat.thinking,thinkingSchema); }
   state.approvals = [];
   await store.save(state);
   const registry = new Map(), extensionNames = new Set(), listeners = new Set(), live = new Map(), pending = new Map();
   const providerEdits = new Set(), providerTests = new Map();
+  const chatLocks=new Set();
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
   let closed = false;
   function emit(event) { for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
@@ -69,6 +72,26 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   async function changed() { stateRevision++; await store.save(state); emit({ type: 'state', state: snapshot() }); }
   function find(collection, id) { const item = state[collection].find(entry => entry.id === id); if (!item) throw new Error(`Unknown ${collection}: ${id}`); return item; }
   function addMessage(chat, role, content, extra = {}) { const message = { id: randomUUID(), role, content, createdAt: now(), ...extra }; chat.messages.push(message); chat.updatedAt = now(); return message; }
+  function controls(chat,check=true){const provider={...find('providers',chat.providerId),model:chat.model||find('providers',chat.providerId).model};return configuredControls(provider,chat,host.providerControls?.(provider.id,provider.model),check);}
+  function chatTree(chatId){
+    const ids=new Set([chatId]);for(let added=true;added;){added=false;for(const chat of state.chats)if(ids.has(chat.parentChatId)&&!ids.has(chat.id)){ids.add(chat.id);added=true;}}return ids;
+  }
+  function assertMutable(ids){for(const id of ids)if(chatLocks.has(id)||state.runs.some(run=>run.chatId===id&&live.has(run.id)))throw new Error('Stop this chat and its child agents before moving or deleting it.');}
+  async function stopChats(ids,wait=false){
+    const runs=state.runs.filter(run=>ids.has(run.chatId)),stopped=new Set(),done=[];
+    for(const run of runs)for(const id of descendants(run.id)){if(live.has(id))done.push(live.get(id).done);}
+    for(const run of runs)for(const id of (await stopRun(run.id)).stopped)stopped.add(id);
+    if(wait)await Promise.all(done);
+    return {stopped:[...stopped]};
+  }
+  function removeChats(ids){
+    const runIds=new Set(state.runs.filter(run=>ids.has(run.chatId)).map(run=>run.id));
+    state.chats=state.chats.filter(chat=>!ids.has(chat.id));state.runs=state.runs.filter(run=>!runIds.has(run.id));
+    state.approvals=state.approvals.filter(approval=>!ids.has(approval.chatId)&&!runIds.has(approval.runId));
+    for(const chat of state.chats){if(ids.has(chat.parentChatId))delete chat.parentChatId;chat.inbox=chat.inbox?.filter(message=>!ids.has(message.fromChatId));}
+    for(const run of state.runs)if(runIds.has(run.parentRunId))delete run.parentRunId;
+    return {deletedChatIds:[...ids],deletedRunIds:[...runIds]};
+  }
   function descendants(rootId) {
     const result = new Set([rootId]);
     for (let changed = true; changed;) { changed = false; for (const run of state.runs) if (result.has(run.parentRunId) && !result.has(run.id)) { result.add(run.id); changed = true; } }
@@ -142,7 +165,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   async function loop(run) {
     const chat = find('chats', run.chatId), signal = live.get(run.id).controller.signal;
-    const configuration = { ...find('providers', run.providerId), model: run.model };
+    const configuration = { ...find('providers', run.providerId), model: run.model,chatOptions:run.chatOptions };
     if (!configuration.model) throw new Error('Select a model in provider settings');
     while (true) {
       signal.throwIfAborted();
@@ -157,6 +180,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       const tools = [...registry.values()].map(toolMetadata);
       const messages = contextMessages(chat, configuration);
       const modelCall = { id: randomUUID(), sequence: run.modelCalls.length + 1, providerId: configuration.id, model: configuration.model, startedAt: now(), status: 'running' };
+      const measurement={started:performance.now(),estimatedInputTokens:estimateInputTokens(providerBody({provider:configuration,messages,tools})),capacityTokens:run.contextCapacityTokens??null,characters:0,usage:{},timing:{}};
+      const measure=()=>modelCall.metrics=callMetrics(measurement);
+      measure();
       run.modelCalls.push(modelCall);
       try {
         await changed(); signal.throwIfAborted();
@@ -167,17 +193,19 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
           const event = next.value;
           if (event.type === 'delta') {
             content += event.text; if (content.length > 1000000) throw new Error('Model response exceeds limit');
-            const partial = { chatId: chat.id, runId: run.id, text: content, sequence: ++streamSequence, lastAssistantId };
+            measurement.firstToken??=performance.now();measurement.characters=content.length;measure();
+            const partial = { chatId: chat.id, runId: run.id, text: content, sequence: ++streamSequence, lastAssistantId,modelCallId:modelCall.id,metrics:structuredClone(modelCall.metrics) };
             streams.set(run.id, partial);
-            emit({ type: 'delta', chatId: chat.id, runId: run.id, text: event.text, sequence: partial.sequence, lastAssistantId, streamSequence });
+            emit({ type: 'delta', chatId: chat.id, runId: run.id, text: event.text, sequence: partial.sequence, lastAssistantId, streamSequence,modelCallId:modelCall.id,metrics:modelCall.metrics });
           }
           if (event.type === 'provider_output') providerOutput = event.data;
-          if (event.type === 'usage') { const usage = cleanUsage(event.usage); if (Object.keys(usage).length) modelCall.usage = { ...modelCall.usage, ...usage }; }
+          if (event.type === 'usage') { const usage = cleanUsage(event.usage); if (Object.keys(usage).length) modelCall.usage = { ...modelCall.usage, ...usage };measurement.usage=modelCall.usage||{};measure(); }
+          if(event.type==='timing'&&Number.isFinite(event.timing?.generationMs)&&event.timing.generationMs>0){measurement.timing.generationMs=event.timing.generationMs;measure();}
           if (event.type === 'tool') { if (calls.length >= 32) throw new Error('Too many tool calls in one turn'); calls.push({ id: event.id || randomUUID(), name: event.name, args: event.args }); }
         }
         signal.throwIfAborted(); modelCall.status = 'completed';
       } catch (error) { clearStream(run.id); modelCall.status = signal.aborted ? 'canceled' : 'failed'; if (content) addMessage(chat, 'assistant', content, { status: modelCall.status, runId: run.id }); throw error; }
-      finally { modelCall.endedAt = now(); await changed(); }
+      finally { modelCall.endedAt = now(); measure();await changed(); }
       signal.throwIfAborted();
       if (new Set(calls.map(call => call.id)).size !== calls.length) throw new Error('Provider returned duplicate tool call IDs');
       if (calls.some(call => chat.messages.some(message => message.toolCalls?.some(previous => previous.id === call.id)))) throw new Error('Provider repeated a previously dispatched tool call ID');
@@ -198,24 +226,35 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     }
   }
   async function start(chat, text, parentRunId, singleTool, images) {
-    if (closed) throw new Error('Runtime is closed');
-    if (chat.archived) throw new Error('Chat is archived');
-    if (state.runs.some(run => run.chatId === chat.id && active(run))) throw new Error('Chat already has an active run');
+    const projectId=chat.projectId;
+    const checkTarget=()=>{
+      chat=find('chats',chat.id);
+      if(chat.projectId!==projectId)throw new Error('Chat moved while waiting for approval; retry the request.');
+      if (closed) throw new Error('Runtime is closed');
+      if (chat.archived) throw new Error('Chat is archived');
+      if(find('projects',chat.projectId).archived)throw new Error('Project is archived');
+      if(chatLocks.has(chat.id))throw new Error('Chat is being stopped or changed; wait for the operation to finish.');
+      if (state.runs.some(run => run.chatId === chat.id && active(run))) throw new Error('Chat already has an active run');
+    };
+    checkTarget();
     checkSpawn(parentRunId);
     if (parentRunId) {
       const parentRun = find('runs', parentRunId), origin = find('chats', parentRun.chatId);
       if (find('projects', origin.projectId).path !== find('projects', chat.projectId).path) await approve(parentRun, 'files', `Start an agent in another workspace: ${find('projects', chat.projectId).path}`);
       live.get(parentRunId).controller.signal.throwIfAborted();
       checkSpawn(parentRunId);
-      if (state.runs.some(run => run.chatId === chat.id && active(run))) throw new Error('Chat already has an active run');
+      checkTarget();
     }
     if ([...live.values()].length >= state.settings.maxAgents) throw new Error('Concurrent run limit reached');
     if (providerEdits.has(chat.providerId)) throw new Error('Provider configuration is being saved; retry after it finishes');
     const model = chat.model || find('providers', chat.providerId).model;
-    if (!singleTool) host.assertProviderAvailable?.(chat.providerId, model);
+    const selected=singleTool?null:controls(chat);
+    const chatOptions=selected?{contextTokens:selected.contextTokens,thinking:selected.thinking.selected,thinkingMode:selected.thinking.mode}:undefined;
+    if (!singleTool) host.assertProviderAvailable?.(chat.providerId, model,{contextTokens:chat.contextTokens??null,thinking:chat.thinking??null});
     if (text !== undefined) addMessage(chat, 'user', text, images?.length ? { images: [...images] } : {});
     const parent = parentRunId ? find('runs', parentRunId) : null;
     const run = { id: randomUUID(), chatId: chat.id, providerId: chat.providerId, model, ...(parentRunId ? { parentRunId } : {}), status: 'running', startedAt: now(), toolEvents: [], modelCalls: [], grants: parent ? chat.grants.filter(permission => parent.grants.includes(permission)) : [...chat.grants] };
+    if(selected){run.chatOptions=chatOptions;run.contextCapacityTokens=selected.context.mode==='ollama'?selected.contextTokens:selected.context.capacityTokens;}
     state.runs.push(run);
     const controller = new AbortController();
     let finish;
@@ -260,9 +299,11 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     await changed(); return { stopped: [...ids] };
   }
   async function createChat(projectId, title = 'New chat', parentChatId) {
-    find('projects', projectId);
+    if(find('projects', projectId).archived)throw new Error('Project is archived');
     const parent = parentChatId ? find('chats', parentChatId) : null;
-    const chat = { id: randomUUID(), projectId, title, providerId: parent?.providerId || state.providers[0].id, model: parent?.model || '', grants: [...(parent?.grants || [])], voice: { enabled: false, phrase: 'Hey Sophia', speakReplies: true }, messages: [], createdAt: now(), updatedAt: now(), archived: false, ...(parentChatId ? { parentChatId } : {}) };
+    if(parent&&chatLocks.has(parent.id))throw new Error('Parent chat is being changed');
+    const chat = { id: randomUUID(), projectId, title, providerId: parent?.providerId || state.providers[0].id, model: parent?.model || '', grants: [...(parent?.grants || [])], voice: { enabled: false, phrase: 'Hey Faber', speakReplies: true }, messages: [], createdAt: now(), updatedAt: now(), archived: false, ...(parentChatId ? { parentChatId } : {}) };
+    chat.contextTokens=parent?.contextTokens??null;chat.thinking=parent?(parent.thinking??null):(find('providers',chat.providerId).kind==='ollama'?false:null);
     state.chats.push(chat); await changed(); return chat;
   }
   function install(tools, replace = false) {
@@ -278,8 +319,10 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const schemas = {
     'state.get': object({}), 'project.create': object({ name: string, path: string }, ['name']), 'project.update': object({ id: idSchema, name: string }, ['id']),
     'chat.create': object({ projectId: idSchema, title: string }, ['projectId']),
-    'chat.update': object({ id: idSchema, title: string, providerId: idSchema, model: { type: 'string', maxLength: 300 }, grants: { type: 'array', items: { enum: permissions.filter(permission => permission !== 'read') }, maxItems: 5 }, voice: object({ enabled: { type: 'boolean' }, phrase: string, speakReplies: { type: 'boolean' } }, []) }, ['id']),
+    'chat.update': object({ id: idSchema, title: string, providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema, grants: { type: 'array', items: { enum: permissions.filter(permission => permission !== 'read') }, maxItems: 5 }, voice: object({ enabled: { type: 'boolean' }, phrase: string, speakReplies: { type: 'boolean' } }, []) }, ['id']),
     'chat.send': object({ chatId: idSchema, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId', 'text']), 'chat.stop': object({ chatId: idSchema }), 'chat.archive': object({ chatId: idSchema }),
+    'chat.controls':object({chatId:idSchema}),'chat.forceStop':object({chatId:idSchema}),'chat.delete':object({chatId:idSchema}),'chat.move':object({chatId:idSchema,projectId:idSchema}),
+    'project.archive':object({projectId:idSchema}),'project.delete':object({projectId:idSchema}),
     'provider.save': object({ id: idSchema, name: string, kind: { enum: ['openai', 'ollama', 'openai-responses'] }, baseUrl: string, model: { type: 'string', maxLength: 300 }, apiKey: { type: 'string', maxLength: 10000 }, reasoningEffort: { enum: ['', 'low', 'medium', 'high', 'xhigh', 'max'] } }, ['name', 'kind', 'baseUrl', 'model']),
     'provider.test': object({ id: idSchema }), 'approval.resolve': object({ id: idSchema, allow: { type: 'boolean' }, remember: { type: 'boolean' } }, ['id', 'allow']),
     'tool.run': object({ chatId: idSchema, name: string, args: { type: 'object' } }), 'settings.update': settingsSchema,
@@ -303,8 +346,19 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       case 'chat.update': {
         const chat = find('chats', params.id);
         if (params.providerId) find('providers', params.providerId);
-        const { id, voice, ...updates } = params; Object.assign(chat, updates); if (voice) Object.assign(chat.voice, voice); chat.updatedAt = now();
+        if(chatLocks.has(chat.id))throw new Error('Chat is being stopped or changed');
+        const { id, voice, ...updates } = params;
+        if((params.providerId!==undefined&&params.providerId!==chat.providerId)||(params.model!==undefined&&params.model!==chat.model)){
+          if(params.contextTokens===undefined)updates.contextTokens=null;if(params.thinking===undefined)updates.thinking=null;
+        }
+        if(['providerId','model','contextTokens','thinking'].some(key=>Object.hasOwn(params,key)))controls({...chat,...updates});
+        Object.assign(chat, updates); if (voice) Object.assign(chat.voice, voice); chat.updatedAt = now();
         await changed(); return structuredClone(chat);
+      }
+      case 'chat.controls':{
+        const chat=find('chats',params.chatId),selected=controls(chat,false),provider={...find('providers',chat.providerId),model:chat.model||find('providers',chat.providerId).model};
+        const estimatedTokens=estimateInputTokens(providerBody({provider,messages:contextMessages(chat,provider),tools:[...registry.values()].map(toolMetadata)}));
+        return {...selected,context:{...selected.context,estimatedTokens,estimateBasis}};
       }
       case 'chat.send': {
         validateChatImages(params.images);
@@ -316,7 +370,42 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         for (const run of state.runs.filter(item => item.chatId === params.chatId)) for (const id of (await stopRun(run.id)).stopped) stopped.add(id);
         return { stopped: [...stopped] };
       }
-      case 'chat.archive': { await request('chat.stop', params); find('chats', params.chatId).archived = true; await changed(); return { ok: true }; }
+      case 'chat.forceStop':{
+        find('chats',params.chatId);const ids=chatTree(params.chatId);
+        for(const id of ids)if(chatLocks.has(id))throw new Error('Chat operation already pending');
+        ids.forEach(id=>chatLocks.add(id));
+        try{return {...await stopChats(ids,true),settled:true};}finally{ids.forEach(id=>chatLocks.delete(id));}
+      }
+      case 'chat.archive': {
+        find('chats',params.chatId);const ids=chatTree(params.chatId);
+        for(const id of ids)if(chatLocks.has(id))throw new Error('Chat operation already pending');
+        ids.forEach(id=>chatLocks.add(id));
+        try{for(const chat of state.chats)if(ids.has(chat.id))chat.archived=true;await stopChats(ids,true);await changed();return {ok:true};}
+        finally{ids.forEach(id=>chatLocks.delete(id));}
+      }
+      case 'chat.move':{
+        const chat=find('chats',params.chatId),project=find('projects',params.projectId),ids=chatTree(chat.id);
+        if(project.archived)throw new Error('Destination project is archived');assertMutable(ids);
+        for(const candidate of state.chats)if(ids.has(candidate.id)){candidate.projectId=project.id;candidate.updatedAt=now();}
+        // The moved root no longer belongs to its old parent tree; keep child lineage inside the moved subtree.
+        delete chat.parentChatId;
+        const movedRuns=new Set(state.runs.filter(run=>ids.has(run.chatId)).map(run=>run.id));
+        for(const run of state.runs)if(run.parentRunId&&(movedRuns.has(run.id)!==movedRuns.has(run.parentRunId)))delete run.parentRunId;
+        await changed();return {ok:true,chatIds:[...ids],projectId:project.id};
+      }
+      case 'chat.delete':{
+        find('chats',params.chatId);const ids=chatTree(params.chatId);assertMutable(ids);const result=removeChats(ids);await changed();return {ok:true,...result};
+      }
+      case 'project.archive':{
+        const project=find('projects',params.projectId),ids=new Set(state.chats.filter(chat=>chat.projectId===project.id).map(chat=>chat.id));
+        if([...ids].some(id=>chatLocks.has(id)))throw new Error('A project chat operation is pending');
+        project.archived=true;for(const chat of state.chats)if(ids.has(chat.id))chat.archived=true;
+        await stopChats(ids,true);await changed();return {ok:true,projectId:project.id};
+      }
+      case 'project.delete':{
+        const project=find('projects',params.projectId),ids=new Set(state.chats.filter(chat=>chat.projectId===project.id).map(chat=>chat.id));
+        assertMutable(ids);const result=removeChats(ids);state.projects=state.projects.filter(item=>item.id!==project.id);await changed();return {ok:true,projectId:project.id,...result};
+      }
       case 'provider.save': {
         const id = params.id || randomUUID(); const existing = state.providers.find(item => item.id === id);
         if (providerEdits.has(id) || providerTests.has(id) || state.runs.some(run => run.providerId === id && live.has(run.id))) throw new Error('Provider is in use; stop its active runs or wait for its connection check before editing');
@@ -375,10 +464,11 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     builtin('agent_read', 'Inspect agent status, final reply and message/tool result indexes. Pass toolEventIds for selected ordinary results; nested inspection results stay references.', object({ runId: idSchema, toolEventIds: { type: 'array', items: idSchema } }, ['runId']), (args, ctx) => { const run = find('runs', args.runId); return agentInspection(run, find('chats', run.chatId), args.toolEventIds, ctx.chat.id); }),
     builtin('agent_send', 'Deliver a message to another chat. Busy chats receive the message; idle chats start a child run with no extra authority.', object({ chatId: idSchema, text: string }), async (args, ctx) => {
       if (args.chatId === ctx.chat.id) throw new Error('Cannot send to your own active chat');
-      const chat = find('chats', args.chatId);
+      const chat = find('chats', args.chatId), projectId=chat.projectId;
       if (chat.archived) throw new Error('Chat is archived');
       if (find('projects', chat.projectId).path !== ctx.project.path) await ctx.approve('files', `Send instructions to an agent in another workspace: ${find('projects', chat.projectId).path}`);
       ctx.signal.throwIfAborted();
+      if(find('chats',chat.id).projectId!==projectId)throw new Error('Target chat moved while waiting for approval; retry the request.');
       const running = state.runs.find(run => run.chatId === chat.id && active(run));
       if (running) {
         const sender = find('runs', ctx.runId), authority = new Set([...sender.grants, ...live.get(ctx.runId).approved]);
@@ -405,14 +495,14 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     { ...builtin('project_create', 'Create a project using an existing absolute workspace path. Requires files permission because this adds a workspace root.', object({ name: string, path: string }), args => request('project.create', args)), permission: 'files' },
     builtin('harness_inspect', 'Inspect harness source, providers, settings and tool names/permissions. Full tool schemas are already supplied to the model. Never returns credentials.', object({}), () => ({ sourceDir, version: 1, settings: structuredClone(state.settings), providers: structuredClone(state.providers), tools: [...registry.values()].map(({ name, permission }) => ({ name, permission })), extensions: structuredClone(state.extensions) })),
     builtin('settings_update', 'Adjust the theme or bounded execution settings. Does not grant permissions.', settingsSchema, args => request('settings.update', args)),
-    builtin('chat_configure', 'Configure this chat model/provider or voice preferences for future runs. Cannot grant permissions or save credentials.', object({ providerId: idSchema, model: { type: 'string', maxLength: 300 }, voice: schemas['chat.update'].properties.voice }, []), async (args, ctx) => {
+    builtin('chat_configure', 'Configure this chat model/provider, supported context capacity and thinking, or voice preferences for future runs. Context settings are provider parameters, never history trimming. Cannot grant permissions or save credentials.', object({ providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema, voice: schemas['chat.update'].properties.voice }, []), async (args, ctx) => {
       if (args.providerId) {
         const provider = find('providers', args.providerId), hostname = new URL(provider.baseUrl).hostname;
         if (!['localhost', '127.0.0.1', '[::1]'].includes(hostname)) await ctx.approve('network', `Configure future runs of this chat to send context to provider ${provider.name} at ${provider.baseUrl}`);
       }
       ctx.signal.throwIfAborted();
       const chat = await request('chat.update', { id: ctx.chat.id, ...args });
-      return { id: chat.id, providerId: chat.providerId, model: chat.model, voice: chat.voice };
+      return { id: chat.id, providerId: chat.providerId, model: chat.model, voice: chat.voice,contextTokens:chat.contextTokens,thinking:chat.thinking };
     }),
     builtin('voice_status', 'Read native voice availability and listening state.', object({}), (_args, ctx) => {
       if (!host.voice) throw new Error('Voice unavailable'); return host.voice('status', {}, ctx.signal);

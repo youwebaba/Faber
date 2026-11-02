@@ -10,7 +10,7 @@ import { streamProvider, providerMessages, testProvider, validateCredentialTrans
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 const fakeTool = (name, permission, execute) => ({ name, permission, execute, description: 'Test-only fake tool', parameters: structuredClone(empty) });
 async function fixture(t, provider, host = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'sophia-core-test-'));
+  const directory = await mkdtemp(join(tmpdir(), 'faber-core-test-'));
   const options = { dataDir: join(directory, 'data'), sourceDir: join(directory, 'source'), provider, host };
   const runtime = await createRuntime(options);
   t.after(async () => { await runtime.close(); await rm(directory, { recursive: true, force: true }); });
@@ -262,7 +262,7 @@ test('model configuration cannot grant authority; native voice requires approval
   const calls = [];
   const { runtime, chat } = await fixture(t, undefined, { voice: (action, args) => { calls.push({ action, args }); return { available: true }; } });
   await assert.rejects(runtime.request('tool.run', { chatId: chat.id, name: 'chat_configure', args: { grants: ['shell'] } }), /unknown property/);
-  await runtime.request('tool.run', { chatId: chat.id, name: 'chat_configure', args: { model: 'selected-local-model', voice: { phrase: 'Hello Sophia' } } });
+  await runtime.request('tool.run', { chatId: chat.id, name: 'chat_configure', args: { model: 'selected-local-model', voice: { phrase: 'Hello Faber' } } });
   const state = await runtime.request('state.get'); assert.equal(state.chats[0].model, 'selected-local-model'); assert.deepEqual(state.chats[0].grants, []);
   assert.deepEqual(await runtime.request('tool.run', { chatId: chat.id, name: 'voice_status', args: {} }), { available: true });
   const pending = runtime.request('tool.run', { chatId: chat.id, name: 'voice_start', args: { mode: 'dictation' } });

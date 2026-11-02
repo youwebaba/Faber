@@ -1,4 +1,14 @@
-Faber b1.0 local runtime notices
+Faber b1.1 bundled runtime notices
+
+Lightpanda Browser 1.0.2 is included as a separate optional WSL2 addon runtime.
+Lightpanda is AGPL-3.0-or-later. Its unmodified binary, full license and exact
+project source archive are in resources/lightpanda. Source commit:
+c5f7bb29b127040c899d4e181b5709f76fc71a6f. See LIGHTPANDA.md for source URLs,
+dependency references, installation, removal and browser limitations.
+Ubuntu Base 24.04.5 includes per-package copyright notices in /usr/share/doc;
+package sources are available at https://archive.ubuntu.com/ubuntu/.
+The Mozilla/curl CA bundle (2026-10-20) is MPL-2.0; its notice and full license
+are included with the payload. Exact hashes are in build/lightpanda-lock.json.
 
 This runtime is an unmodified local snapshot of the llama.cpp components shipped
 with Ollama 0.40.10 for Windows x64. The exact source version, byte lengths and

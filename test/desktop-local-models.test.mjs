@@ -27,18 +27,18 @@ test('Ollama aliases share active-run and synchronous lifecycle guards by endpoi
   assert.doesNotThrow(() => f.manager.assertProviderAvailable('one', 'fixture:latest'));
 });
 async function fixture(t, extra = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sophia-local-manager-')), directory = path.join(root, 'models'); await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'fixture-Q4_K_M.gguf'), header());
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'faber-local-manager-')), directory = path.join(root, 'models'); await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'fixture-Q4_K_M.gguf'), header());
   const state = { providers: [{ id: 'unrelated', name: 'Preserve this', kind: 'openai', baseUrl: 'https://example.com/v1', model: 'unrelated' }], runs: [], chats: [{ id: 'chat', providerId: 'unrelated', model: 'unrelated' }] };
-  const secrets = new Map(), children = [], events = [], readiness = { ready: false }, calls = [];
-  const runtime = { async request(method, args) { calls.push(method); if (method === 'state.get') return structuredClone(state); if (method === 'provider.save') { secrets.set(args.id, args.apiKey); const provider = { ...args, hasKey: true }; delete provider.apiKey; const existing = state.providers.find(item => item.id === args.id); if (existing) Object.assign(existing, provider); else state.providers.push(provider); return provider; } throw new Error(method); } };
+  const secrets = new Map(), children = [], events = [], readiness = { ready: false }, calls = [], listeners=new Set();
+  const runtime = {subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener);},async request(method, args) { calls.push(method); if (method === 'state.get') return structuredClone(state); if (method === 'provider.save') { secrets.set(args.id, args.apiKey); const provider = { ...args, hasKey: true }; delete provider.apiKey; const existing = state.providers.find(item => item.id === args.id); if (existing) Object.assign(existing, provider); else state.providers.push(provider);for(const listener of listeners)listener({type:'state',state:structuredClone(state)}); return provider; } throw new Error(method); } };
   const options = { dataDir: path.join(root, 'data'), runtime, getHubState: async () => ({ downloadDirectory: directory, downloads: [] }), executable: process.execPath, pollMs: 5, loadTimeoutMs: 1000,
-    hardwareRunner:async(_executable,args)=>({code:0,stdout:args[0]==='--help'?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices':args[0]==='--version'?'Synthetic fixture runtime':'Available devices:\n  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)',stderr:''}),
+    hardwareRunner:async(_executable,args)=>({code:0,stdout:args[0]==='--help'?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel':args[0]==='--version'?'Synthetic fixture runtime':'Available devices:\n  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)',stderr:''}),
     emit: event => events.push(event),
     spawnImpl(executable, args, options) {
       const child = new EventEmitter(); Object.assign(child, { pid: 12345 + children.length, exitCode: null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), args, options, executable }); children.push(child); return child;
     },
     killProcess: async child => { if (child && child.exitCode === null) { child.exitCode = 0; child.emit('close', 0); } },
-    fetchImpl: async (url, options) => { const child = children.at(-1); if (String(url).endsWith('/health')) return Response.json(readiness.ready ? { status: 'ok' } : { error: 'Loading' }, { status: readiness.ready ? 200 : 503 }); const key = await fs.readFile(child.args[child.args.indexOf('--api-key-file') + 1], 'utf8'); assert.equal(options.headers.Authorization, `Bearer ${key}`); return Response.json({ data: [{ id: child.args[child.args.indexOf('--alias') + 1] }] }); }, ...extra };
+    fetchImpl: async (url, options) => { const child = children.at(-1); if (String(url).endsWith('/health')) return Response.json(readiness.ready ? { status: 'ok' } : { error: 'Loading' }, { status: readiness.ready ? 200 : 503 }); const key = await fs.readFile(child.args[child.args.indexOf('--api-key-file') + 1], 'utf8'); assert.equal(options.headers.Authorization, `Bearer ${key}`); if(String(url).endsWith('/props'))return Response.json({chat_template:readiness.template,default_generation_settings:{n_ctx:readiness.capacity??(child.args.includes('--ctx-size')?Number(child.args[child.args.indexOf('--ctx-size')+1]):2048)}}); return Response.json({ data: [{ id: child.args[child.args.indexOf('--alias') + 1] }] }); }, ...extra };
   const manager = await createLocalModels(options);
   t.after(async () => { await manager.close(); await fs.rm(root, { recursive: true, force: true }); });
   return { manager, options, root, directory, state, secrets, children, events, readiness, calls };
@@ -56,6 +56,52 @@ test('owned GGUF lifecycle uses validated files, registers only after readiness,
   f.state.runs[0].status = 'completed'; const stopped = await f.manager.request('localModels.stop'); assert.equal(stopped.process.status, 'stopped'); assert.equal(child.exitCode, 0); assert.throws(() => f.manager.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/);
   await assert.rejects(fs.access(child.args[child.args.indexOf('--api-key-file') + 1])); assert.ok(!JSON.stringify(f.events).includes(f.secrets.get(ready.process.providerId)));
   await f.manager.close(); const reopened = await createLocalModels(f.options); try { assert.equal((await reopened.request('localModels.list')).managedProviderId, ready.managedProviderId); assert.throws(() => reopened.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/); } finally { await reopened.close(); }
+});
+
+test('selected context uses one full-size slot, verifies runtime capacity and rejects mismatched chat requests',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];
+  await f.manager.request('localModels.start',{modelId:model.id,contextTokens:8192});f.readiness.ready=true;
+  const ready=await until(f.manager,'ready'),args=f.children[0].args;
+  assert.equal(args[args.indexOf('--ctx-size')+1],'8192');assert.equal(args[args.indexOf('--parallel')+1],'1');
+  assert.equal(ready.process.contextCapacityTokens,8192);assert.equal(ready.process.contextTokens,8192);
+  const controls=f.manager.providerControls(ready.process.providerId,ready.process.model);assert.equal(controls.context.capacityTokens,8192);assert.equal(controls.context.requiresRestart,true);
+  assert.equal(f.manager.providerControls('unrelated','unrelated'),undefined);
+  f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{contextTokens:8192});
+  assert.throws(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{contextTokens:16384}),/Restart.*16384/);
+  await f.manager.request('localModels.stop');assert.equal(f.manager.providerControls(ready.process.providerId,ready.process.model).context.capacityTokens,null);
+});
+
+test('requested context cannot silently differ from runtime-reported capacity or escape start validation',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];
+  for(const contextTokens of [-1,0,1.5,2147483648])await assert.rejects(f.manager.request('localModels.start',{modelId:model.id,contextTokens}));
+  assert.equal(f.children.length,0);
+  await assert.rejects(f.manager.request('localModels.start',{providerId:'unrelated',model:'fixture',contextTokens:8192}),/Configure Ollama context/);
+  f.readiness.capacity=4096;f.readiness.ready=true;await f.manager.request('localModels.start',{modelId:model.id,contextTokens:8192});
+  const failed=await until(f.manager,'failed');assert.match(failed.process.error,/Requested 8192.*reported 4096/);assert.equal(f.children[0].exitCode,0);assert.equal(f.state.providers.length,1);
+});
+
+test('editing a managed provider cannot confer owned context or thinking capabilities on an external endpoint',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];f.readiness.ready=true;
+  await f.manager.request('localModels.start',{modelId:model.id});const ready=await until(f.manager,'ready');
+  const provider=f.state.providers.find(item=>item.id===ready.process.providerId);
+  assert.equal(f.manager.providerControls(provider.id,provider.model).context.mode,'managed');
+  await f.options.runtime.request('provider.save',{...provider,baseUrl:'https://example.com/v1',apiKey:'fixture-replacement'});
+  assert.equal(f.manager.providerControls(provider.id,provider.model),undefined);
+  assert.throws(()=>f.manager.assertProviderAvailable(provider.id,provider.model),/connection was edited/);
+  await f.manager.request('localModels.stop');
+  assert.equal(f.manager.providerControls(provider.id,provider.model),undefined);
+});
+
+test('managed thinking is declared by the loaded template, stays available while stopped, and clears for other templates',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];f.readiness.ready=true;
+  f.readiness.template='{% if enable_thinking %}<think>{% endif %}';
+  await f.manager.request('localModels.start',{modelId:model.id});const ready=await until(f.manager,'ready');
+  assert.equal(f.manager.providerControls(ready.process.providerId,ready.process.model).thinking.supported,true);
+  await f.manager.request('localModels.stop');
+  assert.equal(f.manager.providerControls(ready.process.providerId,ready.process.model).thinking.supported,true);
+  f.readiness.template='{# enable_thinking is not supported #}{{ messages }}';
+  await f.manager.request('localModels.start',{modelId:model.id});await until(f.manager,'ready');
+  assert.equal(f.manager.providerControls(ready.process.providerId,ready.process.model).thinking.supported,false);
 });
 
 test('Stop while loading fences readiness, controls own process once and never registers a late provider', async t => {

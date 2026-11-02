@@ -24,7 +24,7 @@ async function collect(fetchImpl, options = {}) {
   return events;
 }
 async function fixture(t, fetchImpl, overrides = {}) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sophia-responses-test-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'faber-responses-test-'));
   const sourceDir = path.join(root, 'source'), dataDir = path.join(root, 'data');
   await fs.mkdir(path.join(sourceDir, 'core'), { recursive: true }); await fs.mkdir(path.join(sourceDir, 'test'));
   await fs.writeFile(path.join(sourceDir, 'core/value.mjs'), 'export const value=1;');

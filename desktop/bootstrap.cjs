@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
+const { getProfileDirectory } = require('./profile-path.cjs');
 const appRoot = path.resolve(__dirname, '..');
-const smokeModes = new Set(['--smoke','--smoke-live','--smoke-models','--smoke-features','--smoke-local-models','--smoke-ui-reload','--smoke-package','--smoke-faber','--smoke-installed']);
+const smokeModes = new Set(['--smoke','--smoke-live','--smoke-models','--smoke-features','--smoke-local-models','--smoke-ui-reload','--smoke-package','--smoke-faber','--smoke-installed','--smoke-b11']);
 const smoke = process.argv.some(value => smokeModes.has(value));
 const profileIndex = process.argv.indexOf('--smoke-profile');
 let dataDir;
@@ -15,17 +16,17 @@ try {
     dataDir = path.resolve(process.argv[profileIndex + 1]);
     const temporaryRelative = path.relative(path.resolve(os.tmpdir()), dataDir);
     if (!temporaryRelative || temporaryRelative === '..' || temporaryRelative.startsWith(`..${path.sep}`) || path.isAbsolute(temporaryRelative)) throw new Error('Smoke profiles must be isolated children of the system temporary directory');
-  } else dataDir = smoke ? fs.mkdtempSync(path.join(os.tmpdir(), 'Faber-smoke-')) : path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'SophiaHarness');
+  } else dataDir = smoke ? fs.mkdtempSync(path.join(os.tmpdir(), 'Faber-smoke-')) : getProfileDirectory(process.env.LOCALAPPDATA || app.getPath('appData'));
   fs.mkdirSync(dataDir, { recursive: true }); app.setPath('userData', dataDir);
   app.setAppUserModelId('ai.clocal.faber');
-  protocol.registerSchemesAsPrivileged([{ scheme: 'sophia', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+  protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
   if (!app.requestSingleInstanceLock()) { if (process.argv.includes('--rollback-last')) { console.error('Close Faber before running recovery.'); app.quit(); process.exit(1); } app.quit(); process.exit(0); }
   void (async () => {
     const packaged = app.isPackaged;
     const { prepareWorkbench } = await import(pathToFileURL(path.join(appRoot, 'desktop', 'packaged-paths.mjs')).href);
     const workbenchRoot = smoke ? `${dataDir}-workbench` : path.join(process.env.LOCALAPPDATA || app.getPath('appData'), 'FaberWorkbench');
     const sourceDir = packaged ? await prepareWorkbench({ bundledSource: appRoot, workbenchRoot, version: app.getVersion() }) : appRoot;
-    globalThis.__FABER_BOOTSTRAP__ = Object.freeze({ dataDir, sourceDir, packaged, resourcesPath: process.resourcesPath, version: app.getVersion(), hasLock: true });
+    globalThis.__FABER_BOOTSTRAP__ = Object.freeze({ dataDir, sourceDir, packaged, resourcesPath: process.resourcesPath, version: app.getVersion(), hasLock: true, bundledSource: path.join(appRoot,'bundled-addons'), addonResources: packaged?path.join(process.resourcesPath,'lightpanda'):path.join(appRoot,'.runtime','lightpanda') });
     if (process.argv.includes('--rollback-last')) {
       const { readRecoveryRecord, restoreUpgrade } = await import(pathToFileURL(path.join(appRoot, 'desktop', 'recovery.mjs')).href);
       const result = await restoreUpgrade({ dataDir, sourceDir, record: await readRecoveryRecord(dataDir, sourceDir) });

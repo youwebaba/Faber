@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {runProcess} from '../tools/process.mjs';
 import {nativeAction} from '../desktop/native.mjs';
 
-test('native Windows focus, literal typing, key and click affect only a dedicated fixture',{skip:process.env.SOPHIA_NATIVE_FIXTURE!=='1'?'Opt-in real desktop fixture; set SOPHIA_NATIVE_FIXTURE=1':false},async t=>{
+test('native Windows focus, literal typing, key and click affect only a dedicated fixture',{skip:process.env.FABER_NATIVE_FIXTURE!=='1'?'Opt-in real desktop fixture; set FABER_NATIVE_FIXTURE=1':false},async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'harness-native-test-')),resultPath=path.join(root,'fixture.json');
   const controller=new AbortController();
   const running=runProcess('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./desktop-native.fixture.ps1',import.meta.url)),'-ResultPath',resultPath],{signal:controller.signal,timeout:35000}).catch(error=>{if(!controller.signal.aborted)throw error;});

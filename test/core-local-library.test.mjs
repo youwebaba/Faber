@@ -12,7 +12,7 @@ function gguf(version = 3) {
   return bytes;
 }
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(tmpdir(), 'sophia-local-library-'));
+  const root = await fs.mkdtemp(path.join(tmpdir(), 'faber-local-library-'));
   const directory = path.join(root, 'models'); await fs.mkdir(directory);
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   async function write(name, content = gguf()) {

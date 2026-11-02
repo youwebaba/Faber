@@ -24,10 +24,12 @@ export function responsesInput(messages, provider) {
 }
 
 export function responsesBody({ provider, messages, tools }) {
+  const thinking=provider.chatOptions?.thinking;
+  const effort=provider.chatOptions?.thinkingMode==='responses'&&typeof thinking==='boolean'?(thinking?(provider.reasoningEffort&&provider.reasoningEffort!=='none'?provider.reasoningEffort:'medium'):'none'):provider.reasoningEffort;
   return {
     model: provider.model, input: responsesInput(messages, provider), stream: true, store: false,
     include: ['reasoning.encrypted_content'],
-    ...(provider.reasoningEffort ? { reasoning: { effort: provider.reasoningEffort } } : {}),
+    ...(effort ? { reasoning: { effort } } : {}),
     tools: tools.map(tool => ({ type: 'function', name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })),
   };
 }

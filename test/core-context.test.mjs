@@ -10,7 +10,7 @@ import { responsesInput } from '../core/responses.mjs';
 // Deterministic fixtures only: no provider/network requests or native effects.
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 async function fixture(t, provider) {
-  const root = await mkdtemp(join(tmpdir(), 'sophia-context-test-'));
+  const root = await mkdtemp(join(tmpdir(), 'faber-context-test-'));
   const options = { dataDir: join(root, 'data'), sourceDir: join(root, 'source'), provider };
   const runtimes = [];
   t.after(async () => { for (const runtime of runtimes) await runtime.close(); await rm(root, { recursive: true, force: true }); });

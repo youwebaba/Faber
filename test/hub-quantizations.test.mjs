@@ -38,7 +38,7 @@ test('missing, duplicate, mixed, invalid and inconsistent shards cannot be downl
 });
 
 test('variant downloads re-inspect pinned metadata, expand exact shards and preserve tool approval/cancel', async t => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sophia-quant-test-'));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'faber-quant-test-'));
   const bytes = Buffer.from('synthetic quantization shard'), hash = createHash('sha256').update(bytes).digest('hex');
   const names = ['a/Model-Q4_K_M-00001-of-00002.gguf', 'a/Model-Q4_K_M-00002-of-00002.gguf', 'b/Model-Q4_K_M.gguf', 'a/mmproj-Q4_K_M.gguf'];
   let metadata = raw(names.map(rfilename => ({ rfilename, size: bytes.length, lfs: { size: bytes.length, sha256: hash } }))), binaryCalls = 0, inspectCalls = 0;

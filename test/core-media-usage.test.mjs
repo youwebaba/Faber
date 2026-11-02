@@ -14,7 +14,7 @@ const sse = frames => new Response(frames.map(frame => `data: ${JSON.stringify(f
 const responseUsage = { input_tokens: 100, output_tokens: 20, input_tokens_details: { cached_tokens: 30 }, output_tokens_details: { reasoning_tokens: 5 } };
 const expectedUsage = { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30, reasoningTokens: 5 };
 async function fixture(t, kind, fetchImpl, provider) {
-  const root = await fs.mkdtemp(join(tmpdir(), 'sophia-media-usage-test-'));
+  const root = await fs.mkdtemp(join(tmpdir(), 'faber-media-usage-test-'));
   const options = { sourceDir: join(root, 'source'), dataDir: join(root, 'data'), provider: provider || (args => streamProvider({ ...args, fetchImpl })) };
   const runtime = await createRuntime(options);
   t.after(async () => { await runtime.close(); await fs.rm(root, { recursive: true, force: true }); });

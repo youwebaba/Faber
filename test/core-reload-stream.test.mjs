@@ -37,7 +37,9 @@ test('UI reload snapshot plus newer chunk sequences reconstructs active output w
   const events=[];runtime.subscribe(event=>{if(event.type==='delta')events.push(event);});
   const {runId}=await runtime.request('chat.send',{chatId:chat.id,text:'Next'});await first.promise;
   const snapshot=await runtime.request('state.get');assert.equal(snapshot.streams.length,1);
-  assert.deepEqual(snapshot.streams[0],{chatId:chat.id,runId,text:'Hello',sequence:snapshot.streamSequence,lastAssistantId:previous});
+  const {metrics,modelCallId,...partial}=snapshot.streams[0];
+  assert.deepEqual(partial,{chatId:chat.id,runId,text:'Hello',sequence:snapshot.streamSequence,lastAssistantId:previous});
+  assert.equal(modelCallId,snapshot.runs.find(run=>run.id===runId).modelCalls[0].id);assert.equal(metrics.estimatedOutputTokens,2);
   snapshot.streams[0].text='modified UI copy';assert.equal((await runtime.request('state.get')).streams[0].text,'Hello');
   const before=await runtime.request('state.get');continueSecond.resolve();await second.promise;
   const buffered=events.filter(event=>event.sequence>before.streamSequence);

@@ -7,7 +7,7 @@ import { createRuntime } from '../core/runtime.mjs';
 import { responsesInput } from '../core/responses.mjs';
 
 test('existing recursive inspection history projects to references without rewriting ordinary or durable content', async t => {
-  const root = await fs.mkdtemp(join(tmpdir(), 'sophia-inspection-test-'));
+  const root = await fs.mkdtemp(join(tmpdir(), 'faber-inspection-test-'));
   const options = { dataDir: join(root, 'data'), sourceDir: join(root, 'source') };
   const runtimes = [];
   t.after(async () => { for (const runtime of runtimes) await runtime.close(); await fs.rm(root, { recursive: true, force: true }); });

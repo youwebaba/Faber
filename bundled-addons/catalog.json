@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "addons": [
+    {
+      "id": "lightpanda",
+      "digest": "d272de46632b0ac6baebcee32f276686d5c252e01e4cc5e40cf46a0f32e911dc"
+    }
+  ]
+}

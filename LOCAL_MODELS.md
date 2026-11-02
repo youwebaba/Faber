@@ -34,6 +34,21 @@ files are not loaded by this first GGUF launcher. Tool calling depends on the
 model and its chat template. Runtime-native context and hardware constraints
 apply; the harness does not reinstate a context or turn budget.
 
+## Per-chat context selection
+
+The composer's **Context** control selects capacity for the next run. Managed
+GGUF Start accepts optional `contextTokens` and requests one full slot using
+`--ctx-size N --parallel 1`. Actual `n_ctx` from authenticated `/props` or the
+runner's slot log must match; unsupported flags or a capped selection fail the
+load and stop the owned process. Default leaves runtime flags unchanged.
+
+**Save & restart model** applies a different capacity to a loaded model after
+its chats are stopped. New runs reject a selected/loaded mismatch before saving
+the message or contacting the model. Editing the managed connection's endpoint
+does not transfer these capabilities to another server; Stop/Start restores the
+owned connection, or use a separate API connection. Native Ollama instead takes
+`options.num_ctx` on chat requests. See [CHAT_CONTROLS.md](CHAT_CONTROLS.md).
+
 ## Existing Ollama models
 
 A local Ollama connection also lists its installed models. Start can bring up

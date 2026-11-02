@@ -1,7 +1,7 @@
 import { validateAttachmentSnapshot } from './file-attachments.mjs';
 
 export const MAX_UI_SNAPSHOT_BYTES = 64 * 1024 * 1024;
-export function interfaceError(error) { return String(error?.message || error).replace(/^Error invoking remote method ['"]sophia:request['"]:\s*(?:Error:\s*)?/, ''); }
+export function interfaceError(error) { return String(error?.message || error).replace(/^Error invoking remote method ['"]faber:request['"]:\s*(?:Error:\s*)?/, ''); }
 const fields = ['version', 'selectedChatId', 'selectedProjectId', 'drafts', 'view'];
 const flags = ['sidebarHidden', 'sidebarOpen', 'activityHidden', 'activityOpen', 'promptFocused'];
 const positions = ['transcriptScroll', 'activityScroll', 'projectScroll', 'promptSelectionStart', 'promptSelectionEnd'];
@@ -36,7 +36,7 @@ export function mergeRuntimeStreams(streams, value, version = -1) {
   else if (value.type === 'delta' && Number.isSafeInteger(value.sequence) && value.sequence > version) {
     const previous = streams.get(value.runId);
     const text = previous?.lastAssistantId === value.lastAssistantId ? previous.text : '';
-    streams.set(value.runId, { runId: value.runId, chatId: value.chatId, lastAssistantId: value.lastAssistantId, sequence: value.sequence, text: (text || '') + value.text });
+    streams.set(value.runId, { runId: value.runId, chatId: value.chatId, lastAssistantId: value.lastAssistantId, sequence: value.sequence, text: (text || '') + value.text, ...(value.metrics ? { metrics: value.metrics, modelCallId: value.modelCallId } : {}) });
   }
   return value.streamSequence;
 }

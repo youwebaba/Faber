@@ -5,12 +5,15 @@ import { createAddonManager } from './addons.mjs';
 import { callUsage } from './chat-media.mjs';
 import { createAttachmentDrafts, attachmentMessage, FILE_ACCEPT } from './file-attachments.mjs';
 import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStreams, interfaceError } from './ui-refresh.mjs';
+import { createNavigationMenu, deletionWarning } from './chat-navigation.mjs';
+import { createChatControls } from './chat-controls.mjs';
+import { createRunActivity } from './run-activity.mjs';
 
 const $ = selector => document.querySelector(selector);
-const bridge = window.sophia;
+const bridge = window.faber;
 let state = { projects: [], chats: [], runs: [], providers: [], tools: [], extensions: [], approvals: [], settings: {} };
-let selectedChatId = readLocal('sophia.chat');
-let selectedProjectId = readLocal('sophia.project');
+let selectedChatId = readLocal('faber.chat');
+let selectedProjectId = readLocal('faber.project');
 let voice = { status: 'off' };
 let sending = false;
 let initialState = true;
@@ -23,6 +26,7 @@ const imageDrafts = createAttachmentDrafts({ onChange: key => { if (key === draf
 let imageDraftRenderKey;
 const messageNodes = new Map();
 let transcriptChatId;
+let modalReturnFocus;
 const icons = {
   panel: ['M8 3v18', 'M4 3h16a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z'],
   compose: ['m14 4 6 6', 'm5 13 10-10 6 6-10 10-7 1Z', 'M3 6v15h15'],
@@ -35,6 +39,7 @@ const icons = {
   sliders: ['M4 7h5m4 0h7M4 17h9m4 0h3', 'M9 4v6m4 4v6'],
   activity: ['M3 12h4l3-8 4 16 3-8h4'], mic: ['M9 5a3 3 0 0 1 6 0v7a3 3 0 0 1-6 0Z', 'M5 10v2a7 7 0 0 0 14 0v-2', 'M12 19v3m-4 0h8'],
   arrow: ['M12 19V5', 'm6 11 6-6 6 6'], stop: ['M6 6h12v12H6Z'],
+  brain: ['M12 4a3 3 0 0 0-5-2 4 4 0 0 0-3 6 4 4 0 0 0 0 8 4 4 0 0 0 5 5 3 3 0 0 0 3-3Z', 'M12 4a3 3 0 0 1 5-2 4 4 0 0 1 3 6 4 4 0 0 1 0 8 4 4 0 0 1-5 5 3 3 0 0 1-3-3Z', 'M7 7c0 2 2 3 3 3M17 7c0 2-2 3-3 3M6 15c1-1 3-1 4 0M18 15c-1-1-3-1-4 0'],
   folder: ['M3 6h7l2 2h9v12H3Z'], chevron: ['m9 5 7 7-7 7'], copy: ['M9 9h11v12H9Z', 'M15 9V3H3v12h6'],
 };
 function icon(name) {
@@ -45,11 +50,12 @@ function icon(name) {
 }
 document.querySelectorAll('[data-icon]').forEach(button => button.prepend(icon(button.dataset.icon)));
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
+function wordmark(className) { const image = el('img', `faber-wordmark ${className}`); image.src = 'assets/faber-wordmark.png'; image.alt = 'Faber — Maker of Things'; image.width = 2172; image.height = 724; return image; }
 function button(text, callback, className = 'button') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', async () => { node.disabled = true; try { await act(callback); } finally { node.disabled = false; } }); return node; }
 function readLocal(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function writeLocal(key, value) { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch { /* Selection persistence is optional. */ } }
-function currentChat() { return state.chats.find(chat => chat.id === selectedChatId && !chat.archived); }
-function currentProject() { return state.projects.find(project => project.id === (currentChat()?.projectId || selectedProjectId)); }
+function currentChat() { return state.chats.find(chat => chat.id === selectedChatId && !chat.archived && state.projects.some(project => project.id === chat.projectId && !project.archived)); }
+function currentProject() { return state.projects.find(project => project.id === (currentChat()?.projectId || selectedProjectId) && !project.archived); }
 function currentProvider() { return state.providers.find(provider => provider.id === currentChat()?.providerId) || state.providers[0]; }
 function draftKey() { return selectedChatId || `new:${selectedProjectId || ''}`; }
 function updateSendButton() { const images = imageDrafts.get(draftKey()); $('#send-message').disabled = sending || images.some(item => item.pending) || (!$('#prompt').value.trim() && !images.length); }
@@ -83,22 +89,29 @@ function acceptState(next) {
   if (Number.isSafeInteger(next.stateRevision)) { if (next.stateRevision < stateVersion) return; stateVersion = next.stateRevision; }
   if (Number.isSafeInteger(next.streamSequence)) streamVersion = mergeRuntimeStreams(streams, next, streamVersion);
   else reconcileStreams(streams, next);
+  const previousKey = draftKey();
+  const removed = [...state.chats.filter(chat => !next.chats.some(item => item.id === chat.id)).map(chat => chat.id), ...state.projects.filter(project => !next.projects.some(item => item.id === project.id)).map(project => `new:${project.id}`)];
+  for (const key of removed) { drafts.delete(key); imageDrafts.remove(key, imageDrafts.get(key).map(item => item.id)); }
   state = next;
   if (!currentChat()) selectedChatId = null;
-  if (initialState && !selectedChatId) selectedChatId = state.chats.find(chat => !chat.archived && chat.projectId === selectedProjectId)?.id || state.chats.find(chat => !chat.archived)?.id || null;
+  const available = state.chats.filter(chat => !chat.archived && state.projects.some(project => project.id === chat.projectId && !project.archived));
+  if (initialState && !selectedChatId) selectedChatId = available.find(chat => chat.projectId === selectedProjectId)?.id || available[0]?.id || null;
   initialState = false;
-  if (!currentProject()) selectedProjectId = state.projects[0]?.id || null;
+  if (!currentProject()) selectedProjectId = state.projects.find(project => !project.archived)?.id || null;
+  if (previousKey !== draftKey()) { if (!removed.includes(previousKey)) drafts.set(previousKey, $('#prompt').value); $('#prompt').value = drafts.get(draftKey()) || ''; }
+  writeLocal('faber.chat', selectedChatId); writeLocal('faber.project', currentProject()?.id || selectedProjectId);
   applyTheme(state.settings?.theme || 'system');
   render();
 }
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme; }
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(state.settings?.theme || 'system'));
 function selectChat(chatId, projectId = selectedProjectId) {
+  navigationMenu.close();
   modelsBrowser.close();
   drafts.set(draftKey(), $('#prompt').value);
   selectedChatId = chatId;
   selectedProjectId = currentChat()?.projectId || projectId;
-  writeLocal('sophia.chat', selectedChatId); writeLocal('sophia.project', selectedProjectId);
+  writeLocal('faber.chat', selectedChatId); writeLocal('faber.project', selectedProjectId);
   $('#prompt').value = drafts.get(draftKey()) || '';
   document.body.classList.remove('sidebar-open');
   render(); $('#transcript').scrollTop = $('#transcript').scrollHeight; $('#prompt').focus();
@@ -113,19 +126,25 @@ function render() {
   $('#stop-run').hidden = !isActive(run); $('#send-message').hidden = isActive(run);
   renderImageDrafts();
   $('#permission-caption').textContent = chat?.grants?.length ? `${chat.grants.length} chat permission${chat.grants.length === 1 ? '' : 's'} enabled` : 'Actions ask for approval';
-  renderNavigation(); renderTranscript(); renderActivity(); renderApprovals(); renderVoice();
+  renderNavigation(); renderTranscript(); renderActivity(); renderApprovals(); renderVoice(); renderComposerControls();
+}
+function renderComposerControls() {
+  const run = latestRun(state, currentChat()?.id), metrics = streams.get(run?.id)?.metrics || run?.modelCalls?.at(-1)?.metrics;
+  chatControls.setContext(state, metrics, isActive(run));
 }
 function renderNavigation() {
   const nav = $('#project-list'); nav.replaceChildren();
-  if (!state.projects.length) nav.append(el('p', 'subtle-empty', 'Add a folder to start your first project.'));
-  for (const project of state.projects) {
+  if (!state.projects.some(project => !project.archived)) nav.append(el('p', 'subtle-empty', 'Add a folder to start your first project.'));
+  for (const project of state.projects.filter(project => !project.archived)) {
     const group = el('div', 'project-group');
     const heading = button('', () => selectChat(null, project.id), 'project-button');
     heading.append(icon('folder'), el('span', '', project.name)); heading.title = project.path; group.append(heading);
+    navigationMenu.bind(heading, 'project', project.id);
     const chats = visibleChats(state, project.id).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     for (const chat of chats) {
       const link = button('', () => selectChat(chat.id), `chat-nav${chat.id === selectedChatId ? ' selected' : ''}${chat.parentChatId ? ' child' : ''}`);
       link.append(el('span', 'chat-name', `${chat.parentChatId ? '↳ ' : ''}${chat.title}`)); link.title = chat.title;
+      navigationMenu.bind(link, 'chat', chat.id);
       if (chat.id === selectedChatId) link.setAttribute('aria-current', 'page');
       if (isActive(latestRun(state, chat.id))) { const dot = el('span', 'status-dot'); dot.setAttribute('aria-label', 'Running'); link.append(dot); }
       group.append(link);
@@ -137,12 +156,13 @@ function renderNavigation() {
 function renderTranscript() {
   const transcript = $('#transcript'); const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 100;
   const previousScroll = transcript.scrollTop;
+  transcript.querySelector('.run-activities')?.remove();
   const chat = currentChat(); const messages = (chat?.messages || []).filter(message => message.role !== 'system');
   const identity = chat?.id || `new:${currentProject()?.id || ''}`;
   if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); transcriptChatId = identity; }
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
-    const welcome = el('div', 'welcome'); welcome.append(el('div', 'welcome-symbol', 'f'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
+    const welcome = el('div', 'welcome'); welcome.append(wordmark('welcome-wordmark'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
     welcome.append(el('p', '', currentProject() ? `Start a conversation in ${currentProject().name}. Faber can explore files, run tools, and bring in other agents.` : 'Choose a project folder, connect a model, and work with Faber on your own computer.'));
     if (!currentProject()) welcome.append(button('Add a project', showProjectForm, 'button primary'));
     else {
@@ -165,13 +185,13 @@ function renderTranscript() {
     if (entry.node !== cursor) transcript.insertBefore(entry.node, cursor);
     cursor = entry.node.nextSibling;
   }
-  const run = latestRun(state, chat?.id); const text = streamText(streams.get(run?.id)?.text, run, messages);
+  const run = latestRun(state, chat?.id);
   transcript.querySelector('.run-note')?.remove();
   renderStream();
+  if (chat) transcript.append(runActivity.render(state, chat.id));
   if (run) {
     const note = el('div', 'run-note');
-    if (isActive(run)) note.append(el('span', '', run.status === 'waiting_approval' ? 'Waiting for your approval' : text ? 'Writing…' : 'Working…'));
-    else if (['canceled', 'interrupted', 'failed'].includes(run.status)) {
+    if (['canceled', 'interrupted', 'failed'].includes(run.status)) {
       note.append(el('span', '', run.error || (run.status === 'interrupted' ? 'This run was interrupted. Review the history before continuing.' : `Run ${run.status}.`)));
       note.append(button('Continue', () => sendText('Continue from where you stopped. Check the current state before repeating any actions.')));
     }
@@ -310,7 +330,7 @@ async function sendText(text, withImages = false) {
     await refresh(); if (selectedChatId === target.id) $('#transcript').scrollTop = $('#transcript').scrollHeight;
   } finally { sending = false; render(); }
 }
-function modal(title) { $('#modal-title').textContent = title; const body = $('#modal-body'); body.replaceChildren(); if (!$('#modal').open) $('#modal').showModal(); return body; }
+function modal(title) { navigationMenu.close(); modalReturnFocus = undefined; $('#modal').classList.remove('delete-modal'); $('#modal-title').textContent = title; const body = $('#modal-body'); body.replaceChildren(); if (!$('#modal').open) $('#modal').showModal(); return body; }
 function closeModal() { $('#modal').close(); }
 function field(labelText, value = '', type = 'text', hint = '') {
   const wrapper = el('label', 'form-row'); wrapper.append(el('span', '', labelText)); const input = el(type === 'textarea' ? 'textarea' : 'input');
@@ -326,6 +346,37 @@ function checkedRow(label, checked, description) {
   const input = el('input'); input.type = 'checkbox'; input.checked = checked; wrapper.append(text, input); return { wrapper, input };
 }
 function actions(...buttons) { const footer = el('div', 'form-actions'); footer.append(...buttons); return footer; }
+async function navigationAction(kind, id, action, restoreFocus) {
+  const entity = state[kind === 'chat' ? 'chats' : 'projects'].find(item => item.id === id);
+  if (!entity) throw new Error('This item is no longer available.');
+  if (action === 'delete') { showDelete(kind, entity, restoreFocus); return; }
+  if (action === 'move') { showMoveChat(entity, restoreFocus); return; }
+  await request(`${kind}.${action}`, { [kind === 'chat' ? 'chatId' : 'projectId']: id }); await refresh(); restoreFocus?.();
+}
+function showDelete(kind, entity, restoreFocus) {
+  const body = modal(`Delete ${kind}`); $('#modal').classList.add('delete-modal'); modalReturnFocus = restoreFocus;
+  const warning = el('p', 'delete-warning', deletionWarning(kind)); warning.id = 'delete-warning'; body.append(warning);
+  body.append(el('p', 'delete-target', kind === 'chat' ? entity.title : entity.name));
+  body.append(el('p', 'hint', kind === 'project' ? 'This removes the project and its chat history from Faber. Files in the project folder remain on disk.' : 'This also removes this chat’s child-agent conversations. Files in the project folder remain on disk.'));
+  const cancel = button('Cancel', closeModal); cancel.id = 'cancel-delete';
+  const remove = button('Delete', async () => { if (!state[kind === 'chat' ? 'chats' : 'projects'].some(item => item.id === entity.id)) throw new Error('This item is no longer available.'); await request(`${kind}.delete`, { [kind === 'chat' ? 'chatId' : 'projectId']: entity.id }); await refresh(); closeModal(); }, 'button delete-confirm'); remove.id = 'confirm-delete';
+  body.append(actions(cancel, remove)); cancel.focus();
+}
+function showMoveChat(chat, restoreFocus) {
+  const targetId = chat.id, body = modal('Move chat to project'); modalReturnFocus = restoreFocus;
+  body.append(el('p', 'hint', 'Move this conversation and its child-agent chats together. Stop their active runs first.'));
+  const choices = state.projects.filter(project => !project.archived && project.id !== chat.projectId).map(project => ({ value: project.id, label: project.name }));
+  choices.push({ value: '__new__', label: 'Create a new project…' });
+  const project = selectField('Destination project', choices); project.input.id = 'move-project';
+  const details = el('div', 'form-grid'); const name = field('New project name'), path = field('Folder path', '', 'text', 'Leave blank to choose a folder. Existing files will not be moved.'); name.input.id = 'move-project-name'; path.input.id = 'move-project-path'; details.append(name.wrapper, path.wrapper);
+  const update = () => { details.hidden = project.input.value !== '__new__'; }; project.input.addEventListener('change', update); update(); body.append(project.wrapper, details);
+  const move = button('Move chat', async () => {
+    if (!state.chats.some(item => item.id === targetId)) throw new Error('This chat is no longer available.');
+    let projectId = project.input.value;
+    if (projectId === '__new__') { const created = await request('project.create', { name: name.input.value.trim() || 'Untitled project', ...(path.input.value.trim() ? { path: path.input.value.trim() } : {}) }); if (!created) return; projectId = created.id; }
+    await request('chat.move', { chatId: targetId, projectId }); await refresh(); if (selectedChatId === targetId) selectedProjectId = projectId; closeModal(); notify('Chat moved to the selected project.');
+  }, 'button primary'); move.id = 'confirm-move-chat'; body.append(actions(button('Cancel', closeModal), move)); project.input.focus();
+}
 function showProjectForm() {
   const body = modal('Add a project'); body.append(el('p', 'hint', 'Select a folder for this project. Your chat history stays in Faber’s private local data folder.'));
   const name = field('Project name', '', 'text'); const path = field('Folder path', '', 'text', 'Leave blank to choose a folder in the system picker.'); const form = el('div', 'form-grid'); form.append(name.wrapper, path.wrapper); body.append(form);
@@ -345,7 +396,7 @@ function showSettings() {
   models.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => showProviderForm()))); body.append(models);
   modelsBrowser.mountSettings(body);
   const addons = el('section', 'modal-section'); addons.append(el('h3', '', 'Local addons'), el('p', 'hint', 'Manage addons installed from this computer. No account or online catalog is required.'), button('Manage addons', () => addonManager.show())); body.append(addons);
-  const about = el('section', 'modal-section'); about.append(el('h3', '', 'Faber Harness'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
+  const about = el('section', 'modal-section'); about.append(wordmark('about-wordmark'), el('h3', '', 'Faber b1.1'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
   const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
   about.append(el('p', 'hint', 'Refresh interface keeps chats, downloads, loaded models, and composer drafts running. Backend changes still need Restart app.'), actions(button('Tools & extensions', () => showTools('extensions')), reload, button('Restart app', () => request('app.restart')))); body.append(about);
 }
@@ -364,7 +415,7 @@ function showChatSettings() {
   const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Faber', 'text', 'Used only while the voice assistant is listening for this chat.');
   const enabled = checkedRow('Enable activation for this chat', Boolean(chat.voice?.enabled), 'This phrase can select this chat while assistant mode is running.');
   const speak = checkedRow('Read replies aloud', chat.voice?.speakReplies !== false); speech.append(phrase.wrapper, enabled.wrapper, speak.wrapper); body.append(speech);
-  body.append(actions(button('Archive chat', async () => { await request('chat.archive', { chatId: chat.id }); await refresh(); selectChat(null); closeModal(); }, 'button danger'), button('Save changes', async () => {
+  body.append(actions(button('Archive chat', async () => { await request('chat.archive', { chatId: chat.id }); await refresh(); closeModal(); }), button('Delete chat', () => showDelete('chat', chat), 'button danger'), button('Save changes', async () => {
     if (!title.input.value.trim() || !phrase.input.value.trim()) throw new Error('Enter a chat title and activation phrase.');
     await request('chat.update', { id: chat.id, title: title.input.value.trim(), grants: checks.filter(item => item.input.checked).map(item => item.permission), voice: { ...chat.voice, enabled: enabled.input.checked, phrase: phrase.input.value.trim(), speakReplies: speak.input.checked } }); await refresh(); closeModal();
   }, 'button primary')));
@@ -444,6 +495,7 @@ function cleanSettings() {
   return $('#settings-theme')?.value === (state.settings?.theme || 'system') && !$('#model-hf-token')?.value && typeof downloadDirectory === 'string' && $('#model-download-directory')?.value === downloadDirectory;
 }
 function refreshReason(manual) {
+  if (navigationMenu.isOpen()) return 'Close the chat or project menu before refreshing.';
   if (composing) return 'Finish composing text before refreshing.';
   return refreshBlocker({ sending, pendingReads: imageDrafts.hasPending(), pendingPicker, pendingRequests, modalOpen: $('#modal').open, cleanSettings: cleanSettings(), modelsOpen: document.body.classList.contains('models-open'), voiceActive: !['off', 'error', 'transcript'].includes(voice.status), manual });
 }
@@ -512,6 +564,10 @@ async function initializeInterface() {
   }
 }
 
+const navigationMenu = createNavigationMenu({ el, getState: () => state, onAction: (...args) => act(() => navigationAction(...args)) });
+const runActivity = createRunActivity({ el, button, appendResult, selectChat, resolveApproval: async (id, allow) => { await request('approval.resolve', { id, allow }); await refresh(); } });
+const chatControls = createChatControls({ request, refresh, getChat: currentChat, getDraft: () => $('#prompt').value, modal, closeModal, el, button, field, actions, icon, notify });
+$('#composer-bottom').prepend(chatControls.root);
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings });
 const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
@@ -537,14 +593,14 @@ $('#chat-options').addEventListener('click', showChatSettings);
 $('#chat-title').addEventListener('click', () => { if (currentChat()) showRename('chat', currentChat()); });
 $('#voice-button').addEventListener('click', showVoice);
 $('#close-modal').addEventListener('click', closeModal);
-$('#modal').addEventListener('close', scheduleUIRefresh);
+$('#modal').addEventListener('close', () => { modalReturnFocus?.(); modalReturnFocus = undefined; scheduleUIRefresh(); });
 new MutationObserver(scheduleUIRefresh).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 for (const name of ['click', 'keydown', 'beforeinput', 'input', 'paste', 'change', 'drop']) document.addEventListener(name, event => { if (uiHandoff) { event.preventDefault(); event.stopImmediatePropagation(); } }, true);
 $('#prompt').addEventListener('compositionstart', () => { composing = true; });
 $('#prompt').addEventListener('compositionend', () => { composing = false; scheduleUIRefresh(); });
 $('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; });
 $('#composer').addEventListener('submit', event => { event.preventDefault(); act(() => sendText($('#prompt').value, true)); });
-$('#prompt').addEventListener('input', () => { drafts.set(draftKey(), $('#prompt').value); updateSendButton(); $('#prompt').style.height = 'auto'; $('#prompt').style.height = `${Math.min(180, $('#prompt').scrollHeight)}px`; });
+$('#prompt').addEventListener('input', () => { drafts.set(draftKey(), $('#prompt').value); updateSendButton(); chatControls.render(); $('#prompt').style.height = 'auto'; $('#prompt').style.height = `${Math.min(180, $('#prompt').scrollHeight)}px`; });
 $('#prompt').addEventListener('paste', event => {
   const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);
   if (!files.length) return;
@@ -560,14 +616,15 @@ function toggleActivity(force) { const rail = $('#activity-rail'); const open = 
 $('#toggle-activity').addEventListener('click', () => toggleActivity()); $('#close-activity').addEventListener('click', () => toggleActivity(false));
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
 function handleBridgeEvent(event) {
+    if (event.type === 'localModels') { chatControls.invalidate(); renderComposerControls(); }
     if (event.type === 'models') downloadDirectory = event.state.downloadDirectory;
     if (event.type === 'voice' && uiHandoff) { handoffVoiceEvents.push(event); return; }
     if (event.type === 'state') acceptState(event.state);
     else if (event.type === 'delta') {
-      if (Number.isSafeInteger(event.streamSequence)) { streamVersion = mergeRuntimeStreams(streams, event, streamVersion); if (event.chatId === selectedChatId) renderStream(); return; }
+      if (Number.isSafeInteger(event.streamSequence)) { streamVersion = mergeRuntimeStreams(streams, event, streamVersion); if (event.chatId === selectedChatId) { renderStream(); renderComposerControls(); } return; }
       let stream = streams.get(event.runId);
       if (!stream) { const chat = state.chats.find(item => item.id === event.chatId); stream = { text: '', lastAssistantId: chat?.messages.filter(item => item.role === 'assistant').at(-1)?.id }; streams.set(event.runId, stream); }
-      stream.text += event.text; if (event.chatId === selectedChatId) renderStream();
+      stream.text += event.text; if (event.metrics) stream.metrics = event.metrics; if (event.chatId === selectedChatId) { renderStream(); renderComposerControls(); }
     } else if (event.type === 'approval') act(refresh);
     else if (event.type === 'voice') {
       if (event.status !== 'transcript') voice = event;

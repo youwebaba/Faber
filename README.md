@@ -1,18 +1,20 @@
-# Faber b1.0
+# Faber b1.1
+
+<img src="renderer/assets/faber-wordmark.png" alt="Faber — Maker of Things" width="440">
 
 A Windows desktop workspace for local and API-connected AI agents. Bill's
 October 31, 2026 direction is a fresh harness with a Codex-style interface,
 shared tools, agent delegation, voice, and upgrades the agents can author.
-This application lives beside the original Sophia and the Hermes developer app.
+Faber has its own source, launchers and release lifecycle.
 
-This is Beta 1.0. The [verification record](VERIFICATION.md) distinguishes tested
+This is Beta 1.1. The [verification record](VERIFICATION.md) distinguishes tested
 behavior from remaining hardware and release checks.
 
 ## Beta desktop release
 
-The b1.0 installer installs **Faber.exe** and shortcuts without a terminal window.
+The b1.1 installer installs **Faber.exe** and shortcuts without a terminal window.
 It includes Electron and a local model runner with CPU, CUDA and Vulkan backends;
-model weights are downloaded separately. Existing `SophiaHarness` profile data
+model weights are downloaded separately. Existing b1 profile data
 and the selected model library remain in their original locations.
 
 **Models** provides a grid of local variants and download cards. Click a card for
@@ -32,6 +34,12 @@ There is no new harness context or turn limit.
 **Addons** manages local feature packages and their tools/buttons. See
 [ADDONS.md](ADDONS.md) for the import format, trust model, reset/removal and
 AI-authoring contract. Online addon sharing and OTA updates are not included.
+
+b1.1 adds composer context-size/usage controls, TPS and a per-chat thinking
+toggle, sidebar chat/project menus, and expandable live run activity. See
+[CHAT_CONTROLS.md](CHAT_CONTROLS.md) for supported providers and behavior.
+[Lightpanda](LIGHTPANDA.md) is the first bundled removable addon, with setup for
+its own WSL2 browser runtime. Its tools use the same agent permission system.
 
 The installed base seeds an editable, versioned workbench for reviewed core
 self-upgrades. A subsequent installer preserves the existing profile and addons,
@@ -86,8 +94,8 @@ check does not prove inference access or task quality.
 
 The harness sends full conversation text and tool results without its former
 character/message budget or turn-count cutoff. Model/provider context limits
-still apply, and sending more history can increase API usage. Ollama uses its
-server/model context configuration. Stop remains available, and the existing
+still apply, and sending more history can increase API usage. Context selection
+configures supported runtimes without trimming history. Stop remains available, and the existing
 run timeout (ten minutes by default) still applies.
 
 Chat and agent inspection tools return message/result references instead of
@@ -125,7 +133,7 @@ selection. The **Download** button starts a background transfer. **Downloads &
 library** shows progress, bytes per second, destination, errors and Cancel.
 
 In **Settings → Model downloads**, choose the destination for future downloads.
-The default is `%LOCALAPPDATA%\SophiaHarness\models`. Existing files and active
+For new profiles the default is `%LOCALAPPDATA%\Faber\models`. Existing files and active
 transfers stay in their original folder. An optional Hugging Face read token is
 stored using the desktop's encrypted secret store; accept gated-model terms on
 Hugging Face before downloading restricted files.
@@ -206,7 +214,7 @@ uses the same UI-versus-backend activation rules. If a broken version cannot
 open, close the app and run:
 
 ```powershell
-.\Start-Sophia-Harness.ps1 -RollbackLast
+.\Start-Faber.ps1 -RollbackLast
 ```
 
 The recovery entry point does not import the potentially broken application.
@@ -226,7 +234,7 @@ draft backup and is cleared when the desktop process exits.
 
 ## Access and privacy
 
-Runtime data belongs under `%LOCALAPPDATA%\SophiaHarness`, outside the checkout
+New runtime profiles belong under `%LOCALAPPDATA%\Faber`, outside the checkout
 and OneDrive. API keys belong in the desktop's encrypted secret store; snapshots,
 tool metadata and source control must never contain them. The microphone starts
 off. Voice mode must show its actual listening or error status; assistant mode
@@ -247,5 +255,5 @@ can be tested; passing tests does not make arbitrary generated code safe.
 - [VERIFICATION.md](VERIFICATION.md): integrated evidence and limitations.
 - [HUGGINGFACE.md](HUGGINGFACE.md): model browser, downloads and agent tools.
 
-No existing Sophia data, credentials, startup configuration, devices or model
-routes are migrated by installing this separate application.
+Upgrades retain an existing b1 profile in place, including its chats, credentials,
+settings and model routes. Other applications' data and launchers are separate.

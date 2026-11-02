@@ -5,7 +5,7 @@ Add-Type -AssemblyName System.Drawing
 Add-Type 'using System; using System.Runtime.InteropServices; public class FixtureDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h,int mode); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }'
 [void][FixtureDpi]::SetProcessDPIAware()
 $form=[Windows.Forms.Form]::new()
-$form.Text='Sophia Harness isolated native fixture'
+$form.Text='Faber isolated native fixture'
 $form.Size=[Drawing.Size]::new(480,200)
 $form.StartPosition='CenterScreen'
 $form.TopMost=$true

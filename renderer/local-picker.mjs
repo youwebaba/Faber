@@ -41,7 +41,7 @@ export function localSelection(state, choice, provider) {
   return { canStart: !loaded, canStop: loaded, canUse: true, providerId: provider?.id, model: choice.id, note: loaded ? 'Loaded in Ollama.' : choice.reason || 'Installed in Ollama; not currently loaded.' };
 }
 
-export function createLocalPicker({ request, subscribe, el, onChange, onManagedProvider }) {
+export function createLocalPicker({ request, subscribe, el, onChange, onManagedProvider, getContextTokens = () => null }) {
   const root = el('section', 'local-model-picker'); root.hidden = true;
   const label = el('label', 'form-row'); label.append(el('span', '', 'Local model'));
   const select = el('select'); select.id = 'chat-local-model'; label.append(select);
@@ -102,7 +102,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     const choice = selected(); if (!choice) return;
     if (type === 'start' && choice.source === 'download' && hardware.isDirty()) { showError('Save hardware settings before starting this model.'); return; }
     const requestProvider = provider; const value = select.value; const epoch = connectionEpoch;
-    const params = choice.source === 'download' ? type === 'start' ? { modelId: choice.id } : {} : { providerId: requestProvider.id, model: choice.id };
+    const params = choice.source === 'download' ? type === 'start' ? { modelId: choice.id, contextTokens: getContextTokens() } : {} : { providerId: requestProvider.id, model: choice.id };
     const token = { value, type, label: type === 'start' ? 'Starting model…' : 'Stopping model…' }; operation = token; showError(''); render();
     try {
       const result = await request(`localModels.${type}`, params);

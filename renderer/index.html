@@ -10,12 +10,13 @@
   <link rel="stylesheet" href="connections.css">
   <link rel="stylesheet" href="chat-media.css">
   <link rel="stylesheet" href="faber.css">
+  <link rel="stylesheet" href="chat-controls.css">
   <script type="module" src="app.mjs"></script>
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
-      <div class="brand-row"><span class="brand-mark" aria-hidden="true">f</span><span class="brand">Faber</span><span class="build-label">b1.0</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
+      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.png" alt=""><span class="brand">Faber</span><span class="build-label">b1.1</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
       <button id="new-chat" class="nav-button new-chat" data-icon="compose">New chat <kbd>Ctrl N</kbd></button>
       <button id="open-tools" class="nav-button" data-icon="tools">Tools & extensions</button>
       <button id="open-models" class="nav-button" data-icon="models">Models</button>
@@ -50,6 +51,9 @@
                 <button type="button" id="model-picker" class="model-picker" title="Choose a model or add an API connection"><span class="model-choice"><span id="provider-label">No connection</span><span id="model-label">Choose a model</span></span><span aria-hidden="true">⌄</span></button>
                 <div class="composer-spacer"></div>
                 <button type="button" id="voice-button" class="icon-button" aria-label="Voice controls" title="Voice controls" data-icon="mic"></button>
+              </div>
+              <div id="composer-bottom" class="composer-bottom">
+                <div class="composer-spacer"></div>
                 <button type="button" id="stop-run" class="send-button" aria-label="Stop run" title="Stop run" data-icon="stop" hidden></button>
                 <button type="submit" id="send-message" class="send-button" aria-label="Send message" title="Send message" data-icon="arrow"></button>
               </div>

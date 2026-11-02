@@ -28,8 +28,8 @@ export async function runDesktopSmoke({window,runtime,chat,dataDir,live=false}){
     assert.equal(finished.status,'completed',finished.error);
     for(const name of ['project_list','files_read'])assert.ok(finished.toolEvents.some(e=>e.name===name&&e.status==='completed'),`Missing completed ${name}`);
     const reply=(await state()).chats.find(c=>c.id===chat.id).messages.findLast(m=>m.role==='assistant'&&m.runId===started.id&&m.content)?.content;
-    assert.ok(reply?.includes('Sophia Harness isolated smoke fixture'),'Reply should quote real fixture content');
-    await until(()=>js(`document.querySelector('#transcript').innerText.includes('Sophia Harness isolated smoke fixture')`),'render real assistant reply');
+    assert.ok(reply?.includes('Faber isolated smoke fixture'),'Reply should quote real fixture content');
+    await until(()=>js(`document.querySelector('#transcript').innerText.includes('Faber isolated smoke fixture')`),'render real assistant reply');
     checks.push('DOM send → actual loopback qwen3.5:9b → project_list/files_read → rendered verified reply');
     await theme('dark');await theme('light');
     let deltaRun;const unsubscribe=runtime.subscribe(event=>{if(event.type==='delta'&&event.chatId===chat.id&&event.runId!==started.id)deltaRun=event.runId;});
