@@ -7,6 +7,25 @@ history and the local release archive.
 
 ## b1.1 — November 2, 2026
 
+### Transparent-logo rebuild
+
+The user-approved SVG originals now supply the UI, transparent PNG compatibility
+assets and seven-size Windows icon. Only the black background rectangles were
+removed; the orange paths retain their original geometry and use a subtle shadow.
+Application and installer versions remain `1.1.0-beta.1` / `1.1.0.1`.
+
+The rebuilt source suite passed **228 checks with one optional native-input
+fixture skipped (229 total)**, and the baseline Electron smoke passed. SVG
+rasterization verified transparent corners. Same-version refresh checks covered
+original-file backups, customized-file preservation, repeated startup, concurrent
+edits and linked directories. An isolated copy of the previous b1.1 workbench
+refreshed all eight branding files while retaining its core source. Installer
+build and packaged verification results are recorded separately in the local
+`release/` artifact reports. The installed user session is not modified by these
+checks.
+
+### Initial b1.1 delivery
+
 Branch `codex/b1.1-chat-controls` starts from b1 source
 `e28b28961ec824fd08010cd8de56a0a179648aaf`. Implementation includes composer
 context controls/TPS/thinking, sidebar lifecycle menus, inline activity,

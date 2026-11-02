@@ -41,8 +41,11 @@ source-launched Faber and installed Faber concurrently against the same profile.
 Each new internal application version seeds its own editable workbench. Older
 workbenches and approved core modifications are retained, but are not automatically
 merged into a new base. Addons remain in the shared profile. Reinstalling the same
-version preserves its existing workbench; release maintainers must increment
-the internal version whenever shipped content changes.
+version preserves its existing workbench. The b1.1 transparent-logo rebuild is a
+scoped exception: it refreshes only unchanged original branding files, adds the
+SVG assets, and backs up replaced files in `.faber-branding-backup` inside the
+workbench. Customized files stay intact; `.faber-branding-refresh.json` records
+which files were preserved. Other content changes require a new internal version.
 
 Uninstall removes application files and shortcuts; it retains profile, model and
 workbench data. Addon removal/reset is described in [ADDONS.md](ADDONS.md).
@@ -71,6 +74,8 @@ npm ci
 npm exec -- install-electron
 npm run prepare:runtime
 node scripts/prepare-lightpanda.mjs
+& .\node_modules\.bin\electron.cmd build/render-logos.cjs
+powershell -NoProfile -File build/make-icon.ps1
 npm test
 npm run build:installer
 ```
@@ -81,6 +86,10 @@ Preparation and packaging reject differing or extra binaries. The runtime is
 not downloaded implicitly. Maintainers must review compatible binaries and
 licenses before deliberately recording a new runtime lock. Generated dependencies,
 weights, local data, `.runtime` and `release` stay outside Git.
+
+The supplied SVGs in `renderer/assets/` are the logo masters. Rendering them
+regenerates the transparent PNG compatibility assets; the icon script then
+builds the Windows ICO with the same transparency and subtle shadow.
 
 Lightpanda preparation retrieves the pinned upstream Linux binary, matching
 source, minimal Linux root filesystem and certificate bundle identified in

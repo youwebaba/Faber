@@ -35,6 +35,54 @@ test('packaged runner resolves entirely within bundled real resources', () => {
   assert.deepEqual(result.backendDirectories, ['cuda_v13', 'vulkan'].map(name => path.join(root, 'local-runtime', name)));
 });
 
+async function brandingFixture(t) {
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-branding-test-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const bundledSource=path.join(root,'bundle'),workbenchRoot=path.join(root,'workbench'),version='1.1.0-beta.1';
+  await fs.mkdir(path.join(bundledSource,'renderer/assets'),{recursive:true});await fs.mkdir(path.join(bundledSource,'core'));
+  const original=await fs.readFile(new URL('./fixtures/b1.1-original-branding.css',import.meta.url));
+  await fs.writeFile(path.join(bundledSource,'renderer/faber.css'),original);await fs.writeFile(path.join(bundledSource,'renderer/app.mjs'),'custom active renderer code');await fs.writeFile(path.join(bundledSource,'core/runtime.mjs'),'custom core code');
+  const options={bundledSource,workbenchRoot,version},sourceDir=await prepareWorkbench(options);
+  await fs.writeFile(path.join(bundledSource,'renderer/faber.css'),'/* transparent branding */');await fs.writeFile(path.join(bundledSource,'renderer/app.mjs'),'incoming renderer code');
+  for(const name of ['faber-symbol.svg','faber-wordmark.svg'])await fs.writeFile(path.join(bundledSource,'renderer/assets',name),'<svg xmlns="http://www.w3.org/2000/svg"/>');
+  return {root,sourceDir,options,original,refresh:()=>prepareWorkbench(options),report:async()=>JSON.parse(await fs.readFile(path.join(sourceDir,'.faber-branding-refresh.json'),'utf8'))};
+}
+
+test('same b1.1 branding refresh backs up only known originals, preserves custom code and is idempotent',async t=>{
+  const f=await brandingFixture(t);assert.equal(await f.refresh(),f.sourceDir);
+  assert.equal(await fs.readFile(path.join(f.sourceDir,'renderer/faber.css'),'utf8'),'/* transparent branding */');
+  assert.deepEqual(await fs.readFile(path.join(f.sourceDir,'.faber-branding-backup/renderer/faber.css')),f.original);
+  assert.equal(await fs.readFile(path.join(f.sourceDir,'renderer/app.mjs'),'utf8'),'custom active renderer code');assert.equal(await fs.readFile(path.join(f.sourceDir,'core/runtime.mjs'),'utf8'),'custom core code');
+  assert.match(await fs.readFile(path.join(f.sourceDir,'renderer/assets/faber-symbol.svg'),'utf8'),/^<svg/);
+  assert.equal((await f.report()).files.find(file=>file.path==='renderer/app.mjs').status,'preserved');
+  const writes=[];t.mock.method(fs,'writeFile',async(...args)=>{writes.push(args[0]);throw Error('Unexpected second-start write');});await f.refresh();assert.deepEqual(writes,[]);
+});
+
+test('branding refresh never overwrites a custom asset or a conflicting existing backup',async t=>{
+  const f=await brandingFixture(t),backup=path.join(f.sourceDir,'.faber-branding-backup/renderer/faber.css');
+  await fs.mkdir(path.dirname(backup),{recursive:true});await fs.writeFile(backup,'preexisting backup');await fs.writeFile(path.join(f.sourceDir,'renderer/assets/faber-symbol.svg'),'<svg>custom</svg>');
+  await f.refresh();assert.deepEqual(await fs.readFile(path.join(f.sourceDir,'renderer/faber.css')),f.original);assert.equal(await fs.readFile(backup,'utf8'),'preexisting backup');
+  assert.equal(await fs.readFile(path.join(f.sourceDir,'renderer/assets/faber-symbol.svg'),'utf8'),'<svg>custom</svg>');assert.match((await f.report()).files.find(file=>file.path==='renderer/faber.css').reason,/backup differs/);
+});
+
+test('branding refresh checks the current file again after backup and preserves a concurrent edit',async t=>{
+  const f=await brandingFixture(t),originalWrite=fs.writeFile.bind(fs),target=path.join(f.sourceDir,'renderer/faber.css');
+  t.mock.method(fs,'writeFile',async(filename,...args)=>{await originalWrite(filename,...args);if(String(filename).includes('.faber-branding-backup')&&String(filename).endsWith('faber.css'))await originalWrite(target,'concurrent custom edit');});
+  await f.refresh();assert.equal(await fs.readFile(target,'utf8'),'concurrent custom edit');assert.match((await f.report()).files.find(file=>file.path==='renderer/faber.css').reason,/changed during/);
+});
+
+test('branding refresh rejects linked asset and backup parents without writes outside the workbench',async t=>{
+  const f=await brandingFixture(t),outside=path.join(f.root,'outside');await fs.mkdir(outside);await fs.writeFile(path.join(outside,'sentinel'),'untouched');
+  await fs.rmdir(path.join(f.sourceDir,'renderer/assets'));await fs.symlink(outside,path.join(f.sourceDir,'renderer/assets'),process.platform==='win32'?'junction':'dir');await fs.symlink(outside,path.join(f.sourceDir,'.faber-branding-backup'),process.platform==='win32'?'junction':'dir');
+  await f.refresh();assert.deepEqual(await fs.readdir(outside),['sentinel']);assert.deepEqual(await fs.readFile(path.join(f.sourceDir,'renderer/faber.css')),f.original);
+  assert.match((await f.report()).files.find(file=>file.path==='renderer/assets/faber-symbol.svg').reason,/link or junction/);
+});
+
+test('fresh copies and other application versions do not run the same-version branding repair',async t=>{
+  const f=await brandingFixture(t);const fresh=await prepareWorkbench({...f.options,workbenchRoot:path.join(f.root,'fresh')});
+  await assert.rejects(fs.stat(path.join(fresh,'.faber-branding-refresh.json')),/ENOENT/);
+  const otherOptions={...f.options,version:'1.1.0-beta.2'},other=await prepareWorkbench(otherOptions);await fs.writeFile(path.join(other,'renderer/faber.css'),f.original);await prepareWorkbench(otherOptions);assert.deepEqual(await fs.readFile(path.join(other,'renderer/faber.css')),f.original);
+});
+
 test('runtime packaging rejects unlocked binaries and changed reviewed bytes',async t=>{
   const {createHash}=await import('node:crypto'),{verifyRuntime}=await import('../desktop/runtime-integrity.cjs').then(module=>module.default);
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-runtime-lock-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));

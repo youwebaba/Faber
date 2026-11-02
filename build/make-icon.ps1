@@ -1,13 +1,13 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-# Mechanically fit Bill's opaque artwork; preserve its aspect ratio and black padding.
+# Mechanically fit the supplied artwork; preserve its aspect ratio, alpha and subtle shadow.
 $original = [Drawing.Image]::FromFile((Join-Path $PSScriptRoot '../renderer/assets/faber-symbol.png'))
 $images = @()
 try {
   foreach ($size in @(16, 24, 32, 48, 64, 128, 256)) {
     $bitmap = [Drawing.Bitmap]::new($size, $size)
     $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    $graphics.Clear([Drawing.Color]::Black)
+    $graphics.Clear([Drawing.Color]::Transparent)
     $graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
     $ratio = [Math]::Min($size / $original.Width, $size / $original.Height)
     $width = $original.Width * $ratio; $height = $original.Height * $ratio

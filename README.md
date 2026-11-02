@@ -1,6 +1,6 @@
 # Faber b1.1
 
-<img src="renderer/assets/faber-wordmark.png" alt="Faber — Maker of Things" width="440">
+<img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
 A Windows desktop workspace for local and API-connected AI agents. Bill's
 October 31, 2026 direction is a fresh harness with a Codex-style interface,

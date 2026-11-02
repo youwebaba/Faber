@@ -50,7 +50,7 @@ function icon(name) {
 }
 document.querySelectorAll('[data-icon]').forEach(button => button.prepend(icon(button.dataset.icon)));
 function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
-function wordmark(className) { const image = el('img', `faber-wordmark ${className}`); image.src = 'assets/faber-wordmark.png'; image.alt = 'Faber — Maker of Things'; image.width = 2172; image.height = 724; return image; }
+function wordmark(className) { const image = el('img', `faber-wordmark ${className}`); image.src = 'assets/faber-wordmark.svg'; image.alt = 'Faber — Maker of Things'; image.width = 2172; image.height = 724; return image; }
 function button(text, callback, className = 'button') { const node = el('button', className, text); node.type = 'button'; node.addEventListener('click', async () => { node.disabled = true; try { await act(callback); } finally { node.disabled = false; } }); return node; }
 function readLocal(key) { try { return localStorage.getItem(key); } catch { return null; } }
 function writeLocal(key, value) { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch { /* Selection persistence is optional. */ } }
