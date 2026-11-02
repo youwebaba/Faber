@@ -10,6 +10,35 @@ Faber has its own source, launchers and release lifecycle.
 This is Beta 1.1. The [verification record](VERIFICATION.md) distinguishes tested
 behavior from remaining hardware and release checks.
 
+## Screenshots
+
+Faber b1.1 on Windows, captured in a clean demo profile.
+
+**Workspace** — projects, chats, model selection, attachments, voice, and
+context, token-speed and thinking controls in the composer.
+
+![Faber workspace with project sidebar and chat composer](docs/screenshots/workspace.jpg)
+
+<details>
+<summary>Explore model browsing, context controls and the Lightpanda addon</summary>
+
+**Model browser** — search Hugging Face and compare model parameters, download
+sizes and estimated VRAM requirements.
+
+![Hugging Face model search displayed as a grid of model cards](docs/screenshots/model-browser.jpg)
+
+**Context window** — choose a preset or enter a token capacity for supported
+local runtimes and APIs.
+
+![Context window dialog with token input and size presets](docs/screenshots/context-controls.jpg)
+
+**Lightpanda addon** — the bundled browser exposes setup and browsing actions
+through Tools & extensions.
+
+![Lightpanda Browser addon with setup, browse, read and stop actions](docs/screenshots/lightpanda-addon.jpg)
+
+</details>
+
 ## Beta desktop release
 
 The b1.1 installer installs **Faber.exe** and shortcuts without a terminal window.
