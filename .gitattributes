@@ -1,0 +1,5 @@
+# Bundled addon approvals hash exact bytes; preserve them across checkouts.
+bundled-addons/** -text
+bundled-addons/**/*.mjs text eol=lf
+bundled-addons/**/*.json text eol=lf
+bundled-addons/**/*.md text eol=lf
