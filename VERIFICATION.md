@@ -7,17 +7,19 @@ history and the local release archive.
 
 ## b1.2rc — November 2, 2026
 
-Version `1.2.0-rc.1` / installer build `1.2.0.1` adds chronological live tool
+Version `1.2.0-rc.2` / installer build `1.2.0.2` adds chronological live tool
 activity, detected local model names, automatic shipped-Lightpanda lifecycle
 and the `system_time` read tool. Context and turn limits remain removed.
 
-The complete deterministic suite passed **247 checks with one optional
-native-input fixture skipped (248 total)**. New coverage includes tool-batch
+The complete deterministic suite passed **251 checks with one optional
+native-input fixture skipped (252 total)**. New coverage includes tool-batch
 correlation and legacy histories, stable continuation/child placement, exact
 provider-to-model naming across Stop/restart, actual PC-clock values, narrow
 automatic tool authority with no grant leakage, cancellation before WSL import,
 exclusive browser ownership/idle cleanup, and preservation of disabled, removed
-or customized addons during a verified factory upgrade.
+or customized addons during a verified factory upgrade. Empty or whitespace-only
+final answers now fail with an actionable retry message and retain reported
+token usage; tool-only turns still execute and continue normally.
 
 The baseline Electron smoke passed with 69 registered tools. The b1.2rc smoke
 used the real renderer/preload/host bridge and deterministic loopback providers.
@@ -36,13 +38,23 @@ Disable stopped the owned runtime, uninstall removed it, and restart preserved
 the removal. Existing distros were untouched; the temporary owned distro was
 removed after verification. No inference requests were made.
 
+The first b1.2rc installer was also applied to the user's actual installation.
+All 24 selected profile files were byte-identical before first launch, all 77
+original chat messages remained unchanged after live checks, and both downloaded
+model files retained their sizes and timestamps. The real Qwen3.5 9B Q8 model
+loaded on the RTX 5070 with a 16K context. Current time, automatic Lightpanda
+navigation/idle shutdown/restart, model labels, usage/TPS, thinking controls and
+sidebar Force stop were exercised in a new test chat. Default model thinking
+produced two empty final replies after successful tools; thinking off produced
+visible answers. The blank-reply handling fix prompted the internal rc.2 rebuild
+while the displayed release remains b1.2rc. The new internal version seeds a new
+workbench without overwriting any edited rc.1 source. Final rebuilt-artifact and
+installer checks are recorded beside the artifact in `release/verification/b1.2rc/`.
+
 Lightpanda 1.0.2 allows only one browsing chat at a time. WSL2 must already work;
 this release does not enable Windows features or reboot the PC. Cloud inference,
-voice/native input, broad website compatibility and an NSIS installer upgrade of
-the user's active installation were not tested in this release. The installer
-remains unsigned. Packaged executable and isolated profile-preservation results
-are retained with the artifact in `release/verification/b1.2rc/`; the normal
-installed application and its profile are not changed by these checks.
+voice/native input and broad website compatibility were not tested in this
+release. The installer remains unsigned.
 
 ## b1.1 — November 2, 2026
 

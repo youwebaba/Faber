@@ -2,7 +2,7 @@
   "name": "faber",
   "productName": "Faber",
   "description": "Faber b1.2rc local AI desktop workspace",
-  "version": "1.2.0-rc.1",
+  "version": "1.2.0-rc.2",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -30,7 +30,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "1.2.0.1",
+    "buildVersion": "1.2.0.2",
     "asar": true,
     "directories": {
       "output": "release",

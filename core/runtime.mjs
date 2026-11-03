@@ -205,8 +205,10 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
           if(event.type==='timing'&&Number.isFinite(event.timing?.generationMs)&&event.timing.generationMs>0){measurement.timing.generationMs=event.timing.generationMs;measure();}
           if (event.type === 'tool') { if (calls.length >= 32) throw new Error('Too many tool calls in one turn'); calls.push({ id: event.id || randomUUID(), name: event.name, args: event.args }); }
         }
-        signal.throwIfAborted(); modelCall.status = 'completed';
-      } catch (error) { clearStream(run.id); modelCall.status = signal.aborted ? 'canceled' : 'failed'; if (content) addMessage(chat, 'assistant', content, { status: modelCall.status, runId: run.id, modelCallId: modelCall.id }); throw error; }
+        signal.throwIfAborted();
+        if (!calls.length && !content.trim()) throw new Error('The model returned no visible answer. Retry, or try turning thinking off for this chat.');
+        modelCall.status = 'completed';
+      } catch (error) { clearStream(run.id); modelCall.status = signal.aborted ? 'canceled' : 'failed'; if (content.trim()) addMessage(chat, 'assistant', content, { status: modelCall.status, runId: run.id, modelCallId: modelCall.id }); throw error; }
       finally { modelCall.endedAt = now(); measure();await changed(); }
       signal.throwIfAborted();
       if (new Set(calls.map(call => call.id)).size !== calls.length) throw new Error('Provider returned duplicate tool call IDs');
