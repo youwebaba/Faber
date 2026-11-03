@@ -1,18 +1,18 @@
-# Local addons in Faber b1.1
+# Local addons in Faber b1.2rc
 
 Open **Addons** in the sidebar or **Manage addons** in Settings. Import a local
 folder or a `.faber-addon.json` package. No catalog, publishing, account system,
 online sharing, or automatic addon updates are included in this beta.
 
 [Lightpanda Browser](LIGHTPANDA.md) ships as the first removable addon. Its
-dedicated WSL2 runtime has an explicit setup action. A per-profile installation
+dedicated WSL2 runtime is prepared automatically on first browser use when WSL2 is already available. A per-profile installation
 record respects Disable, Uninstall and manual folder removal across updates.
 Its verified cleanup hook removes the owned runtime before Uninstall or Reset
 data; normal addon preferences otherwise follow the rules below.
 
 Addons are executable trusted JavaScript with the Windows account's authority.
 The native trust prompt covers the exact package hash before importing code.
-Declared tool permissions go through the shared agent approval system, but do
+The exact shipped Lightpanda browser wrappers have narrowly scoped automatic computer/network authority; configuration still requires ordinary approval. Imported or modified addons cannot claim this exception, and no chat grants are added. Other declared tool permissions go through the shared agent approval system, but do
 not restrict what trusted addon JavaScript itself can do. This is not a sandbox.
 Only install code whose source and author you trust. An addon cannot approve
 itself. Package validation, path checks, and hashes are not malware detection.

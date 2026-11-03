@@ -66,6 +66,14 @@ arbitrary executable or path. Ollama selection uses an existing local
 discovered files, managed provider ID and actual lifecycle state. The
 `localModels` event signals changes; callers refresh the selected connection.
 
+Snapshots include `modelLabels: [{providerId, model, displayName, modelId?}]` for the
+exact owned managed connection. The scanner's filename label and model ID are saved
+after a successful load and remain available after Stop or restart; the API model
+alias stays unchanged. The optional `modelId` restores the exact library selection.
+Legacy connections without a saved label resolve only after a scan finds one exact
+alias match. The synchronous manager hook `modelDisplayName(providerId, model)`
+returns that label or `null`; edited endpoints, kinds and models do not inherit it.
+
 `local_models_list`, `local_model_start` and `local_model_stop` expose the same
 manager to agents. Start/Stop require the existing computer permission. Lifecycle changes reject
 active chats using the target model; the runtime also rejects new runs while a

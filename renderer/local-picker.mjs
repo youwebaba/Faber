@@ -1,5 +1,6 @@
 import { formatBytes, requestGate } from './model-helpers.mjs';
 import { createHardwareControls } from './hardware.mjs';
+import { modelDisplayName } from './model-names.mjs';
 
 export const LOCAL_FILES = '__local_files__';
 export function isLocalOllama(provider) {
@@ -12,7 +13,7 @@ export function localChoices(state, provider, configuredModel = '') {
   if (process?.modelId && ['loading', 'ready', 'stopping'].includes(process.status)) {
     const running = choices.find(item => item.id === process.modelId);
     if (!running || running.disabled) {
-      const retained = running || { id: process.modelId, value: `download:${process.modelId}`, source: 'download', group: 'Running local model', label: process.model || 'Current local model' };
+      const retained = running || { id: process.modelId, value: `download:${process.modelId}`, source: 'download', group: 'Running local model', label: modelDisplayName(process.providerId, process.model, state.modelLabels, 'Current local model') };
       Object.assign(retained, { disabled: false, stopOnly: true, label: `${retained.label} — Stop only`, reason: 'The running model files are no longer available in this folder. Stop this process before choosing another model.' });
       if (!running) choices.push(retained);
     }
@@ -39,6 +40,13 @@ export function localSelection(state, choice, provider) {
   }
   const loaded = (state?.loaded || []).includes(choice.id);
   return { canStart: !loaded, canStop: loaded, canUse: true, providerId: provider?.id, model: choice.id, note: loaded ? 'Loaded in Ollama.' : choice.reason || 'Installed in Ollama; not currently loaded.' };
+}
+export function preferredLocalChoice(state, choices, provider, configuredModel, previous) {
+  const configured = state.modelLabels?.find(item => item.model === configuredModel && item.providerId === (provider?.id || state.managedProviderId));
+  const explicit = choices.find(item => item.value === previous) || choices.find(item => item.source === 'installed' && item.id === configuredModel);
+  if (explicit) return explicit;
+  if (configured?.modelId) return choices.find(item => item.source === 'download' && item.id === configured.modelId);
+  return choices.find(item => item.source === 'download' && item.id === state.process?.modelId);
 }
 
 export function createLocalPicker({ request, subscribe, el, onChange, onManagedProvider, getContextTokens = () => null }) {
@@ -73,7 +81,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
         const option = el('option', '', choice.label); option.value = choice.value; option.disabled = Boolean(choice.disabled); groups.get(choice.group).append(option);
       }
     }
-    const current = choices.find(item => item.value === previous) || choices.find(item => item.source === 'installed' && item.id === configuredModel) || choices.find(item => item.source === 'download' && item.id === state.process?.modelId);
+    const current = preferredLocalChoice(state, choices, provider, configuredModel, previous);
     select.value = current?.value || ''; select.disabled = loadingList && !choices.length;
     directory.textContent = state.directory ? `Download folder: ${state.directory}` : 'Download folder is being checked…';
     const choice = selected(); const info = selection();

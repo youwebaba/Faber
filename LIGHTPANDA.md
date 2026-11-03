@@ -1,40 +1,53 @@
 # Lightpanda Browser addon
 
-Faber b1.1 includes Lightpanda 1.0.2 as its first removable bundled addon.
+Faber b1.2rc includes Lightpanda 1.0.2 as its first removable bundled addon.
 It is the real Lightpanda engine. Upstream does not provide a native Windows
 binary; this release runs its Linux x86_64 binary in a dedicated WSL2 distro.
 No Chromium substitution, Docker dependency, browser account, or paid API is used.
 
 ## Setup and browsing
 
-Open Addons, confirm Lightpanda is enabled, then use **Set up Lightpanda (WSL2)**
-in the action list or the `lightpanda_setup` tool. Existing working WSL2 is
-required. Setup imports the bundled Ubuntu Base root filesystem into an owned
-`FaberLightpanda-<profile hash>` distro. It never enables Windows features,
-requests a reboot, installs WSL itself, or reuses another distro. If WSL2 is
-unavailable, the tool reports the actual error and leaves the addon available
-for a later retry. Import is a bounded critical operation: cancellation waits
-for it to settle before removing the owned incomplete runtime.
+The enabled, unchanged shipped addon prepares and starts its dedicated browser
+on the first connect/navigation request. No manual setup or repeated permission
+prompt is needed. Existing working WSL2 is required. Setup imports the bundled
+Ubuntu Base root filesystem into an owned `FaberLightpanda-<profile hash>` distro.
+It never enables Windows features, requests administrator access or a reboot,
+installs WSL itself, or reuses another distro. If WSL2 is unavailable, the tool
+explains the prerequisite and leaves the addon available for a later retry.
+Import is a bounded critical operation: cancellation waits for it to settle
+before removing an owned incomplete runtime. `lightpanda_setup` remains an
+optional diagnostic tool; the former manual Setup action is retired.
 
 Every model and delegated agent sees the same registered tools:
 
 - `lightpanda_status`, `lightpanda_setup`, `lightpanda_configure`, `lightpanda_connect`.
 - `lightpanda_navigate`, `lightpanda_read`, `lightpanda_click`, `lightpanda_type`,
   and `lightpanda_evaluate`.
-- `lightpanda_close` closes this chat's context; `lightpanda_stop` closes all
-  addon pages and stops the dedicated runtime.
+- `lightpanda_close` and `lightpanda_stop` release only the calling chat's page.
+  They never release another chat's page or terminate an external CDP server.
 
-Setup and runtime control require computer permission. Browsing and page
-interaction require network permission; starting the owned browser from a
-browsing tool also requests computer approval. Click, type and evaluate can
-cause real website effects, including submitting forms. Approval is not a
-guarantee that a page is trustworthy. Returned page content is marked untrusted.
+Automatic computer/network authority applies only to the exact shipped
+Lightpanda wrappers, verified factory digest and active approval record. The
+host checks their registered execute functions; an imported addon cannot claim
+this authority by choosing a matching name. Disable, reload or uninstall revoke
+it immediately. No chat or run grants are added. Configuration and arbitrary
+imported/modified tools retain normal permission approval. Click, type and
+evaluate can cause real website effects, including submitting forms. Returned
+page content is marked untrusted.
 
-Each chat gets its own browser context. The CDP endpoint binds to loopback only;
-no public browser server is started. The browser runs as an unprivileged Linux
-user, with Windows drive automount and Windows interop disabled and Lightpanda
-telemetry disabled. This does not turn trusted addon JavaScript into a sandbox.
-Other programs under the same Windows account can still reach loopback services.
+Lightpanda 1.0.2 permits one browser context per server. Faber gives that context
+exclusively to one chat at a time: a second chat receives a clear busy/retry error
+before any context mutation. It cannot reuse the first chat's cookies or page.
+A running owner holds its lease; completion, failure or cancellation releases
+the run lease. After 30 seconds without a remaining owner run or browser use,
+Faber disposes the page and stops its owned browser. Explicit release permits
+immediate acquisition by another chat; the next request starts automatically.
+Idle release clears browser state, so a later run may need to navigate again.
+
+The CDP endpoint binds only to loopback. The browser runs as an unprivileged
+Linux user, with Windows drive automount, Windows interop and Lightpanda telemetry
+disabled. This does not sandbox trusted addon JavaScript. Other programs under
+the same Windows account can still reach loopback services.
 
 An optional existing Lightpanda server can be selected with
 `lightpanda_configure` using mode `cdp` and an uncredentialed loopback `ws://`
@@ -64,7 +77,7 @@ Bundled installation is recorded once per profile. Disable, Uninstall and manual
 folder removal survive restart and subsequent installers; they do not silently
 reinstall the feature. The installer retains dormant factory archives and source
 notices under its resources directory. Those archives do not start a browser or
-recreate an uninstalled addon. Ordinary imported addons retain their 32 MiB limit.
+recreate an uninstalled addon. This installer can replace only the exact prior shipped addon digest; disabled stays disabled, removed stays removed, and custom files are preserved. Ordinary imported addons retain their 32 MiB limit.
 
 ## Scope and limitations
 
@@ -110,7 +123,7 @@ components. Faber does not claim ownership of Lightpanda, Ubuntu or Mozilla code
 uses transport and process fixtures without creating a distro. The explicit
 opt-in command below creates a unique temporary profile and owned WSL runtime,
 serves a controlled page only on the WSL virtual adapter, exercises real CDP
-navigation/type/click/read/evaluate, verifies Disable and Uninstall, and writes
+automatic first use with zero approval prompts, navigation/type/click/read/evaluate, exclusive chat ownership, Disable and Uninstall, and writes
 an isolated report. It never uses normal browser/profile data or model inference.
 
 ```powershell

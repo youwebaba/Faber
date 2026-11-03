@@ -27,10 +27,11 @@ const smokeFeatures=process.argv.includes('--smoke-features');
 const smokeLocalModels=process.argv.includes('--smoke-local-models');
 const smokeUIReload=process.argv.includes('--smoke-ui-reload');
 const smokeB11=process.argv.includes('--smoke-b11');
+const smokeB12=process.argv.includes('--smoke-b12');
 const smokeInstalled=process.argv.includes('--smoke-installed');
 const smokeFaber=process.argv.includes('--smoke-faber');
 const smokePackage=process.argv.includes('--smoke-package');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11;
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12;
 const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):getProfileDirectory(process.env.LOCALAPPDATA??app.getPath('appData')));
 await fs.mkdir(dataDir,{recursive:true});
 app.setPath('userData',dataDir);
@@ -64,6 +65,8 @@ const host={
     try{return await voice.action(action,args,signal);}finally{if(guarded)voiceOperations--;}
   },
   providerControls:(providerId,model)=>localModels?.providerControls(providerId,model),
+  modelDisplayName:(providerId,model)=>localModels?.modelDisplayName(providerId,model),
+  isAutomaticTool:(tool,permission)=>extensions?.isAutomaticTool(tool,permission)===true,
   assertProviderAvailable:(providerId,model,options)=>localModels?.assertProviderAvailable(providerId,model,options),
   reloadExtensions:()=>extensions.reload(),
   async restart(){if(!await confirm('Restart Faber? Running chats will stop.'))return {restarting:false};app.relaunch();app.quit();return {restarting:true};}
@@ -91,7 +94,7 @@ const featureSmoke=smokeFeatures?await import('../test/desktop-features-smoke.mj
 if(featureSmoke)featureFixture=await featureSmoke.createFeatureSmoke(dataDir);
 const modelSmoke=smokeModels||smokeFaber?await import('../test/desktop-models-smoke.mjs'):null;
 modelHub=await createModelHub({dataDir,sourceDir,host,emit:event=>runtime.emit(event),...(reloadFixture?{fetchImpl:reloadFixture.fetchImpl}:featureFixture?{fetchImpl:featureFixture.fetchImpl}:modelSmoke?{fetchImpl:modelSmoke.createHubSmokeFetch()}: {})});
-const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber?await import('../test/desktop-local-models-smoke.mjs'):null;
+const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber||smokeB12?await import('../test/desktop-local-models-smoke.mjs'):null;
 const localFixture=localSmoke?await localSmoke.createLocalModelSmoke(dataDir,modelHub):null;
 if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
 localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options});
@@ -105,7 +108,7 @@ let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 runtime.subscribe(emit);
-window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:'Faber b1.1',icon:path.join(sourceDir,'build','faber.ico'),backgroundColor:'#101114',show:!smoke,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
+window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:'Faber b1.2rc',icon:path.join(sourceDir,'build','faber.ico'),backgroundColor:'#101114',show:!smoke,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
 window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
 window.webContents.on('will-navigate',event=>event.preventDefault());
 window.webContents.on('will-attach-webview',event=>event.preventDefault());
@@ -133,7 +136,7 @@ if(smoke){
     if(!result.bridge||!result.projects||!result.chats||result.nodeExposed)throw new Error('Smoke bridge check failed');
     await new Promise(resolve=>setTimeout(resolve,500));
     const screenshot=path.join(dataDir,'smoke.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-    const flows=smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
+    const flows=smokeB12?await(await import('../test/desktop-b12-smoke.mjs')).runB12Smoke({window,runtime,chat,dataDir,localModels,fixture:localFixture}):smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
     console.log(JSON.stringify({ok:true,dataDir,screenshot,...result,...flows}));
     app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}

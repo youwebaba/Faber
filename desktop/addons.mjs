@@ -112,8 +112,17 @@ export async function readAddonPackage(filename) {
 
 export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit = () => {},loadTimeoutMs=10000,bundledSource,bundledResources={}}) {
   const directory = path.join(dataDir,'addons'), storage = path.join(dataDir,'addon-manager'), dataRoot = path.join(dataDir,'addon-data');
-  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map(), bundledSeen = new Set();
-  let rows = [], warnings = [], initialized = false, legacyMigrated = false, registryInitialized = false, queue = Promise.resolve(), restartRequired = false, publishedSnapshot, savedState;
+  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map(), bundledSeen = new Set(), factoryDigests = new Map();
+  const automaticNames = new Set(['lightpanda_status','lightpanda_setup','lightpanda_connect','lightpanda_navigate','lightpanda_read','lightpanda_click','lightpanda_type','lightpanda_evaluate','lightpanda_close','lightpanda_stop']);
+  const unsubscribeRuns=runtime.subscribe?.(event=>{
+    if(event.type!=='state')return;
+    const ongoing=new Set(event.state.runs.filter(run=>['running','waiting_approval'].includes(run.status)).map(run=>run.id));
+    for(const entry of active.values())for(const runId of entry.runs.keys())if(!ongoing.has(runId)){
+      entry.runs.delete(runId);
+      if(entry.automatic&&typeof entry.module.releaseRun==='function')Promise.resolve(entry.module.releaseRun(runId)).catch(error=>{warnings.push(`Lightpanda release: ${error.message}`);});
+    }
+  });
+  let rows = [], warnings = [], initialized = false, legacyMigrated = false, registryInitialized = false, queue = Promise.resolve(), restartRequired = false, publishedSnapshot, savedState, automaticPaused=false;
   const snapshot = () => ({directory,addons:structuredClone(rows),warnings:[...warnings],restartRequired});
   const publish = () => {const state=snapshot(),serialized=JSON.stringify(state);if(serialized===publishedSnapshot)return;publishedSnapshot=serialized;try {emit({type:'addons',state});} catch { /* UI lifetime is independent of host state. */ }};
   const persist = async() => {const text=JSON.stringify({schemaVersion:1,legacyMigrated,records:Object.fromEntries(records),bundledSeen:[...bundledSeen]},null,2);if(text===savedState)return;await atomicWrite(stateFile,text);savedState=text;};
@@ -144,6 +153,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
   async function release(entry) {
     if (!entry) return;
     entry.controller.abort(new Error('Addon disabled')); restartRequired = true;
+    entry.runs.clear();
     let timer;
     const cleanup = Promise.allSettled([...entry.pending, ...(typeof entry.module.deactivate === 'function' ? [Promise.resolve().then(() => entry.module.deactivate(entry.context))] : [])]);
     try {await Promise.race([cleanup,new Promise(resolve => {timer=setTimeout(resolve,entry.context?.resources?120000:1000);})]);} finally {clearTimeout(timer);}
@@ -167,9 +177,10 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     if (candidate.tools.some(tool => !pkg.manifest.permissions.includes(tool.permission))) throw new Error('Addon tools request undeclared permissions');
     const privateData = await containedPath(dataRoot,pkg.manifest.id,{missing:true});
     const context={id:pkg.manifest.id,dataDir:privateData,resources:bundledResources[pkg.manifest.id]};
-    const entry = {module,context,metadata:{...candidate.metadata,name:pkg.manifest.name,description:pkg.manifest.description || ''},digest:pkg.digest,controller:new AbortController(),pending:new Set()};
+    const entry = {module,context,metadata:{...candidate.metadata,name:pkg.manifest.name,description:pkg.manifest.description || ''},digest:pkg.digest,controller:new AbortController(),pending:new Set(),runs:new Map(),automatic:pkg.manifest.id==='lightpanda'&&factoryDigests.get('lightpanda')===pkg.digest};
     entry.tools = candidate.tools.map(tool => ({...tool,execute:async(args,ctx) => {
       const signal = ctx.signal ? AbortSignal.any([ctx.signal,entry.controller.signal]) : entry.controller.signal; signal.throwIfAborted();
+      if(entry.automatic&&ctx.runId)entry.runs.set(ctx.runId,ctx.chat?.id);
       const result = Promise.resolve().then(async() => {signal.throwIfAborted(); await fs.mkdir(privateData,{recursive:true}); return tool.execute(args,{...ctx,signal,addon:context});});
       entry.pending.add(result);result.then(()=>entry.pending.delete(result),()=>entry.pending.delete(result));
       return untilAborted(result,signal);
@@ -201,17 +212,17 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     for(const [id,entry] of active) if(next.get(id)!==entry) await release(entry);
     active.clear(); for(const [id,entry] of next) active.set(id,entry);
     for(const id of records.keys()) if(!found.has(id)) records.delete(id);
-    rows=updated; await persist(); publish(); return snapshot();
+    rows=updated; await persist(); automaticPaused=false; publish(); return snapshot();
   }
   async function trust(pkg,signal) {
     signal?.throwIfAborted();
     if (!await confirm(`Enable addon “${pkg.manifest.name}” ${pkg.manifest.version}?\n\nDeclared tool access: ${pkg.manifest.permissions.join(', ') || 'none'}.\n${pkg.files.size} files, ${pkg.bytes} bytes.\n\nExecutable addons are trusted JavaScript with full access to your Windows account. They are not sandboxed. Only enable code you trust.\n\nSHA-256: ${pkg.digest}`)) throw new Error('Addon activation declined');
     signal?.throwIfAborted();
   }
-  async function installPackage(pkg,signal,{approved=false,imported}={}) {
+  async function installPackage(pkg,signal,{approved=false,imported,enabled=true}={}) {
     await setup(); if(!approved) await trust(pkg,signal); signal?.throwIfAborted();
     const id=pkg.manifest.id, oldRecord=records.get(id), oldEntry=active.get(id), candidate=await load(pkg,imported,signal);
-    const next=new Map(active); next.set(id,candidate);
+    const next=new Map(active); if(enabled)next.set(id,candidate);else next.delete(id);
     const token=crypto.randomUUID(), staging=`staging/${token}`, backup=`replaced/${id}-${token}`;
     const stage=await containedPath(storage,staging,{missing:true}), saved=await containedPath(storage,backup,{missing:true}), target=await containedPath(directory,id,{missing:true});
     let moved=false,installed=false;
@@ -219,8 +230,8 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
       signal?.throwIfAborted(); await writeFiles(stage,pkg.files); await replace(next); signal?.throwIfAborted();
       try {await fs.lstat(target); await fs.mkdir(path.dirname(saved),{recursive:true}); await fs.rename(target,saved); moved=true;} catch(error) {if(error.code!=='ENOENT')throw error;}
       await fs.rename(stage,target); installed=true;
-      records.set(id,{enabled:true,digest:pkg.digest,...(oldRecord?.digest && oldRecord.digest!==pkg.digest ? {previous:oldRecord.digest} : oldRecord?.previous ? {previous:oldRecord.previous} : {})});
-      await persist(); active.set(id,candidate); await release(oldEntry);
+      records.set(id,{enabled,digest:pkg.digest,...(oldRecord?.digest && oldRecord.digest!==pkg.digest ? {previous:oldRecord.digest} : oldRecord?.previous ? {previous:oldRecord.previous} : {})});
+      await persist(); if(enabled)active.set(id,candidate);else active.delete(id); await release(oldEntry);
     } catch(error) {
       if(installed)await removeOwned(directory,id);
       if(moved)await fs.rename(saved,target);
@@ -265,6 +276,17 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
       if(catalog.schemaVersion!==1||!Array.isArray(catalog.addons))throw new Error('Invalid bundled addon catalog');
       for(const item of catalog.addons) {
         if(!idPattern.test(item.id)||!/^[a-f0-9]{64}$/.test(item.digest))throw new Error('Invalid bundled addon identity');
+        if(item.replaces!==undefined&&(!Array.isArray(item.replaces)||item.replaces.some(value=>!/^[a-f0-9]{64}$/.test(value))))throw new Error('Invalid bundled replacement hashes');
+        if(item.id==='lightpanda') {
+          const factory=await readFolder(path.join(bundledSource,item.id),item.id);
+          if(factory.digest!==item.digest)throw new Error('Installer-owned addon hash differs');
+          factoryDigests.set(item.id,item.digest);
+          const previous=records.get(item.id);
+          if(previous&&previous.digest!==item.digest&&item.replaces?.includes(previous.digest))try{
+            const installed=await readFolder(path.join(directory,item.id),item.id);
+            if(installed.digest===previous.digest)await installPackage(factory,undefined,{approved:true,enabled:previous.enabled});
+          }catch(error){warnings.push(`Bundled Lightpanda update preserved existing files: ${error.message}`);}
+        }
         if(bundledSeen.has(item.id))continue;
         bundledSeen.add(item.id);await persist();
         if(records.has(item.id)||await fs.lstat(path.join(directory,item.id)).then(()=>true,()=>false))continue;
@@ -301,6 +323,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
   }
   async function uninstall(id,signal) {
     signal?.throwIfAborted();
+    active.get(id)?.controller.abort(new Error('Addon uninstalling'));
     const record=records.get(id);let module=active.get(id)?.module;
     if(!module&&record?.digest)try{const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);if(pkg.digest!==record.digest)throw new Error('Approved uninstall hook changed on disk');module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);}catch(error){warnings.push(`Addon ${id}: cleanup hook skipped because approved cache was unavailable or invalid (${error.message}). Only addon files will be removed; check any external runtime manually.`);}
     await disable(id,signal);signal?.throwIfAborted();
@@ -344,11 +367,15 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     return ({'addons.enable':enable,'addons.disable':disable,'addons.uninstall':uninstall,'addons.reset':reset,'addons.rollback':rollback})[method](args.id,signal);
   }
   const serial = fn => (...args) => {const result=queue.catch(()=>{}).then(()=>fn(...args));queue=result;return result;};
+  let automaticFences=0;
+  const fenced=fn=>(...args)=>{automaticFences++;return serial(fn)(...args).finally(()=>{automaticFences--;});};
+  const queuedRequest=serial(request);
   return {
-    initialize:serial(initialize), request:serial(request), install:serial(legacyInstall),
+    isAutomaticTool(tool,permission){const entry=active.get('lightpanda'),record=records.get('lightpanda');return !automaticFences&&!automaticPaused&&!!entry&&record?.enabled&&record.digest===entry.digest&&entry.automatic&&!entry.controller.signal.aborted&&['computer','network'].includes(permission)&&automaticNames.has(tool.name)&&entry.tools.some(item=>item.name===tool.name&&item.execute===tool.execute&&item.permission===tool.permission);},
+    initialize:serial(initialize), request:(method,args,signal)=>args?.id==='lightpanda'&&['addons.disable','addons.uninstall','addons.reset','addons.rollback'].includes(method)?fenced(request)(method,args,signal):queuedRequest(method,args,signal), install:serial(legacyInstall),
     installPath:serial(async(filename,signal)=>{if(!initialized)await initialize();return installPackage(await readAddonPackage(filename),signal);}),
-    reload:serial(refresh), disable:serial(disable),
-    close:serial(async()=>{await replace(new Map());for(const entry of active.values())await release(entry);active.clear();}),
+    reload:fenced(async()=>{automaticPaused=true;return refresh();}), disable:fenced(disable),
+    close:serial(async()=>{automaticPaused=true;unsubscribeRuns?.();await replace(new Map());for(const entry of active.values())await release(entry);active.clear();}),
   };
 }
 

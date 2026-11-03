@@ -1,6 +1,6 @@
-# Installing Faber b1.1
+# Installing Faber b1.2rc
 
-Run `Faber-Setup-b1.1-x64.exe`. This is a per-user Windows x64 installation with
+Run `Faber-Setup-b1.2rc-x64.exe`. This is a per-user Windows x64 installation with
 Desktop/Start menu shortcuts and a normal `Faber.exe`; no terminal needs to stay
 open. Electron and the local model runtime are included. Node.js, npm and Ollama
 are not required to use the installed app's managed GGUF path. Model weights are
@@ -9,8 +9,9 @@ Models, then select **Downloaded models (local)**, Start, and **Use in this chat
 The initial Local Ollama connection is optional and needs a separate Ollama server.
 
 The bundled [Lightpanda addon](LIGHTPANDA.md) uses a dedicated WSL2 distribution.
-Its setup is separate from launching Faber; local chat and model controls do not
-require WSL. The addon can be disabled or uninstalled in Addons. Online addon
+Its verified browser tools set up and start that runtime on first use, then stop
+it after browser sessions are idle. WSL2 must already be available; local chat and
+model controls do not require WSL. The addon can be disabled or uninstalled in Addons. Online addon
 sharing and over-the-air updates are not included.
 
 The beta installer is unsigned. Windows may display an unknown-publisher warning.
@@ -98,7 +99,7 @@ source, minimal Linux root filesystem and certificate bundle identified in
 After deliberately editing a bundled addon's source, review the change and run
 `npm run prepare:addons` to update its shipped approval digest before packaging.
 
-Output is `release\Faber-Setup-b1.1-x64.exe`; the unpacked executable is
+Output is `release\Faber-Setup-b1.2rc-x64.exe`; the unpacked executable is
 `release\win-unpacked\Faber.exe`. Installer revision, appId and versioned workbench
 semantics are tested separately from deterministic unit fixtures. The optional
 live GPU proof requires an existing model and explicit command-line flags; it is

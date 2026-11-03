@@ -16,7 +16,7 @@ export function connectionPayload(values) {
     ...(values.clearKey ? { apiKey: '' } : values.apiKey ? { apiKey: values.apiKey } : {}) };
 }
 
-export function createConnections({ request, refresh, getState, getChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.faber?.subscribe }) {
+export function createConnections({ request, refresh, getState, getChat, getModelLabels = () => [], newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.faber?.subscribe }) {
   let disposePicker = () => {};
   const notice = provider => provider?.kind === 'ollama'
     ? 'Uses your Ollama server with the same Faber tools, approvals, and upgrade controls.'
@@ -93,7 +93,8 @@ export function createConnections({ request, refresh, getState, getChat, newChat
     const body = modal('Model for this chat');
     const connect = button('Add cloud/API connection', () => showForm(undefined, 'openai-responses', true)); connect.id = 'add-cloud-connection';
     body.append(el('p', 'hint', 'Choose a local model or API connection. “Use in this chat” applies to the next run; an active run keeps its current connection.'), connect);
-    const provider = selectField('Connection', [{ value: LOCAL_FILES, label: 'Downloaded models (local)' }, ...state.providers.map(item => ({ value: item.id, label: `${item.name} — ${providerKindLabel(item.kind)}` }))], selected?.id || LOCAL_FILES); provider.input.id = 'chat-connection';
+    const managed = getModelLabels().some(item => item.providerId === selected?.id && item.model === (chat?.model || selected?.model));
+    const provider = selectField('Connection', [{ value: LOCAL_FILES, label: 'Downloaded models (local)' }, ...state.providers.map(item => ({ value: item.id, label: `${item.name} — ${providerKindLabel(item.kind)}` }))], managed ? LOCAL_FILES : selected?.id || LOCAL_FILES); provider.input.id = 'chat-connection';
     const model = field('Model', !preferredProviderId && chat?.model || selected?.model || ''); model.input.id = 'chat-model';
     const recommended = suggestions(model, selected?.kind);
     const detail = el('p', 'hint connection-disclosure'); detail.id = 'chat-connection-note';

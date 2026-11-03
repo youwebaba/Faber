@@ -1,4 +1,5 @@
 .composer-bottom{display:flex;align-items:center;gap:8px;margin-top:7px;padding-top:7px;border-top:1px solid var(--line)}
+#transcript{overflow-anchor:none}
 .composer-controls{display:flex;align-items:center;gap:10px;min-width:0;color:var(--muted);font-size:10px;flex-wrap:wrap}
 .context-window{display:grid;gap:5px;min-width:110px;padding:5px 4px;text-align:left;justify-items:start;color:var(--muted);font-size:10px}
 .context-window-label{white-space:nowrap}.context-meter{display:block;width:100%;height:4px;min-width:104px;background:var(--line);border-radius:3px;overflow:hidden}.context-meter>span{display:block;height:100%;background:var(--accent);border-radius:3px}.context-meter.full>span{background:var(--danger)}.context-meter.unknown{opacity:.55}

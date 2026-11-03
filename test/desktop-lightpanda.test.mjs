@@ -45,3 +45,26 @@ test('owned WSL start cancellation terminates only its verified distro; foreign 
   assert.ok(calls.some(([,args])=>args[0]==='--terminate'&&args[1]===distro));assert.equal((await owned.status()).running,false);
   foreign=true;await assert.rejects(owned.uninstall(),/another folder/);assert.ok(!calls.some(([,args])=>args[0]==='--unregister'));
 });
+
+test('first use reports missing WSL without importing or enabling system features',async t=>{
+ const dataDir=await temporary(t),calls=[];const owned=createOwnedRuntime({dataDir,resources:'unused',command:async(exe,args)=>{calls.push([exe,args]);throw Error('WSL unavailable');}});
+ await assert.rejects(owned.start(),/already working WSL2 installation/);assert.deepEqual(calls.map(([,args])=>args),[['--status']]);await owned.close();
+});
+
+test('exclusive chat lease preserves its owner when another chat tries; idle cleanup permits automatic next acquisition',async t=>{
+ const dataDir=await temporary(t);let starts=0,stops=0,sequence=0;const commands=[];
+ const owned={start:async()=>{starts++;return 'ws://127.0.0.1:9222';},stop:async()=>{stops++;},close:async()=>{},status:async()=>({})};
+ class Client{async connect(){return this;}close(){}async send(method,args){commands.push([method,args]);if(method==='Target.createBrowserContext')return{browserContextId:`c${++sequence}`};if(method==='Target.createTarget')return{targetId:`t${sequence}`};if(method==='Target.attachToTarget')return{sessionId:`s${sequence}`};return{};}}
+ const browser=createBrowser({dataDir,owned,Client,idleMs:25});t.after(()=>browser.close());
+ const a=await browser.action('connect',{}, {chatId:'a',runId:'run-a'});await assert.rejects(browser.action('connect',{}, {chatId:'b',runId:'run-b'}),/busy with another chat/);assert.equal(sequence,1);assert.equal(starts,1);assert.equal(stops,0);
+ await new Promise(resolve=>setTimeout(resolve,60));assert.equal((await browser.action('status',{})).activeRuns,1);assert.equal((await browser.action('stop',{}, {chatId:'b'})).stopped,false);assert.equal(stops,0);
+ await browser.releaseRun('run-a');await new Promise(resolve=>setTimeout(resolve,80));assert.equal(stops,1);const b=await browser.action('connect',{}, {chatId:'b',runId:'run-b'});assert.notEqual(a.browserContextId,b.browserContextId);assert.equal(starts,2);assert.ok(!commands.some(([method])=>method==='Browser.close'));
+});
+
+test('canceling an owner disposes its page and permits a different chat without sharing state',async t=>{
+ const dataDir=await temporary(t);let sequence=0;const abort=new AbortController(),disposed=[];
+ const owned={start:async()=> 'ws://127.0.0.1:9222',stop:async()=>{},close:async()=>{}};
+ class Client{async connect(){return this;}close(){}async send(method,args,_session,signal){if(method==='Target.createBrowserContext')return{browserContextId:`c${++sequence}`};if(method==='Target.createTarget')return{targetId:`t${sequence}`};if(method==='Target.attachToTarget')return{sessionId:`s${sequence}`};if(method==='Target.disposeBrowserContext')disposed.push(args.browserContextId);if(method==='Runtime.evaluate'){abort.abort(Error('fixture stop'));signal.throwIfAborted();}return{};}}
+ const browser=createBrowser({dataDir,owned,Client});t.after(()=>browser.close());await browser.action('connect',{}, {chatId:'a',runId:'a'});
+ await assert.rejects(browser.action('evaluate',{expression:'1'},{chatId:'a',runId:'a',signal:abort.signal}),/fixture stop/);assert.deepEqual(disposed,['c1']);assert.equal((await browser.action('connect',{}, {chatId:'b',runId:'b'})).browserContextId,'c2');
+});

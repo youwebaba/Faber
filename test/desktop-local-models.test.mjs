@@ -58,6 +58,57 @@ test('owned GGUF lifecycle uses validated files, registers only after readiness,
   await f.manager.close(); const reopened = await createLocalModels(f.options); try { assert.equal((await reopened.request('localModels.list')).managedProviderId, ready.managedProviderId); assert.throws(() => reopened.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/); } finally { await reopened.close(); }
 });
 
+test('managed model labels retain the scanner name after Stop and restart without changing the API alias',async t=>{
+  const f=await fixture(t);const listed=await f.manager.request('localModels.list'),model=listed.models[0];
+  assert.deepEqual(listed.modelLabels,[]);assert.equal(f.manager.modelDisplayName('unrelated','unrelated'),null);
+  f.readiness.ready=true;await f.manager.request('localModels.start',{modelId:model.id});const ready=await until(f.manager,'ready');
+  const {providerId,model:alias}=ready.process,label={providerId,model:alias,displayName:model.label,modelId:model.id};
+  assert.equal(alias,`faber-${model.id.slice(0,16)}`);assert.deepEqual(ready.modelLabels,[label]);
+  assert.equal(f.manager.modelDisplayName(providerId,alias),model.label);
+  assert.equal(f.state.providers.find(item=>item.id===providerId).model,alias);
+  const stopped=await f.manager.request('localModels.stop');assert.deepEqual(stopped.modelLabels,[label]);
+  await f.manager.close();await fs.rename(path.join(f.directory,model.relativePath),path.join(f.directory,'renamed.gguf'));
+  const reopened=await createLocalModels(f.options);try{
+    assert.equal(reopened.modelDisplayName(providerId,alias),model.label);
+    assert.deepEqual((await reopened.request('localModels.list')).modelLabels,[label]);
+    assert.equal(reopened.modelDisplayName(providerId,'different-model'),null);
+  }finally{await reopened.close();}
+});
+
+test('legacy managed connections recover a name only from an exact scanned model alias',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0],alias=`faber-${model.id.slice(0,16)}`,providerId='legacy-local',baseUrl='http://127.0.0.1:1234/v1';
+  await f.manager.close();
+  await fs.writeFile(path.join(f.options.dataDir,'local-models','state.json'),JSON.stringify({version:1,providerId,connection:{baseUrl,model:alias}}));
+  await f.options.runtime.request('provider.save',{id:providerId,name:'Downloaded GGUF (local)',kind:'openai',baseUrl,model:alias,apiKey:'fixture-key'});
+  const reopened=await createLocalModels(f.options);try{
+    assert.equal(reopened.modelDisplayName(providerId,alias),null);
+    assert.deepEqual((await reopened.request('localModels.list')).modelLabels,[{providerId,model:alias,displayName:model.label,modelId:model.id}]);
+    assert.equal(reopened.modelDisplayName(providerId,alias),model.label);
+    await fs.appendFile(path.join(f.directory,model.relativePath),'changed');
+    assert.deepEqual((await reopened.request('localModels.list')).modelLabels,[]);
+    assert.equal(reopened.modelDisplayName(providerId,alias),null);
+  }finally{await reopened.close();}
+});
+
+test('managed model names do not label edited connections, different models or copied providers',async t=>{
+  const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];f.readiness.ready=true;
+  await f.manager.request('localModels.start',{modelId:model.id});const ready=await until(f.manager,'ready');
+  const provider={...f.state.providers.find(item=>item.id===ready.process.providerId)};
+  await f.options.runtime.request('provider.save',{...provider,id:'copied-provider'});
+  assert.equal(f.manager.modelDisplayName('copied-provider',provider.model),null);
+  for(const change of [{baseUrl:'https://example.com/v1'},{kind:'openai-responses'},{model:'different-model'}]){
+    await f.options.runtime.request('provider.save',{...provider,...change});
+    assert.equal(f.manager.modelDisplayName(provider.id,provider.model),null);
+    assert.deepEqual((await f.manager.request('localModels.list')).modelLabels,[]);
+    await f.options.runtime.request('provider.save',provider);
+    assert.equal(f.manager.modelDisplayName(provider.id,provider.model),model.label);
+  }
+  await f.manager.request('localModels.stop');
+  await f.options.runtime.request('provider.save',{...provider,baseUrl:'https://example.com/v1'});
+  assert.equal(f.manager.modelDisplayName(provider.id,provider.model),null);
+  assert.deepEqual((await f.manager.request('localModels.list')).modelLabels,[]);
+});
+
 test('selected context uses one full-size slot, verifies runtime capacity and rejects mismatched chat requests',async t=>{
   const f=await fixture(t);const model=(await f.manager.request('localModels.list')).models[0];
   await f.manager.request('localModels.start',{modelId:model.id,contextTokens:8192});f.readiness.ready=true;

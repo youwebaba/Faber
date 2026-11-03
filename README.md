@@ -1,4 +1,4 @@
-# Faber b1.1
+# Faber b1.2rc
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,12 +7,13 @@ October 31, 2026 direction is a fresh harness with a Codex-style interface,
 shared tools, agent delegation, voice, and upgrades the agents can author.
 Faber has its own source, launchers and release lifecycle.
 
-This is Beta 1.1. The [verification record](VERIFICATION.md) distinguishes tested
+This is the Beta 1.2 release candidate. The [verification record](VERIFICATION.md) distinguishes tested
 behavior from remaining hardware and release checks.
 
 ## Screenshots
 
-Faber b1.1 on Windows, captured in a clean demo profile.
+Faber b1.1 on Windows, captured in a clean demo profile. The b1.2rc changes are
+described below; these screenshots show the previous release.
 
 **Workspace** — projects, chats, model selection, attachments, voice, and
 context, token-speed and thinking controls in the composer.
@@ -41,7 +42,7 @@ through Tools & extensions.
 
 ## Beta desktop release
 
-The b1.1 installer installs **Faber.exe** and shortcuts without a terminal window.
+The b1.2rc installer installs **Faber.exe** and shortcuts without a terminal window.
 It includes Electron and a local model runner with CPU, CUDA and Vulkan backends;
 model weights are downloaded separately. Existing b1 profile data
 and the selected model library remain in their original locations.
@@ -64,11 +65,23 @@ There is no new harness context or turn limit.
 [ADDONS.md](ADDONS.md) for the import format, trust model, reset/removal and
 AI-authoring contract. Online addon sharing and OTA updates are not included.
 
-b1.1 adds composer context-size/usage controls, TPS and a per-chat thinking
-toggle, sidebar chat/project menus, and expandable live run activity. See
+Composer controls include context size/usage, TPS and a per-chat thinking
+toggle. Sidebar menus manage chats/projects, and expandable activity shows work. See
 [CHAT_CONTROLS.md](CHAT_CONTROLS.md) for supported providers and behavior.
-[Lightpanda](LIGHTPANDA.md) is the first bundled removable addon, with setup for
-its own WSL2 browser runtime. Its tools use the same agent permission system.
+
+b1.2rc places each activity batch beside the output that triggered it as work
+happens. The model selector and run details show the detected model name instead
+of a managed server alias. Agents can use `system_time` to read the PC's current
+date, time and timezone without a shell prompt.
+
+[Lightpanda](LIGHTPANDA.md) is the first bundled removable addon. The verified
+shipped addon sets up and starts its own WSL2 browser runtime when a browser tool
+needs it, then releases idle chat sessions and stops its owned runtime. These
+browser tools do not repeatedly ask for computer/network approval. WSL2 must
+already be available; Faber does not enable Windows features or reboot the PC.
+Lightpanda 1.0.2 supports one browsing chat at a time; another chat receives a
+busy result until the owner releases its page or automatic cleanup runs.
+Other addons and general PC/shell tools retain their existing permissions.
 
 The installed base seeds an editable, versioned workbench for reviewed core
 self-upgrades. A subsequent installer preserves the existing profile and addons,

@@ -5,6 +5,45 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## b1.2rc — November 2, 2026
+
+Version `1.2.0-rc.1` / installer build `1.2.0.1` adds chronological live tool
+activity, detected local model names, automatic shipped-Lightpanda lifecycle
+and the `system_time` read tool. Context and turn limits remain removed.
+
+The complete deterministic suite passed **247 checks with one optional
+native-input fixture skipped (248 total)**. New coverage includes tool-batch
+correlation and legacy histories, stable continuation/child placement, exact
+provider-to-model naming across Stop/restart, actual PC-clock values, narrow
+automatic tool authority with no grant leakage, cancellation before WSL import,
+exclusive browser ownership/idle cleanup, and preservation of disabled, removed
+or customized addons during a verified factory upgrade.
+
+The baseline Electron smoke passed with 69 registered tools. The b1.2rc smoke
+used the real renderer/preload/host bridge and deterministic loopback providers.
+It checked scanner-derived Qwen labels with unchanged API aliases, two live tool
+batches between replies, inline approval, retained disclosure nodes, top/middle
+reader scroll positions, absence of duplicate tool cards, child/continuation
+placement and chronology after interface refresh. Captured frames were visually
+reviewed. This is UI/protocol evidence, not a live model-quality benchmark.
+
+An isolated real Lightpanda 1.0.2 runtime passed automatic first-use setup and
+navigation, typing, clicking, reading and evaluation with **zero approval
+prompts**. A second chat received a busy result without changing the first
+chat's page. After the owner run ended, automatic cleanup stopped its WSL distro
+after about 32 seconds; another chat then restarted and acquired it automatically.
+Disable stopped the owned runtime, uninstall removed it, and restart preserved
+the removal. Existing distros were untouched; the temporary owned distro was
+removed after verification. No inference requests were made.
+
+Lightpanda 1.0.2 allows only one browsing chat at a time. WSL2 must already work;
+this release does not enable Windows features or reboot the PC. Cloud inference,
+voice/native input, broad website compatibility and an NSIS installer upgrade of
+the user's active installation were not tested in this release. The installer
+remains unsigned. Packaged executable and isolated profile-preservation results
+are retained with the artifact in `release/verification/b1.2rc/`; the normal
+installed application and its profile are not changed by these checks.
+
 ## b1.1 — November 2, 2026
 
 ### Transparent-logo rebuild

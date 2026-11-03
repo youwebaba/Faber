@@ -8,6 +8,8 @@ import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStre
 import { createNavigationMenu, deletionWarning } from './chat-navigation.mjs';
 import { createChatControls } from './chat-controls.mjs';
 import { createRunActivity } from './run-activity.mjs';
+import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
+import { modelDisplayName } from './model-names.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.faber;
@@ -19,12 +21,14 @@ let sending = false;
 let initialState = true;
 let bootstrapping = true, uiHandoff = false, pendingRequests = 0, pendingPicker = false, composing = false, pendingUpdateId, acceptedReloadId, retryTimer, streamVersion = -1, stateVersion = -1;
 let downloadDirectory;
+let modelLabels = [], modelLabelRequest = 0;
 const startupEvents = [], handoffVoiceEvents = [];
 const streams = new Map();
 const drafts = new Map();
 const imageDrafts = createAttachmentDrafts({ onChange: key => { if (key === draftKey()) renderImageDrafts(); scheduleUIRefresh(); } });
 let imageDraftRenderKey;
 const messageNodes = new Map();
+const streamNodes = new Map();
 let transcriptChatId;
 let modalReturnFocus;
 const icons = {
@@ -90,9 +94,11 @@ function acceptState(next) {
   if (Number.isSafeInteger(next.streamSequence)) streamVersion = mergeRuntimeStreams(streams, next, streamVersion);
   else reconcileStreams(streams, next);
   const previousKey = draftKey();
+  const providersChanged = JSON.stringify(state.providers) !== JSON.stringify(next.providers);
   const removed = [...state.chats.filter(chat => !next.chats.some(item => item.id === chat.id)).map(chat => chat.id), ...state.projects.filter(project => !next.projects.some(item => item.id === project.id)).map(project => `new:${project.id}`)];
   for (const key of removed) { drafts.delete(key); imageDrafts.remove(key, imageDrafts.get(key).map(item => item.id)); }
   state = next;
+  if (providersChanged) { modelLabels = []; ++modelLabelRequest; if (!bootstrapping) void refreshModelLabels(); }
   if (!currentChat()) selectedChatId = null;
   const available = state.chats.filter(chat => !chat.archived && state.projects.some(project => project.id === chat.projectId && !project.archived));
   if (initialState && !selectedChatId) selectedChatId = available.find(chat => chat.projectId === selectedProjectId)?.id || available[0]?.id || null;
@@ -121,12 +127,22 @@ function render() {
   $('#project-name').textContent = project?.name || 'Workspace';
   $('#chat-title').textContent = chat?.title || 'New chat'; $('#chat-title').disabled = !chat;
   $('#chat-options').disabled = !chat;
-  const provider = currentProvider(); $('#provider-label').textContent = provider?.name || 'No connection'; $('#model-label').textContent = chat?.model || provider?.model || 'Choose a model';
-  $('#model-picker').title = `${provider?.name || 'Add a connection'} / ${chat?.model || provider?.model || 'Choose a model'}`;
+  renderModelLabel();
   $('#stop-run').hidden = !isActive(run); $('#send-message').hidden = isActive(run);
   renderImageDrafts();
   $('#permission-caption').textContent = chat?.grants?.length ? `${chat.grants.length} chat permission${chat.grants.length === 1 ? '' : 's'} enabled` : 'Actions ask for approval';
   renderNavigation(); renderTranscript(); renderActivity(); renderApprovals(); renderVoice(); renderComposerControls();
+}
+function renderModelLabel() {
+  const provider = currentProvider(), model = currentChat()?.model || provider?.model;
+  const name = modelDisplayName(provider?.id, model, modelLabels);
+  $('#provider-label').textContent = provider?.name || 'No connection'; $('#model-label').textContent = name;
+  $('#model-picker').title = `${provider?.name || 'Add a connection'} / ${name}`;
+}
+async function refreshModelLabels() {
+  const sequence = ++modelLabelRequest;
+  try { const result = await request('localModels.list'); if (sequence === modelLabelRequest) { modelLabels = result.modelLabels || []; renderModelLabel(); } }
+  catch { /* A friendly name is optional; keep the exact selected API identity. */ }
 }
 function renderComposerControls() {
   const run = latestRun(state, currentChat()?.id), metrics = streams.get(run?.id)?.metrics || run?.modelCalls?.at(-1)?.metrics;
@@ -154,12 +170,12 @@ function renderNavigation() {
   }
 }
 function renderTranscript() {
-  const transcript = $('#transcript'); const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 100;
-  const previousScroll = transcript.scrollTop;
-  transcript.querySelector('.run-activities')?.remove();
+  const transcript = $('#transcript');
+  preserveTranscriptViewport(transcript, () => {
   const chat = currentChat(); const messages = (chat?.messages || []).filter(message => message.role !== 'system');
   const identity = chat?.id || `new:${currentProject()?.id || ''}`;
-  if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); transcriptChatId = identity; }
+  if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
+  const rows = transcriptTimeline(state, chat?.id, streams), nodes = [];
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
     const welcome = el('div', 'welcome'); welcome.append(wordmark('welcome-wordmark'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
@@ -172,32 +188,36 @@ function renderTranscript() {
     }
     transcript.append(welcome);
   }
+  if (!rows.length && transcript.querySelector('.welcome')) nodes.push(transcript.querySelector('.welcome'));
   const ids = new Set(messages.map(message => message.id));
   for (const [id, entry] of messageNodes) if (!ids.has(id)) { entry.node.remove(); messageNodes.delete(id); }
-  let cursor = transcript.firstChild;
-  for (const message of messages) {
+  for (const row of rows) {
+    if (row.kind === 'activity') { nodes.push(runActivity.get(state, row.activity)); continue; }
+    if (row.kind === 'stream') {
+      let article = streamNodes.get(row.key);
+      if (!article) { article = el('article', 'message assistant streaming'); article.dataset.runId = row.run.id; const content = el('div', 'message-content'); content.append(document.createTextNode(''), el('span', 'stream-cursor')); article.append(el('div', 'message-heading', 'Faber'), content); streamNodes.set(row.key, article); }
+      article.lastChild.firstChild.data = row.text; nodes.push(article); continue;
+    }
+    const message = row.message;
     let entry = messageNodes.get(message.id);
     if (!sameMessage(entry?.message, message)) {
       const node = createMessageNode(message);
-      if (entry) { if (entry.node.open) node.open = true; if (cursor === entry.node) cursor = node; entry.node.replaceWith(node); }
+      if (entry?.node.open) node.open = true;
       entry = { node, message }; messageNodes.set(message.id, entry);
     }
-    if (entry.node !== cursor) transcript.insertBefore(entry.node, cursor);
-    cursor = entry.node.nextSibling;
+    nodes.push(entry.node);
   }
   const run = latestRun(state, chat?.id);
-  transcript.querySelector('.run-note')?.remove();
-  renderStream();
-  if (chat) transcript.append(runActivity.render(state, chat.id));
   if (run) {
     const note = el('div', 'run-note');
     if (['canceled', 'interrupted', 'failed'].includes(run.status)) {
       note.append(el('span', '', run.error || (run.status === 'interrupted' ? 'This run was interrupted. Review the history before continuing.' : `Run ${run.status}.`)));
       note.append(button('Continue', () => sendText('Continue from where you stopped. Check the current state before repeating any actions.')));
     }
-    if (note.childNodes.length) transcript.append(note);
+    if (note.childNodes.length) nodes.push(note);
   }
-  transcript.scrollTop = nearBottom ? transcript.scrollHeight : previousScroll;
+  reconcileTranscript(transcript, nodes);
+  });
 }
 function createMessageNode(message) {
   if (message.role === 'tool') {
@@ -223,14 +243,7 @@ function createMessageNode(message) {
   return article;
 }
 function renderStream() {
-  const transcript = $('#transcript'); const chat = currentChat(); const run = latestRun(state, chat?.id);
-  const nearBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 100;
-  const text = streamText(streams.get(run?.id)?.text, run, chat?.messages || []);
-  let article = transcript.querySelector('.streaming');
-  if (!text) { article?.remove(); return; }
-  if (!article) { article = el('article', 'message assistant streaming'); article.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); transcript.insertBefore(article, transcript.querySelector('.run-note')); }
-  article.lastChild.replaceChildren(document.createTextNode(text), el('span', 'stream-cursor'));
-  if (nearBottom) transcript.scrollTop = transcript.scrollHeight;
+  renderTranscript();
 }
 function appendResult(parent, result, messageImage) {
   let parsed = result;
@@ -258,7 +271,7 @@ function renderActivity() {
       if (!item.modelCalls?.length) details.append(el('p', 'hint', 'Input / output tokens: Not reported. No provider call records are available for this run.'));
       for (const call of item.modelCalls || []) {
         const row = el('div', 'model-call'); row.dataset.callId = call.id; const counts = callUsage(call);
-        row.append(el('strong', '', `Call ${call.sequence} · ${statusLabel(call.status)}`), el('p', '', `${state.providers.find(provider => provider.id === call.providerId)?.name || call.providerId || 'Connection not recorded'} / ${call.model || 'Model not recorded'}`));
+        row.append(el('strong', '', `Call ${call.sequence} · ${statusLabel(call.status)}`), el('p', '', `${state.providers.find(provider => provider.id === call.providerId)?.name || call.providerId || 'Connection not recorded'} / ${item.modelDisplayName || modelDisplayName(call.providerId, call.model, modelLabels, 'Model not recorded')}`));
         const totals = el('div', 'usage-counts');
         for (const [label, value, cls] of [['Input tokens', counts.input, 'usage-input'], ['Output tokens', counts.output, 'usage-output']]) { const count = el('span', '', label); count.append(el('b', cls, value)); totals.append(count); }
         row.append(totals);
@@ -396,7 +409,7 @@ function showSettings() {
   models.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => showProviderForm()))); body.append(models);
   modelsBrowser.mountSettings(body);
   const addons = el('section', 'modal-section'); addons.append(el('h3', '', 'Local addons'), el('p', 'hint', 'Manage addons installed from this computer. No account or online catalog is required.'), button('Manage addons', () => addonManager.show())); body.append(addons);
-  const about = el('section', 'modal-section'); about.append(wordmark('about-wordmark'), el('h3', '', 'Faber b1.1'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
+  const about = el('section', 'modal-section'); about.append(wordmark('about-wordmark'), el('h3', '', 'Faber b1.2rc'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
   const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
   about.append(el('p', 'hint', 'Refresh interface keeps chats, downloads, loaded models, and composer drafts running. Backend changes still need Restart app.'), actions(button('Tools & extensions', () => showTools('extensions')), reload, button('Restart app', () => request('app.restart')))); body.append(about);
 }
@@ -557,7 +570,7 @@ async function initializeInterface() {
       freezeInterface(false); if (view.promptFocused) $('#prompt').focus({ preventScroll: true });
       notify('Interface refreshed. Your composer drafts are restored.');
     } else freezeInterface(false);
-    flushHandoffVoice(); document.documentElement.dataset.uiReady = 'true'; scheduleUIRefresh();
+    flushHandoffVoice(); document.documentElement.dataset.uiReady = 'true'; scheduleUIRefresh(); void refreshModelLabels();
   } catch (error) {
     bootstrapping = false; freezeInterface(false); document.documentElement.dataset.uiReady = 'error';
     notify(`Interface recovery could not finish: ${interfaceError(error)}. Any pending recovery snapshot remains in host memory.`, true);
@@ -569,7 +582,7 @@ const runActivity = createRunActivity({ el, button, appendResult, selectChat, re
 const chatControls = createChatControls({ request, refresh, getChat: currentChat, getDraft: () => $('#prompt').value, modal, closeModal, el, button, field, actions, icon, notify });
 $('#composer-bottom').prepend(chatControls.root);
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings });
-const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings });
+const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
 $('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
 $('#open-models').addEventListener('click', () => act(() => modelsBrowser.open()));
@@ -616,7 +629,7 @@ function toggleActivity(force) { const rail = $('#activity-rail'); const open = 
 $('#toggle-activity').addEventListener('click', () => toggleActivity()); $('#close-activity').addEventListener('click', () => toggleActivity(false));
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
 function handleBridgeEvent(event) {
-    if (event.type === 'localModels') { chatControls.invalidate(); renderComposerControls(); }
+    if (event.type === 'localModels') { chatControls.invalidate(); renderComposerControls(); if (event.state?.modelLabels) { ++modelLabelRequest; modelLabels = event.state.modelLabels; renderModelLabel(); } else void refreshModelLabels(); }
     if (event.type === 'models') downloadDirectory = event.state.downloadDirectory;
     if (event.type === 'voice' && uiHandoff) { handoffVoiceEvents.push(event); return; }
     if (event.type === 'state') acceptState(event.state);

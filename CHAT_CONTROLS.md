@@ -1,8 +1,13 @@
-# Chat controls in Faber b1.1
+# Chat controls in Faber b1.2rc
 
 The bottom of the composer has context usage, a context-size control, tokens per
 second (TPS), and a brain button. Settings belong to the selected chat and are
 captured when a run starts. Changing connection or model resets them to defaults.
+
+Managed local connections display the detected model/file name in the composer,
+selector and run details. The internal server alias remains an API routing value.
+New runs retain the name captured at their start, including after another model
+is selected. A stopped managed connection retains its last known model name.
 
 ## Context size and usage
 
@@ -69,6 +74,9 @@ Remote providers may continue work after their request is canceled.
 
 ## Inspect ongoing work
 
+Activity appears in transcript order, immediately after the assistant output that
+requested each tool batch and before its next reply. The same rows update while
+tools run and remain at that position after completion or interface refresh.
 Click **Working…** to expand the current run's activity inline. Tool rows show
 their command/file/action, status, arguments, output or error, and approval state.
 Child agents are included. Details stay available after completion. This view

@@ -54,6 +54,14 @@ use of that connection/model or its selected context size differs from the loade
 capacity. `providerControls(providerId, model)` declares host-owned managed
 runtime capacity and thinking support; a connection name or URL is not proof of
 ownership. See [CHAT_CONTROLS.md](CHAT_CONTROLS.md) for native parameter semantics.
+`modelDisplayName(providerId, model)` returns a verified managed model label;
+the runtime captures it on each new run without changing the provider model ID.
+`isAutomaticTool(tool, permission)` is an optional synchronous host authority
+check for the verified shipped Lightpanda addon. It must match the active
+registered execution function, fixed tool name, allowed browser permission and
+installer-pinned package digest. It returns false for other tools and revokes
+authority on addon disable, removal or replacement. It never grants a run/chat
+permission, including through `ctx.approve`.
 
 Each tool is `{name, description, parameters, permission, execute(args, ctx)}`.
 Names use underscores for provider compatibility. Permission is one of `read`,
@@ -61,6 +69,10 @@ Names use underscores for provider compatibility. Permission is one of `read`,
 current workspace and harness state. Privileged tools require a run-scoped
 approval or an explicit persistent chat grant. A grant is real host authority,
 not an OS sandbox; shell/plugins may access anything the user account can.
+The verified bundled Lightpanda browser tools have the narrow automatic host
+authority described above; configuration changes and unrelated tools do not.
+The built-in read tool `system_time` returns the PC clock as UTC, local time,
+IANA timezone, UTC offset in minutes and Unix milliseconds without shell access.
 Tool args require JSON-schema validation before execution; reject unknown tools.
 `ctx` contains `runtime, chat, project, runId, signal, dataDir, sourceDir, host`,
 and `approve(permission, summary)`. All agents share the registered tool set;
@@ -145,13 +157,13 @@ Requests and return values:
 
 Project: `{id,name,path,createdAt}`. Chat:
 `{id,projectId,title,providerId,model,grants:[],voice:{enabled:false,phrase:'Hey Faber',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
-Message: `{id,role,content,createdAt,toolCalls?,toolName?,toolCallId?,status?,images?}`.
+Message: `{id,role,content,createdAt,toolCalls?,toolName?,toolCallId?,status?,images?,runId?,modelCallId?,sourceMessageId?}`.
 User `images` are durable attachments, distinct from the singular `image` on a
 tool screenshot. Adapters encode user attachments in the original user message.
 Busy chats also have a durable `inbox`; agent messages enter the provider
 conversation only between complete assistant/tool-result groups. Messages may
 include `fromChatId` and `runId` for attribution.
-Run: `{id,chatId,providerId,model,parentRunId?,status,startedAt,endedAt?,error?,toolEvents:[],modelCalls:[]}`.
+Run: `{id,chatId,providerId,model,modelDisplayName?,requestMessageId?,parentRunId?,status,startedAt,endedAt?,error?,toolEvents:[],modelCalls:[]}`.
 The connection/model are captured when a run starts; older saved runs may omit them.
 Each model call records `{id,sequence,providerId,model,startedAt,endedAt?,status,usage?}`.
 Usage contains provider-reported `inputTokens`, `outputTokens` and optional
@@ -159,7 +171,11 @@ Usage contains provider-reported `inputTokens`, `outputTokens` and optional
 Cached/reasoning counts are subsets, not additions to the input/output counts.
 Calls with no final usage, including failures and older saved runs, remain
 unreported. Usage records are not appended to model conversation content.
-Tool event: `{id,name,args,status,result?,error?,startedAt,endedAt?}`.
+Tool event: `{id,name,args,status,result?,error?,startedAt,endedAt?,toolCallId?,sourceMessageId?,modelCallId?}`.
+New model-issued events and tool messages reference their triggering assistant
+message and model call. The renderer interleaves live activity using those links;
+older saved runs use available call IDs and transcript ordering. These fields are
+UI attribution metadata, not extra provider conversation content.
 Approval: `{id,chatId,runId,permission,summary}`.
 Provider: `{id,name,kind,baseUrl,model,hasKey,reasoningEffort?}`. Tool metadata
 excludes execute. Saving a connection does not select it for a chat.

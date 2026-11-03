@@ -3,7 +3,10 @@
   "addons": [
     {
       "id": "lightpanda",
-      "digest": "d272de46632b0ac6baebcee32f276686d5c252e01e4cc5e40cf46a0f32e911dc"
+      "digest": "8b889934a9e6c6da4487c50e31e5a23b064eb17e75086ae9ae5a3a2aff5eace3",
+      "replaces": [
+        "d272de46632b0ac6baebcee32f276686d5c252e01e4cc5e40cf46a0f32e911dc"
+      ]
     }
   ]
 }

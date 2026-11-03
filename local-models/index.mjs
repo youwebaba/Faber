@@ -60,6 +60,14 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     const provider=providers.find(item=>item.id===providerId),expected=current?{baseUrl:`${current.baseUrl}/v1`,model:current.alias}:store.state.connection;
     return !!expected&&provider?.kind==='openai'&&provider.baseUrl===expected.baseUrl&&model===expected.model;
   }
+  function modelLabel(providerId,model){
+    if(providerId!==store.state.providerId||!ownedConnection(providerId,model)||providers.find(provider=>provider.id===providerId)?.model!==model)return null;
+    const matches=library.models.filter(item=>`faber-${item.id.slice(0,16)}`===model);
+    const connection=store.state.connection?.model===model?store.state.connection:null,scanned=matches.length===1?matches[0]:null;
+    const displayName=typeof connection?.displayName==='string'&&connection.displayName.trim()?connection.displayName:scanned?.label;
+    const modelId=typeof connection?.modelId==='string'&&`faber-${connection.modelId.slice(0,16)}`===model?connection.modelId:scanned?.id;
+    return displayName?{providerId,model,displayName,...(modelId?{modelId}:{})}:null;
+  }
   function endpoint(providerId, configurations = providers) {
     const provider = configurations.find(item => item.id === providerId);
     if (provider?.kind !== 'ollama') return providerId;
@@ -67,8 +75,11 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     catch { return providerId; }
   }
   const modelKey = (providerId, model, configurations) => `${endpoint(providerId, configurations)}\n${model.includes(':') ? model : `${model}:latest`}`;
-  const snapshot = () => structuredClone({ ...library, configuration:store.state.configuration, installed: [], loaded: [], managedProviderId: store.state.providerId,
-    runtime: { available: !!executableFile, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
+  const snapshot = () => {
+    const providerId=store.state.providerId,label=modelLabel(providerId,store.state.connection?.model);
+    return structuredClone({ ...library, modelLabels:label?[label]:[], configuration:store.state.configuration, installed: [], loaded: [], managedProviderId: providerId,
+      runtime: { available: !!executableFile, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
+  };
   function publish() { try { emit({ type: 'localModels', state: snapshot() }); } catch { /* Detached UI does not own the process. */ } }
   async function scan() { const hub = await getHubState(); library = await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads }); return library; }
   const hardwareState=async signal=>({...await hardware.inspect(signal),configuration:structuredClone(store.state.configuration),observed:processState.observed||null});
@@ -130,7 +141,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       signal.throwIfAborted();
       const saved=await runtime.request('provider.save', { id: providerId, name: 'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
       providers=[...providers.filter(provider=>provider.id!==providerId),saved];
-      store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,thinkingSupported};await store.save(store.state);
+      store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,displayName:model.label,modelId:model.id,thinkingSupported};await store.save(store.state);
       signal.throwIfAborted();
       operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
       processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
@@ -278,6 +289,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     throw new Error('Choose both providerId and model for an Ollama stop');
   }
   return { request,
+    modelDisplayName(providerId,model){return modelLabel(providerId,model)?.displayName??null;},
     providerControls(providerId,model){
       if(providerId!==store.state.providerId||!ownedConnection(providerId,model))return undefined;
       return {context:{configurable:!!executableFile,mode:'managed',capacityTokens:processState.status==='ready'&&processState.model===model?processState.contextCapacityTokens:null,requiresRestart:true},thinking:{supported:store.state.connection?.thinkingSupported===true,mode:'llama_cpp',effective:null}};

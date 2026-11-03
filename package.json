@@ -1,8 +1,8 @@
 {
   "name": "faber",
   "productName": "Faber",
-  "description": "Faber b1.1 local AI desktop workspace",
-  "version": "1.1.0-beta.1",
+  "description": "Faber b1.2rc local AI desktop workspace",
+  "version": "1.2.0-rc.1",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -13,6 +13,7 @@
     "smoke:live": "electron . --smoke-live",
     "smoke:models": "electron . --smoke-models",
     "smoke:features": "electron . --smoke-features",
+    "smoke:b12": "electron . --smoke-b12",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
@@ -29,7 +30,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "1.1.0.1",
+    "buildVersion": "1.2.0.1",
     "asar": true,
     "directories": {
       "output": "release",
@@ -75,7 +76,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-b1.1-${arch}.${ext}"
+      "artifactName": "Faber-Setup-b1.2rc-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

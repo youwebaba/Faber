@@ -1,1 +1,14 @@
-{"schemaVersion":1,"id":"lightpanda","name":"Lightpanda Browser","version":"1.0.0","description":"Real headless browser for AI agents. Explicit setup uses its own bundled Ubuntu Base WSL2 runtime; Windows features are never enabled automatically. Supports navigation, DOM reading, click, type and page JavaScript.","entry":"index.mjs","hostApi":1,"permissions":["read","computer","network"]}
+{
+  "schemaVersion": 1,
+  "id": "lightpanda",
+  "name": "Lightpanda Browser",
+  "version": "1.1.0",
+  "description": "Real headless browser for AI agents. Explicit setup uses its own bundled Ubuntu Base WSL2 runtime; Windows features are never enabled automatically. Supports navigation, DOM reading, click, type and page JavaScript.",
+  "entry": "index.mjs",
+  "hostApi": 1,
+  "permissions": [
+    "read",
+    "computer",
+    "network"
+  ]
+}
