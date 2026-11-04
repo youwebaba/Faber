@@ -47,8 +47,10 @@ export function providerMessages(messages, kind) {
 export function providerBody({provider,messages,tools}){
   if(provider.kind==='openai-responses')return responsesBody({provider,messages,tools});
   const ollama=provider.kind==='ollama',options=provider.chatOptions||{};
+  const compactionTokens=Number.isSafeInteger(provider.compactionTokens)&&provider.compactionTokens>0?provider.compactionTokens:undefined;
+  const localOptions={...(options.contextTokens!==null&&options.contextTokens!==undefined?{num_ctx:options.contextTokens}:{}),...(compactionTokens?{num_predict:compactionTokens}:{})};
   return {model:provider.model,messages:providerMessages(messages,provider.kind),stream:true,
-    ...(ollama?{think:Object.hasOwn(options,'thinking')?options.thinking:false,...(options.contextTokens!==null&&options.contextTokens!==undefined?{options:{num_ctx:options.contextTokens}}:{})}:{stream_options:{include_usage:true}}),
+    ...(ollama?{think:Object.hasOwn(options,'thinking')?options.thinking:false,...(Object.keys(localOptions).length?{options:localOptions}:{})}:{stream_options:{include_usage:true},...(compactionTokens?{max_tokens:compactionTokens}:{})}),
     ...(options.thinkingMode==='llama_cpp'&&typeof options.thinking==='boolean'?{chat_template_kwargs:{enable_thinking:options.thinking}}:{}),
     ...(tools.length?{tools:tools.map(tool=>({type:'function',function:{name:tool.name,description:tool.description,parameters:tool.parameters}}))}:{}),
   };
@@ -104,7 +106,9 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
   const ollama = provider.kind === 'ollama';
   const responses = provider.kind === 'openai-responses';
   validateCredentialTransport(provider.baseUrl, provider.hasKey);
-  const secret = provider.hasKey ? await host.getSecret?.(provider.id) : undefined;
+  const account = provider.authKind === 'chatgpt' || provider.id?.startsWith('chatgpt:');
+  if (account && (provider.kind !== 'openai-responses' || provider.baseUrl !== 'https://api.openai.com/v1')) throw new Error('ChatGPT account credentials can only be used with the official Responses API');
+  const secret = account ? await host.getChatGPTToken?.(provider.id, signal) : provider.hasKey ? await host.getSecret?.(provider.id) : undefined;
   if (provider.hasKey && !secret) throw new Error('Provider credential is unavailable; save the API key again');
   const connection = new AbortController();
   const timer = setTimeout(() => connection.abort(new Error('Provider connection timed out')), 30000);
@@ -139,6 +143,7 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
       for (const call of frame.message?.tool_calls || []) {
         yield { type: 'tool', id: call.id || randomUUID(), name: call.function.name, args: call.function.arguments };
       }
+      if (frame.done && frame.done_reason === 'length') completionError = new Error('Model output reached its token limit');
       if (frame.done) finished = true;
     } else {
       const choice = frame.choices?.[0];
@@ -166,6 +171,12 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
 
 export async function testProvider(provider, host = {}, fetchImpl = fetch) {
   try {
+    if (provider.authKind === 'chatgpt' || provider.id?.startsWith('chatgpt:')) {
+      if (provider.kind !== 'openai-responses' || provider.baseUrl !== 'https://api.openai.com/v1') throw new Error('ChatGPT account endpoint is fixed');
+      if (!host.chatGPTModels) throw new Error('ChatGPT account connection is unavailable');
+      const catalog = await host.chatGPTModels(provider.accountId);
+      return { ok: true, models: catalog.models.map(model => model.id) };
+    }
     validateCredentialTransport(provider.baseUrl, provider.hasKey);
     const secret = provider.hasKey ? await host.getSecret?.(provider.id) : undefined;
     if (provider.hasKey && !secret) throw new Error('Provider credential unavailable');

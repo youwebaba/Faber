@@ -96,3 +96,18 @@ test('missing folders report empty state and nonlocal/relative directory inputs 
   assert.deepEqual(missing.models, []); assert.match(missing.warnings[0].reason, /does not exist/);
   for (const directory of ['relative', '\\example.invalid\share\models', '//example.invalid/share/models', '\\?\C:\models', 'C:/bad' + String.fromCharCode(0)]) await assert.rejects(scanLocalModels({ directory }), /absolute local/);
 });
+
+
+test('repository names do not hide completed base models while repository-relative auxiliaries stay excluded', async t => {
+  const { directory, write } = await fixture(t);
+  const repository = 'DavidAU/Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF/' + 'a'.repeat(40);
+  const base = 'Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-Q4_K_M.gguf';
+  const files = [base, 'model-MTP.gguf', 'mtp/draft-Q4_K_M.gguf', 'nested/mmproj-model.gguf'];
+  for (const file of files) await write(repository + '/' + file);
+  await write('ordinary.gguf'); await write('manual/nested.gguf'); await write('manual/mtp/draft.gguf');
+  const downloads = [{ directory: path.join(directory, ...repository.split('/')), status: 'completed', files: files.map(file => ({ path: file, status: 'completed', size: 64 })) }];
+  const found = await scanLocalModels({ directory, downloads });
+  assert.deepEqual(found.models.map(model => model.relativePath).sort(), [repository + '/' + base, 'manual/nested.gguf', 'ordinary.gguf'].sort());
+  assert.ok(found.models.every(model => model.available));
+  assert.deepEqual(found.warnings, []);
+});

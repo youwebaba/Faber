@@ -3,3 +3,11 @@ bundled-addons/** -text
 bundled-addons/**/*.mjs text eol=lf
 bundled-addons/**/*.json text eol=lf
 bundled-addons/**/*.md text eol=lf
+# Cargo verifies vendored files against their upstream byte digests.
+native/vendor/** -text
+native/src/** text eol=lf
+native/*.toml text eol=lf
+native/Cargo.lock text eol=lf
+native/.cargo/config.toml text eol=lf
+# Runtime and upstream license hashes require exact bytes across checkouts.
+build/licenses/** -text

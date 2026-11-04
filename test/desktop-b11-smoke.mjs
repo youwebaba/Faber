@@ -35,7 +35,7 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     try { return await originalRequest.call(runtime, method, params); }
     finally { if (tracked) { const remaining = pendingMutations.get(method) - 1; remaining ? pendingMutations.set(method, remaining) : pendingMutations.delete(method); } }
   };
-  const js = code => window.webContents.executeJavaScript(code), state = () => runtime.request('state.get');
+  const js = async code => { try { return await window.webContents.executeJavaScript(code); } catch (cause) { throw new Error('b1.1 renderer script failed: ' + code, { cause }); } }, state = () => runtime.request('state.get');
   async function wait(test, label, timeout = 15000) { const end = Date.now() + timeout; while (Date.now() < end) { const result = await test(); if (result) return result; await pause(60); } throw new Error(`b1.1 smoke timeout: ${label}; ${await js('document.body.innerText')}`); }
   const click = selector => js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw new Error('Missing ${selector}');e.click()})()`);
   const key = async value => {
@@ -64,11 +64,14 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
       await wait(() => js(`document.documentElement.dataset.theme==='${theme}' && document.querySelector('.faber-symbol').naturalWidth===427 && document.querySelector('.welcome-wordmark').naturalWidth===2172`), `supplied branding in ${theme} theme`);
       await capture(`b11-brand-${theme}`);
     }
-    await wait(() => js(`!document.querySelector('#context-window').disabled && !document.querySelector('#thinking-toggle').disabled`), 'chat controls');
+    await wait(() => js(`!document.querySelector('#context-window').disabled && !document.querySelector('#thinking-control').disabled`), 'chat controls');
     await click('#context-window'); await set('#context-token-input', '8192'); await click('#apply-context-window');
     await wait(async () => (await state()).chats.find(item => item.id === chat.id).contextTokens === 8192, 'context saved');
-    await wait(() => js(`!document.querySelector('#thinking-toggle').disabled`), 'thinking ready'); await click('#thinking-toggle');
+    await wait(() => js(`!document.querySelector('#modal').open && !document.querySelector('#thinking-control').disabled`), 'thinking ready after context dialog closes'); await click('#thinking-control');
+    await wait(() => js(`document.querySelector('#thinking-popover').matches(':popover-open') && !document.querySelector('#thinking-level').disabled`), 'thinking slider ready');
+    await set('#thinking-level', '2');
     await wait(async () => (await state()).chats.find(item => item.id === chat.id).thinking === true, 'thinking on');
+    await js(`document.querySelector('#thinking-popover').hidePopover()`);
     await set('#prompt', 'B11_TOOL_STREAM'); await js(`document.querySelector('#composer').requestSubmit()`);
     const approval = await wait(async () => (await state()).approvals.find(item => item.chatId === chat.id), 'shell approval');
     await wait(() => js(`!!document.querySelector('.run-activity[data-run-id="${approval.runId}"]')`), 'inline activity');
@@ -146,7 +149,7 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     await select(chat.id); await set('#prompt', 'Private draft survives b1.1 UI refresh');
     await js(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['private draft attachment'],'draft.txt',{type:'text/plain'}));const input=document.querySelector('#file-picker');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await wait(() => js(`document.querySelectorAll('#image-drafts .image-draft').length===1 && !document.querySelector('#image-draft-status').textContent.includes('Reading')`), 'draft attachment');
-    await click('#open-settings'); await wait(() => js(`!!document.querySelector('#reload-ui') && document.querySelector('.about-wordmark').naturalWidth===2172`), 'refresh action and About wordmark');
+    await click('#open-settings'); await click('[data-settings-category="about"].nav-button'); await wait(() => js(`!!document.querySelector('#reload-ui') && document.querySelector('.about-wordmark')?.naturalWidth===2172`), 'refresh action and About wordmark');
     await js(`document.querySelector('.about-wordmark').scrollIntoView()`); await capture('b11-about-brand'); await pause(100); await click('#reload-ui');
     await wait(() => js(`document.documentElement.dataset.uiReady==='true' && document.querySelector('#notice-text').textContent.includes('drafts are restored')`).catch(() => false), 'draft reload', 20000);
     assert.equal(await js(`document.querySelector('#prompt').value`), 'Private draft survives b1.1 UI refresh'); assert.equal(await js(`document.querySelectorAll('#image-drafts .image-draft').length`), 1);

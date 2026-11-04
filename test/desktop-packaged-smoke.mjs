@@ -5,11 +5,16 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorkbench } from '../desktop/packaged-paths.mjs';
 import { createUpgrades } from '../desktop/upgrades.mjs';
+import {verifyNativeRuntime} from '../native/integrity.mjs';
+import {readGGUFMetadata} from '../local-models/details.mjs';
 
 export async function runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir}) {
   const bootstrap = globalThis.__FABER_BOOTSTRAP__; assert.equal(bootstrap.packaged,true);
   assert.ok(!sourceDir.includes('app.asar')); assert.notEqual(sourceDir,dataDir);
   for(const name of ['native.ps1','voice.ps1','preload.cjs'])assert.ok((await fs.stat(path.join(sourceDir,'desktop',name))).isFile());
+  const native=await verifyNativeRuntime(sourceDir);
+  const nativeFixture=path.join(dataDir,'packaged-native.gguf'),header=Buffer.alloc(24);header.write('GGUF');header.writeUInt32LE(3,4);await fs.writeFile(nativeFixture,header);
+  const metadata=await readGGUFMetadata(nativeFixture);assert.equal(metadata.complete,true);assert.equal(metadata.bytesRead,24);
   const hardware = await localModels.request('localModels.hardware'); assert.equal(hardware.runtime.available,true);
   const state = await runtime.request('state.get');
   for(const name of ['shell_run','upgrade_stage','upgrade_verify','upgrade_apply','local_model_start','local_model_delete'])assert.ok(state.tools.some(tool=>tool.name===name),`Missing packaged tool ${name}`);
@@ -28,7 +33,7 @@ export async function runPackagedSmoke({window,runtime,localModels,dataDir,sourc
   assert.equal((JSON.parse(await fs.readFile(path.join(recoveryProfile,'recovery-report.json'),'utf8'))).rolledBack,true);
   assert.equal(await fs.readFile(path.join(recoverySource,'desktop','main.mjs'),'utf8'),original);
   const screenshot=path.join(dataDir,'packaged-faber.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-  const report={ok:true,packaged:true,version:bootstrap.version,sourceDir,dataDir,node:process.versions.node,electron:process.versions.electron,tools:state.tools.length,bundledRuntime:hardware.runtime,gpus:hardware.gpus.map(item=>({id:item.id,name:item.name})),nativeScriptsRealPaths:true,packagedNodeVerifier:true,independentRecovery:true,noInference:true,screenshot};
+  const report={ok:true,packaged:true,version:bootstrap.version,sourceDir,dataDir,node:process.versions.node,electron:process.versions.electron,tools:state.tools.length,bundledRuntime:hardware.runtime,gpus:hardware.gpus.map(item=>({id:item.id,name:item.name})),nativeScriptsRealPaths:true,compiledMetadataWorker:native.manifest,compiledMetadataParsed:true,packagedNodeVerifier:true,independentRecovery:true,noInference:true,screenshot};
   const reportPath=path.join(dataDir,'packaged-report.json');await fs.writeFile(reportPath,JSON.stringify(report,null,2));return {...report,reportPath};
 }
 

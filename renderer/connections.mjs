@@ -16,7 +16,7 @@ export function connectionPayload(values) {
     ...(values.clearKey ? { apiKey: '' } : values.apiKey ? { apiKey: values.apiKey } : {}) };
 }
 
-export function createConnections({ request, refresh, getState, getChat, getModelLabels = () => [], newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, subscribe = globalThis.window?.faber?.subscribe }) {
+export function createConnections({ request, refresh, getState, getChat, getModelLabels = () => [], newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings, createPromptChoice, mountOpenAI, subscribe = globalThis.window?.faber?.subscribe }) {
   let disposePicker = () => {};
   const notice = provider => provider?.kind === 'ollama'
     ? 'Uses your Ollama server with the same Faber tools, approvals, and upgrade controls.'
@@ -29,6 +29,7 @@ export function createConnections({ request, refresh, getState, getChat, getMode
     root.append(choices); root.hidden = kind !== 'openai-responses'; return root;
   }
   function showForm(provider, presetKind = 'openai-responses', returnToPicker = false) {
+    if (provider?.authKind === 'chatgpt') return showPicker(provider.id, 'openai');
     disposePicker();
     const preset = CONNECTION_PRESETS.find(item => item.value === (provider?.kind || presetKind)) || CONNECTION_PRESETS[0];
     const body = modal(provider ? 'Edit model connection' : 'Add model connection'); const form = el('div', 'form-grid');
@@ -86,19 +87,27 @@ export function createConnections({ request, refresh, getState, getChat, getMode
       } catch (error) { if (current()) fail(error); }
     }), button('Save connection', async () => { try { const saved = await save(); returnToPicker ? showPicker(saved.id) : showSettings(); } catch (error) { fail(error); } }, 'button primary')));
   }
-  function showPicker(preferredProviderId) {
+  function showPicker(preferredProviderId, tab) {
     disposePicker();
     const state = getState(); const chat = getChat();
     const selected = state.providers.find(provider => provider.id === (preferredProviderId || chat?.providerId)) || state.providers[0];
     const body = modal('Model for this chat');
+    const activeTab = tab || (preferredProviderId !== LOCAL_FILES && selected?.authKind === 'chatgpt' ? 'openai' : 'local');
+    const tabs = el('div', 'tab-row model-source-tabs'); tabs.setAttribute('aria-label', 'Model sources');
+    for (const [id, title] of [['local', 'Local & APIs'], ['openai', 'OpenAI']]) { const item = button(title, () => showPicker(id === 'local' ? LOCAL_FILES : undefined, id), activeTab === id ? 'selected' : ''); item.dataset.modelTab = id; item.setAttribute('aria-pressed', String(activeTab === id)); tabs.append(item); } body.append(tabs);
+    if (activeTab === 'openai') {
+      const dispose = mountOpenAI(body), dialog = body.closest('dialog');
+      const cleanup = () => { dispose(); dialog?.removeEventListener('close', cleanup); dialog?.removeEventListener('faber-modal-replace', cleanup); }; disposePicker = cleanup; dialog?.addEventListener('close', cleanup, { once: true }); dialog?.addEventListener('faber-modal-replace', cleanup, { once: true }); return;
+    }
     const connect = button('Add cloud/API connection', () => showForm(undefined, 'openai-responses', true)); connect.id = 'add-cloud-connection';
     body.append(el('p', 'hint', 'Choose a local model or API connection. “Use in this chat” applies to the next run; an active run keeps its current connection.'), connect);
     const managed = getModelLabels().some(item => item.providerId === selected?.id && item.model === (chat?.model || selected?.model));
-    const provider = selectField('Connection', [{ value: LOCAL_FILES, label: 'Downloaded models (local)' }, ...state.providers.map(item => ({ value: item.id, label: `${item.name} — ${providerKindLabel(item.kind)}` }))], managed ? LOCAL_FILES : selected?.id || LOCAL_FILES); provider.input.id = 'chat-connection';
+    const provider = selectField('Connection', [{ value: LOCAL_FILES, label: 'Downloaded models (local)' }, ...state.providers.filter(item => item.authKind !== 'chatgpt').map(item => ({ value: item.id, label: `${item.name} — ${providerKindLabel(item.kind)}` }))], preferredProviderId === LOCAL_FILES || managed || selected?.authKind === 'chatgpt' ? LOCAL_FILES : selected?.id || LOCAL_FILES); provider.input.id = 'chat-connection';
     const model = field('Model', !preferredProviderId && chat?.model || selected?.model || ''); model.input.id = 'chat-model';
     const recommended = suggestions(model, selected?.kind);
     const detail = el('p', 'hint connection-disclosure'); detail.id = 'chat-connection-note';
     const form = el('div', 'form-grid connection-picker-form'); form.append(provider.wrapper, model.wrapper, recommended, detail); body.append(form);
+    const prompt = createPromptChoice?.(); if (prompt) body.append(prompt.root);
     const result = el('div', 'inline-result'); result.id = 'chat-model-list'; result.hidden = true; result.setAttribute('role', 'status'); body.append(result);
     const nextList = requestGate();
     function selectedProvider() { return getState().providers.find(item => item.id === provider.input.value); }
@@ -110,8 +119,8 @@ export function createConnections({ request, refresh, getState, getChat, getMode
     } });
     form.insertBefore(local.root, recommended);
     const dialog = body.closest('dialog');
-    const cleanup = () => { local.dispose(); dialog?.removeEventListener('close', cleanup); };
-    disposePicker = cleanup; dialog?.addEventListener('close', cleanup, { once: true });
+    const cleanup = () => { local.dispose(); dialog?.removeEventListener('close', cleanup); dialog?.removeEventListener('faber-modal-replace', cleanup); };
+    disposePicker = cleanup; dialog?.addEventListener('close', cleanup, { once: true }); dialog?.addEventListener('faber-modal-replace', cleanup, { once: true });
     function updateDetail() {
       const current = selectedProvider(); const active = isLocal();
       model.wrapper.hidden = active; recommended.hidden = active || current?.kind !== 'openai-responses'; listButton.hidden = active;
@@ -139,12 +148,13 @@ export function createConnections({ request, refresh, getState, getChat, getMode
         const chosenModel = localChoice ? localChoice.model : model.input.value.trim();
         if (!chosenModel) throw new Error('Enter a model ID.');
         const target = getChat() || await newChat(); if (!target) return;
-        await request('chat.update', { id: target.id, providerId: chosenProvider, model: chosenModel }); await refresh(); closeModal();
+        await request('chat.update', { id: target.id, providerId: chosenProvider, model: chosenModel, ...prompt?.value() }); await refresh(); closeModal();
       } catch (error) { result.hidden = false; result.textContent = error.message || String(error); result.classList.add('error'); }
       finally { applying = false; useButton.disabled = isLocal() && !local.selection().canUse; }
     });
     body.append(actions(button('Connections', () => { cleanup(); showSettings(); }), listButton, useButton));
     updateDetail(); if (!isLocal()) local.discover();
   }
-  return { showForm, showPicker };
+  function showHardware() { showPicker(LOCAL_FILES, 'local'); const panel = document.querySelector('#local-hardware'); if (panel) { panel.open = true; panel.scrollIntoView({ block: 'nearest' }); } }
+  return { showForm, showPicker, showHardware };
 }

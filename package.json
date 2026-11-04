@@ -1,8 +1,8 @@
 {
   "name": "faber",
   "productName": "Faber",
-  "description": "Faber b1.2rc local AI desktop workspace",
-  "version": "1.2.0-rc.2",
+  "description": "Faber Alpha 2.0 desktop AI workspace",
+  "version": "2.0.2-alpha.1",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -14,7 +14,9 @@
     "smoke:models": "electron . --smoke-models",
     "smoke:features": "electron . --smoke-features",
     "smoke:b12": "electron . --smoke-b12",
+    "smoke:b201": "electron . --smoke-b201",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "prepare:native": "node scripts/prepare-native.mjs",
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
     "prepare:lightpanda": "node scripts/prepare-lightpanda.mjs",
@@ -25,12 +27,13 @@
   },
   "devDependencies": {
     "electron": "45.2.1",
-    "electron-builder": "26.18.0"
+    "electron-builder": "26.18.0",
+    "marked": "18.1.3"
   },
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "1.2.0.2",
+    "buildVersion": "2.0.2.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -43,13 +46,20 @@
       "extensions/**",
       "model-hub/**",
       "local-models/**",
+      "native/**",
+      "!native/target/**",
+      "!native/vendor/**",
+      {
+        "from": "native/vendor",
+        "to": "native/vendor",
+        "filter": ["**/*"]
+      },
       "renderer/**",
       "test/**",
       "build/**",
       "scripts/**",
       "*.md",
       "package.json",
-      "package-lock.json",
       "!**/node_modules/**",
       "bundled-addons/**"
     ],
@@ -64,6 +74,7 @@
       }
     ],
     "npmRebuild": false,
+    "asarUnpack": ["native/bin/**"],
     "beforePack": "build/verify-runtime.cjs",
     "win": {
       "target": [
@@ -76,7 +87,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-b1.2rc-${arch}.${ext}"
+      "artifactName": "Faber-Setup-Alpha-2.0-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

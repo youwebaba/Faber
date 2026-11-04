@@ -1,15 +1,20 @@
-import { PERMISSIONS, isActive, latestRun, visibleChats, safeImage, displayText, parseArguments, statusLabel, extensionActions, streamText, reconcileStreams, sameMessage, chatApprovals } from './ui-helpers.mjs';
+import { PERMISSIONS, isActive, latestRun, safeImage, displayText, parseArguments, statusLabel, extensionActions, streamText, reconcileStreams, sameMessage, chatApprovals } from './ui-helpers.mjs';
 import { createModelsBrowser } from './models.mjs';
-import { createConnections, providerKindLabel } from './connections.mjs';
+import { createBrowserPanel } from './browser.mjs';
+import { createConnections } from './connections.mjs';
 import { createAddonManager } from './addons.mjs';
 import { callUsage } from './chat-media.mjs';
 import { createAttachmentDrafts, attachmentMessage, FILE_ACCEPT } from './file-attachments.mjs';
 import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStreams, interfaceError } from './ui-refresh.mjs';
-import { createNavigationMenu, deletionWarning } from './chat-navigation.mjs';
+import { createNavigationMenu, deletionWarning, orderedChatFamilies } from './chat-navigation.mjs';
 import { createChatControls } from './chat-controls.mjs';
-import { createRunActivity } from './run-activity.mjs';
+import { createRunActivity, modelProgress } from './run-activity.mjs';
 import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { modelDisplayName } from './model-names.mjs';
+import { createPreferences } from './preferences.mjs';
+import { createChatGPTControls } from './chatgpt.mjs';
+import { renderRichContent, renderOutputImages } from './rich-content.mjs';
+import { createWorkspaceControls, pendingUserMessages, hasUnsentDrafts, projectApprovalTitle } from './workspace-controls.mjs';
 
 const $ = selector => document.querySelector(selector);
 const bridge = window.faber;
@@ -29,6 +34,7 @@ const imageDrafts = createAttachmentDrafts({ onChange: key => { if (key === draf
 let imageDraftRenderKey;
 const messageNodes = new Map();
 const streamNodes = new Map();
+const outputImageNodes = new Map(), recentErrors = [];
 let transcriptChatId;
 let modalReturnFocus;
 const icons = {
@@ -79,7 +85,8 @@ function renderImageDrafts() {
   const status = $('#image-draft-status'); status.hidden = !items.length; status.textContent = items.some(item => item.pending) ? 'Reading attachments…' : `${items.length} file${items.length === 1 ? '' : 's'} attached · Sent to the selected connection with your message`;
   updateSendButton();
 }
-function notify(message, error = false) { $('#notice-text').textContent = message; $('#notice').classList.toggle('error', error); $('#notice').hidden = false; $('#live-status').textContent = message; }
+function rememberError(message) { recentErrors.push(String(message).slice(0, 24000)); if (recentErrors.length > 20) recentErrors.shift(); }
+function notify(message, error = false) { if (error) rememberError(message); $('#notice-text').textContent = message; $('#notice').classList.toggle('error', error); $('#notice').hidden = false; $('#report-notice').hidden = !error; $('#live-status').textContent = message; }
 async function act(callback) { try { return await callback(); } catch (error) { notify(error.message || String(error), true); } }
 async function request(method, params = {}) {
   if (!bridge) throw new Error('The desktop bridge is unavailable. Open Faber with its desktop launcher.');
@@ -127,8 +134,11 @@ function render() {
   $('#project-name').textContent = project?.name || 'Workspace';
   $('#chat-title').textContent = chat?.title || 'New chat'; $('#chat-title').disabled = !chat;
   $('#chat-options').disabled = !chat;
+  browserPanel.setContext();
   renderModelLabel();
-  $('#stop-run').hidden = !isActive(run); $('#send-message').hidden = isActive(run);
+  $('#stop-run').hidden = !isActive(run);
+  $('#send-message').hidden = false; $('#send-message').title = isActive(run) ? 'Queue a follow-up for the next safe point' : 'Send message';
+  $('#send-message').setAttribute('aria-label', isActive(run) ? 'Send follow-up' : 'Send message');
   renderImageDrafts();
   $('#permission-caption').textContent = chat?.grants?.length ? `${chat.grants.length} chat permission${chat.grants.length === 1 ? '' : 's'} enabled` : 'Actions ask for approval';
   renderNavigation(); renderTranscript(); renderActivity(); renderApprovals(); renderVoice(); renderComposerControls();
@@ -138,6 +148,7 @@ function renderModelLabel() {
   const name = modelDisplayName(provider?.id, model, modelLabels);
   $('#provider-label').textContent = provider?.name || 'No connection'; $('#model-label').textContent = name;
   $('#model-picker').title = `${provider?.name || 'Add a connection'} / ${name}`;
+  chatgptControls.renderPlan();
 }
 async function refreshModelLabels() {
   const sequence = ++modelLabelRequest;
@@ -156,10 +167,11 @@ function renderNavigation() {
     const heading = button('', () => selectChat(null, project.id), 'project-button');
     heading.append(icon('folder'), el('span', '', project.name)); heading.title = project.path; group.append(heading);
     navigationMenu.bind(heading, 'project', project.id);
-    const chats = visibleChats(state, project.id).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    for (const chat of chats) {
-      const link = button('', () => selectChat(chat.id), `chat-nav${chat.id === selectedChatId ? ' selected' : ''}${chat.parentChatId ? ' child' : ''}`);
-      link.append(el('span', 'chat-name', `${chat.parentChatId ? '↳ ' : ''}${chat.title}`)); link.title = chat.title;
+    const chats = orderedChatFamilies(state, project.id);
+    for (const { chat, depth } of chats) {
+      const link = button('', () => selectChat(chat.id), `chat-nav${chat.id === selectedChatId ? ' selected' : ''}${depth ? ' child' : ''}`);
+      link.style.paddingLeft = `${12 + Math.min(depth, 8) * 15}px`;
+      link.append(el('span', 'chat-name', `${depth ? '↳ ' : ''}${chat.title}`)); link.title = chat.title;
       navigationMenu.bind(link, 'chat', chat.id);
       if (chat.id === selectedChatId) link.setAttribute('aria-current', 'page');
       if (isActive(latestRun(state, chat.id))) { const dot = el('span', 'status-dot'); dot.setAttribute('aria-label', 'Running'); link.append(dot); }
@@ -172,10 +184,10 @@ function renderNavigation() {
 function renderTranscript() {
   const transcript = $('#transcript');
   preserveTranscriptViewport(transcript, () => {
-  const chat = currentChat(); const messages = (chat?.messages || []).filter(message => message.role !== 'system');
+  const chat = currentChat(), pending = pendingUserMessages(chat); const messages = [...(chat?.messages || []).filter(message => message.role !== 'system'), ...pending];
   const identity = chat?.id || `new:${currentProject()?.id || ''}`;
-  if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
-  const rows = transcriptTimeline(state, chat?.id, streams), nodes = [];
+  if (identity !== transcriptChatId) { transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); outputImageNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
+  const rows = [...transcriptTimeline(state, chat?.id, streams), ...pending.map(message => ({ kind: 'message', key: message.id, message }))], nodes = [];
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
     const welcome = el('div', 'welcome'); welcome.append(wordmark('welcome-wordmark'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
@@ -192,17 +204,23 @@ function renderTranscript() {
   const ids = new Set(messages.map(message => message.id));
   for (const [id, entry] of messageNodes) if (!ids.has(id)) { entry.node.remove(); messageNodes.delete(id); }
   for (const row of rows) {
-    if (row.kind === 'activity') { nodes.push(runActivity.get(state, row.activity)); continue; }
+    if (row.kind === 'activity') {
+      nodes.push(runActivity.get(state, row.activity, streams));
+      const images = row.activity.events.map(event => event.image || resultImage(event.result)).filter(Boolean), key = row.activity.id, signature = JSON.stringify(images);
+      if (images.length) { let cached = outputImageNodes.get(key); if (cached?.signature !== signature) { cached = { signature, node: renderOutputImages(images) }; cached.node.dataset.activityImages = key; outputImageNodes.set(key, cached); } if (cached.node.childNodes.length) nodes.push(cached.node); }
+      continue;
+    }
     if (row.kind === 'stream') {
       let article = streamNodes.get(row.key);
-      if (!article) { article = el('article', 'message assistant streaming'); article.dataset.runId = row.run.id; const content = el('div', 'message-content'); content.append(document.createTextNode(''), el('span', 'stream-cursor')); article.append(el('div', 'message-heading', 'Faber'), content); streamNodes.set(row.key, article); }
-      article.lastChild.firstChild.data = row.text; nodes.push(article); continue;
+      if (!article) { article = el('article', 'message assistant streaming'); article.dataset.runId = row.run.id; article.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); streamNodes.set(row.key, article); }
+      if (article.streamText !== row.text) { article.streamText = row.text; article.lastChild.replaceChildren(richContent(row.text), el('span', 'stream-cursor')); } nodes.push(article); continue;
     }
     const message = row.message;
     let entry = messageNodes.get(message.id);
     if (!sameMessage(entry?.message, message)) {
       const node = createMessageNode(message);
       if (entry?.node.open) node.open = true;
+      if (entry?.node.querySelector('details')?.open && node.querySelector('details')) node.querySelector('details').open = true;
       entry = { node, message }; messageNodes.set(message.id, entry);
     }
     nodes.push(entry.node);
@@ -212,7 +230,8 @@ function renderTranscript() {
     const note = el('div', 'run-note');
     if (['canceled', 'interrupted', 'failed'].includes(run.status)) {
       note.append(el('span', '', run.error || (run.status === 'interrupted' ? 'This run was interrupted. Review the history before continuing.' : `Run ${run.status}.`)));
-      note.append(button('Continue', () => sendText('Continue from where you stopped. Check the current state before repeating any actions.')));
+      if (run.contextOverflow) { const targetId = chat.id; note.append(button('Compact & continue', async () => { await request('chat.compact', { chatId: targetId }); await refresh(); })); }
+      else note.append(button('Continue', () => sendText('Continue from where you stopped. Check the current state before repeating any actions.')));
     }
     if (note.childNodes.length) nodes.push(note);
   }
@@ -221,14 +240,18 @@ function renderTranscript() {
 }
 function createMessageNode(message) {
   if (message.role === 'tool') {
-    const details = el('details', 'tool-message'); details.dataset.messageId = message.id; details.append(el('summary', '', message.toolName || 'Tool result')); appendResult(details, message.content, message.image); return details;
+    const article = el('article', 'tool-output'); article.dataset.messageId = message.id;
+    const details = el('details', 'tool-message'); details.append(el('summary', '', message.toolName || 'Tool result')); appendResult(details, message.content, message.image, false); article.append(details);
+    const images = renderOutputImages(message.image || resultImage(message.content)); if (images.childNodes.length) article.append(images); return article;
   }
   const article = el('article', `message ${message.fromChatId ? 'agent-message' : message.role}`); article.dataset.messageId = message.id;
   const author = message.fromChatId ? `Agent: ${state.chats.find(chat => chat.id === message.fromChatId)?.title || 'another chat'}` : message.role === 'user' ? 'You' : 'Faber';
   const heading = el('div', 'message-heading', author);
+  if (message.status === 'pending') { article.classList.add('pending-followup'); heading.append(el('span', 'pending-followup-label', 'Pending follow-up')); article.title = 'Kept in the queue until a run reaches a safe point between model/tool steps. A running command is not interrupted.'; }
+  else if (message.steering) heading.append(el('span', 'followup-label', 'Follow-up'));
   if (message.createdAt) { const time = el('time', '', new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); time.dateTime = message.createdAt; heading.append(time); }
   article.append(heading);
-  if (message.content) article.append(el('div', 'message-content', displayText(message.content)));
+  if (message.content) { const content = el('div', 'message-content'); content.append(message.role === 'user' ? document.createTextNode(displayText(message.content)) : richContent(displayText(message.content))); article.append(content); }
   if (message.images?.length) {
     const attachments = el('div', 'message-images');
     for (const [index, value] of message.images.entries()) { const source = safeImage(value); if (!source) continue; const image = el('img'); image.src = source; image.alt = `Image ${index + 1} attached to this message`; image.loading = 'lazy'; attachments.append(image); }
@@ -245,11 +268,13 @@ function createMessageNode(message) {
 function renderStream() {
   renderTranscript();
 }
-function appendResult(parent, result, messageImage) {
+function resultImage(result) { try { return (typeof result === 'string' ? JSON.parse(result) : result)?.image; } catch { return undefined; } }
+function richContent(text) { return renderRichContent(text, { onOpenLink: url => act(() => request('app.openLink', { url })) }); }
+function appendResult(parent, result, messageImage, showImage = true) {
   let parsed = result;
   if (typeof result === 'string') { try { parsed = JSON.parse(result); } catch { /* Ordinary text is rendered verbatim. */ } }
   const image = safeImage(messageImage) || safeImage(parsed?.image);
-  if (image) { const img = el('img', 'tool-image'); img.src = image; img.alt = 'Screenshot returned by the tool'; parent.append(img); }
+  if (image && showImage) { const img = el('img', 'tool-image'); img.src = image; img.alt = 'Screenshot returned by the tool'; parent.append(img); }
   const text = image && parsed && typeof parsed === 'object' ? displayText(Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== 'image'))) : displayText(parsed);
   parent.append(el('pre', 'result-content', text));
 }
@@ -258,7 +283,7 @@ function renderActivity() {
   const usageOpen = new Map([...root.querySelectorAll('.usage-run')].map(item => [item.dataset.runId, item.open]));
   root.replaceChildren(); const chat = currentChat(); const run = latestRun(state, chat?.id);
   const session = el('section', 'activity-section'); session.append(el('h3', '', 'This chat'));
-  session.append(el('p', 'activity-empty', run ? statusLabel(run.status) : 'No run yet. Send a message to get started.'));
+  const progress = modelProgress(run, streams.get(run?.id)), status = el('p', `activity-empty model-progress${progress.pulse ? ' thinking-pulse' : ''}`, run ? progress.label : 'No run yet. Send a message to get started.'); status.title = progress.title; session.append(status);
   if (run?.error) session.append(el('p', 'error-text', run.error));
   root.append(session);
   if (chat) {
@@ -271,7 +296,7 @@ function renderActivity() {
       if (!item.modelCalls?.length) details.append(el('p', 'hint', 'Input / output tokens: Not reported. No provider call records are available for this run.'));
       for (const call of item.modelCalls || []) {
         const row = el('div', 'model-call'); row.dataset.callId = call.id; const counts = callUsage(call);
-        row.append(el('strong', '', `Call ${call.sequence} · ${statusLabel(call.status)}`), el('p', '', `${state.providers.find(provider => provider.id === call.providerId)?.name || call.providerId || 'Connection not recorded'} / ${item.modelDisplayName || modelDisplayName(call.providerId, call.model, modelLabels, 'Model not recorded')}`));
+        row.append(el('strong', '', `${call.purpose === 'compaction' ? 'Context summary' : `Call ${call.sequence}`} · ${statusLabel(call.status)}`), el('p', '', `${state.providers.find(provider => provider.id === call.providerId)?.name || call.providerId || 'Connection not recorded'} / ${item.modelDisplayName || modelDisplayName(call.providerId, call.model, modelLabels, 'Model not recorded')}`));
         const totals = el('div', 'usage-counts');
         for (const [label, value, cls] of [['Input tokens', counts.input, 'usage-input'], ['Output tokens', counts.output, 'usage-output']]) { const count = el('span', '', label); count.append(el('b', cls, value)); totals.append(count); }
         row.append(totals);
@@ -303,12 +328,13 @@ function renderActivity() {
 function renderApprovals() {
   const root = $('#approval-list'); root.replaceChildren();
   for (const approval of chatApprovals(state, selectedChatId)) {
-    const item = el('section', 'approval'); item.append(el('h3', '', `Allow ${approval.permission} access?`), el('p', '', approval.summary));
+    const item = el('section', 'approval'); item.append(el('h3', '', projectApprovalTitle(approval)), el('p', '', approval.summary));
+    if (approval.targetProjectPath) item.append(el('p', 'approval-project-target', `${approval.projectName || 'Target project'} · ${approval.targetProjectPath}`));
     if (approval.chatId !== selectedChatId) item.prepend(button(`Agent: ${state.chats.find(chat => chat.id === approval.chatId)?.title || 'child chat'}`, () => selectChat(approval.chatId), 'text-button'));
     const actions = el('div', 'approval-actions'); const remember = el('input'); remember.type = 'checkbox';
     const label = el('label'); label.append(remember, document.createTextNode(approval.chatId === selectedChatId ? ' Remember for this chat' : ' Remember for this agent chat'));
-    for (const [text, allow] of [['Allow for this run', true], ['Deny', false]]) actions.append(button(text, async () => { await request('approval.resolve', { id: approval.id, allow, remember: allow && remember.checked }); await refresh(); }, allow ? 'button primary' : 'button'));
-    actions.append(label); item.append(actions); root.append(item);
+    for (const [text, allow] of [['Allow for this run', true], ['Deny', false]]) actions.append(button(text, async () => { await request('approval.resolve', { id: approval.id, allow, remember: allow && approval.rememberable !== false && remember.checked }); await refresh(); }, allow ? 'button primary' : 'button'));
+    if (approval.rememberable !== false) actions.append(label); item.append(actions); root.append(item);
   }
 }
 function renderVoice() {
@@ -326,7 +352,6 @@ async function sendText(text, withImages = false) {
   if (attachments.some(item => item.pending)) { notify('Wait for the attachments to finish reading.'); return; }
   if ((!text.trim() && !attachments.length) || sending) return;
   if (!currentProject()) { showProjectForm(); return; }
-  if (isActive(latestRun(state, selectedChatId))) throw new Error('Stop the current run before sending another message.');
   sending = true; render();
   drafts.set(sourceDraftKey, $('#prompt').value);
   try {
@@ -343,20 +368,20 @@ async function sendText(text, withImages = false) {
     await refresh(); if (selectedChatId === target.id) $('#transcript').scrollTop = $('#transcript').scrollHeight;
   } finally { sending = false; render(); }
 }
-function modal(title) { navigationMenu.close(); modalReturnFocus = undefined; $('#modal').classList.remove('delete-modal'); $('#modal-title').textContent = title; const body = $('#modal-body'); body.replaceChildren(); if (!$('#modal').open) $('#modal').showModal(); return body; }
+function modal(title) { browserPanel.suspend(); navigationMenu.close(); modalReturnFocus = undefined; $('#modal').dispatchEvent(new Event('faber-modal-replace')); $('#modal').classList.remove('delete-modal'); $('#modal-title').textContent = title; const body = $('#modal-body'); body.replaceChildren(); body.className = ''; body.oninput = null; delete body.dataset.settingsCategory; delete body.dataset.settingsClean; if (!$('#modal').open) $('#modal').showModal(); return body; }
 function closeModal() { $('#modal').close(); }
 function field(labelText, value = '', type = 'text', hint = '') {
   const wrapper = el('label', 'form-row'); wrapper.append(el('span', '', labelText)); const input = el(type === 'textarea' ? 'textarea' : 'input');
-  if (type !== 'textarea') input.type = type; input.value = value ?? ''; wrapper.append(input); if (hint) wrapper.append(el('small', '', hint)); return { wrapper, input };
+  if (type !== 'textarea') input.type = type; input.value = input.defaultValue = value ?? ''; wrapper.append(input); if (hint) wrapper.append(el('small', '', hint)); return { wrapper, input };
 }
 function selectField(labelText, options, value) {
   const wrapper = el('label', 'form-row'); wrapper.append(el('span', '', labelText)); const input = el('select');
   for (const option of options) { const item = el('option', '', option.label); item.value = option.value; input.append(item); }
-  input.value = value ?? options[0]?.value ?? ''; wrapper.append(input); return { wrapper, input };
+  input.value = value ?? options[0]?.value ?? ''; for (const item of input.options) item.defaultSelected = item.selected; wrapper.append(input); return { wrapper, input };
 }
 function checkedRow(label, checked, description) {
   const wrapper = el('label', 'option-row'); const text = el('span', '', label); if (description) text.append(el('small', '', description));
-  const input = el('input'); input.type = 'checkbox'; input.checked = checked; wrapper.append(text, input); return { wrapper, input };
+  const input = el('input'); input.type = 'checkbox'; input.checked = input.defaultChecked = checked; wrapper.append(text, input); return { wrapper, input };
 }
 function actions(...buttons) { const footer = el('div', 'form-actions'); footer.append(...buttons); return footer; }
 async function navigationAction(kind, id, action, restoreFocus) {
@@ -399,38 +424,28 @@ function showRename(kind, entity) {
   const body = modal(`Rename ${kind}`); const name = field('Name', kind === 'chat' ? entity.title : entity.name); body.append(name.wrapper);
   body.append(actions(button('Cancel', closeModal), button('Save', async () => { const value = name.input.value.trim(); if (!value) throw new Error('Enter a name.'); await request(`${kind}.update`, { id: entity.id, [kind === 'chat' ? 'title' : 'name']: value }); await refresh(); closeModal(); }, 'button primary'))); name.input.focus(); name.input.select();
 }
-function showSettings() {
-  const body = modal('Settings'); const appearance = el('section', 'modal-section'); appearance.append(el('h3', '', 'Appearance'));
-  const theme = selectField('Theme', ['system', 'dark', 'light'].map(value => ({ value, label: statusLabel(value) })), state.settings?.theme || 'system');
-  theme.input.id = 'settings-theme';
-  theme.input.addEventListener('change', () => act(async () => { await request('settings.update', { theme: theme.input.value }); await refresh(); })); appearance.append(theme.wrapper); body.append(appearance);
-  const models = el('section', 'modal-section'); models.append(el('h3', '', 'Model connections'), el('p', 'hint', 'Connect OpenAI Responses, another compatible API, or a local Ollama server. Listing models sends no inference request. Save a connection, then explicitly choose it for a chat.'));
-  for (const provider of state.providers) { const row = button('', () => showProviderForm(provider), 'provider-row'); const text = el('span'); text.append(el('strong', '', provider.name), el('small', '', `${providerKindLabel(provider.kind)} · ${provider.baseUrl}`)); row.append(text, el('span', '', 'Edit')); models.append(row); }
-  models.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => showProviderForm()))); body.append(models);
-  modelsBrowser.mountSettings(body);
-  const addons = el('section', 'modal-section'); addons.append(el('h3', '', 'Local addons'), el('p', 'hint', 'Manage addons installed from this computer. No account or online catalog is required.'), button('Manage addons', () => addonManager.show())); body.append(addons);
-  const about = el('section', 'modal-section'); about.append(wordmark('about-wordmark'), el('h3', '', 'Faber b1.2rc'), el('p', 'hint', 'A separate workspace for local and connected models. Tools and extensions run on this computer with the permissions you grant.'));
-  const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
-  about.append(el('p', 'hint', 'Refresh interface keeps chats, downloads, loaded models, and composer drafts running. Backend changes still need Restart app.'), actions(button('Tools & extensions', () => showTools('extensions')), reload, button('Restart app', () => request('app.restart')))); body.append(about);
-}
-function showProviderForm(provider) { connections.showForm(provider); }
+function showSettings(category = 'ui') { preferences.show(category); }
 function showModelPicker() { connections.showPicker(); }
 const permissionDescriptions = {
-  files: 'Write files and authorize access to other project folders.', shell: 'Run commands with your Windows user permissions.', computer: 'Take screenshots, control this computer, and use microphone or speech tools.', network: 'Make requests to external services.', upgrade: 'Stage or activate changes to Faber and its extensions.',
+  files: 'Write files in permitted project folders.', shell: 'Run commands with your Windows user permissions.', computer: 'Take screenshots, control this computer, and use microphone or speech tools.', network: 'Make requests to external services.', upgrade: 'Stage or activate changes to Faber and its extensions.',
 };
 function showChatSettings() {
   const chat = currentChat(); if (!chat) return;
   const body = modal('Chat settings');
   const title = field('Chat title', chat.title); body.append(title.wrapper);
-  const permissions = el('section', 'modal-section'); permissions.append(el('h3', '', 'Permissions'), el('p', 'hint', 'Read tools can inspect this workspace. Other actions ask each run unless you grant access here. Grants are real host authority, not an operating-system sandbox.'));
+  const promptChoice = preferences.createPromptChoice(); body.append(promptChoice.root);
+  const permissions = el('section', 'modal-section'); permissions.append(el('h3', '', 'Permissions'), el('p', 'hint', 'Read tools can inspect this workspace. Other actions ask each run unless you grant access here. Shell grants and executable addons have full PC authority under your user account; these grants are not an operating-system sandbox.'));
   const checks = PERMISSIONS.map(permission => { const check = checkedRow(statusLabel(permission), chat.grants.includes(permission), permissionDescriptions[permission]); check.wrapper.classList.add('permission-row'); permissions.append(check.wrapper); return { permission, ...check }; }); body.append(permissions);
+  const projects = el('section', 'modal-section'); projects.append(el('h3', '', 'Access to other projects'), el('p', 'hint', 'Only you can grant these named project scopes. Files and shell permissions remain separate. Revoking a project stops runs using that scope.'));
+  const projectChecks = state.projects.filter(project => !project.archived && project.id !== chat.projectId).map(project => { const check = checkedRow(project.name, (chat.projectGrants || []).includes(project.id), project.path); check.input.dataset.projectGrant = project.id; projects.append(check.wrapper); return { project, ...check }; });
+  if (!projectChecks.length) projects.append(el('p', 'hint', 'No other projects are available.')); body.append(projects);
   const speech = el('section', 'modal-section'); speech.append(el('h3', '', 'Voice'));
   const phrase = field('Activation phrase', chat.voice?.phrase || 'Hey Faber', 'text', 'Used only while the voice assistant is listening for this chat.');
   const enabled = checkedRow('Enable activation for this chat', Boolean(chat.voice?.enabled), 'This phrase can select this chat while assistant mode is running.');
   const speak = checkedRow('Read replies aloud', chat.voice?.speakReplies !== false); speech.append(phrase.wrapper, enabled.wrapper, speak.wrapper); body.append(speech);
   body.append(actions(button('Archive chat', async () => { await request('chat.archive', { chatId: chat.id }); await refresh(); closeModal(); }), button('Delete chat', () => showDelete('chat', chat), 'button danger'), button('Save changes', async () => {
     if (!title.input.value.trim() || !phrase.input.value.trim()) throw new Error('Enter a chat title and activation phrase.');
-    await request('chat.update', { id: chat.id, title: title.input.value.trim(), grants: checks.filter(item => item.input.checked).map(item => item.permission), voice: { ...chat.voice, enabled: enabled.input.checked, phrase: phrase.input.value.trim(), speakReplies: speak.input.checked } }); await refresh(); closeModal();
+    await request('chat.update', { id: chat.id, title: title.input.value.trim(), ...promptChoice.value(), grants: checks.filter(item => item.input.checked).map(item => item.permission), projectGrants: projectChecks.filter(item => item.input.checked).map(item => item.project.id), voice: { ...chat.voice, enabled: enabled.input.checked, phrase: phrase.input.value.trim(), speakReplies: speak.input.checked } }); await refresh(); closeModal();
   }, 'button primary')));
 }
 function showVoice() {
@@ -503,16 +518,15 @@ function showToolForm(name, action) {
 
 function cleanSettings() {
   if ($('#modal-title').textContent !== 'Settings') return false;
-  const inputs = [...$('#modal-body').querySelectorAll('input,textarea,select')];
-  if (inputs.some(input => !['settings-theme', 'model-download-directory', 'model-hf-token'].includes(input.id))) return false;
-  return $('#settings-theme')?.value === (state.settings?.theme || 'system') && !$('#model-hf-token')?.value && typeof downloadDirectory === 'string' && $('#model-download-directory')?.value === downloadDirectory;
+  return $('#modal-body').dataset.settingsClean === 'true' && !hasUnsentDrafts({ fields: document.querySelectorAll('#modal input, #modal textarea, #modal select') });
 }
 function refreshReason(manual) {
+  if (document.querySelector('#profile-switch-dialog').open) return 'Close the profile switcher before refreshing.';
   if (navigationMenu.isOpen()) return 'Close the chat or project menu before refreshing.';
   if (composing) return 'Finish composing text before refreshing.';
   return refreshBlocker({ sending, pendingReads: imageDrafts.hasPending(), pendingPicker, pendingRequests, modalOpen: $('#modal').open, cleanSettings: cleanSettings(), modelsOpen: document.body.classList.contains('models-open'), voiceActive: !['off', 'error', 'transcript'].includes(voice.status), manual });
 }
-function freezeInterface(frozen) { uiHandoff = frozen; document.body.inert = frozen; document.documentElement.dataset.uiRefreshing = String(frozen); }
+function freezeInterface(frozen) { if (frozen) browserPanel.suspend(); uiHandoff = frozen; document.body.inert = frozen; document.documentElement.dataset.uiRefreshing = String(frozen); }
 function scheduleUIRefresh() {
   if (!pendingUpdateId || bootstrapping || uiHandoff || retryTimer) return;
   retryTimer = setTimeout(() => { retryTimer = undefined; if (pendingUpdateId && !bootstrapping && !uiHandoff) act(() => refreshInterface(false)); }, 150);
@@ -554,6 +568,8 @@ async function initializeInterface() {
       imageDrafts.restore(saved.state.drafts.map(({ key, attachments }) => ({ key, attachments })));
     }
     acceptState(await request('state.get'));
+    const recovery = await request('app.recoveryStatus'); workspaceControls.setRecovery(recovery);
+    await workspaceControls.loadProfiles();
     $('#prompt').value = drafts.get(draftKey()) || '';
     bootstrapping = false;
     for (const event of startupEvents.splice(0)) handleBridgeEvent(event);
@@ -570,7 +586,14 @@ async function initializeInterface() {
       freezeInterface(false); if (view.promptFocused) $('#prompt').focus({ preventScroll: true });
       notify('Interface refreshed. Your composer drafts are restored.');
     } else freezeInterface(false);
-    flushHandoffVoice(); document.documentElement.dataset.uiReady = 'true'; scheduleUIRefresh(); void refreshModelLabels();
+    flushHandoffVoice();
+    if (recovery.safeMode && !saved) workspaceControls.showRecovery();
+    else if (!saved && !state.settings?.onboardingComplete) preferences.showQuickStart();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await request('app.uiReady');
+    document.documentElement.dataset.uiReady = 'true'; scheduleUIRefresh(); void refreshModelLabels();
+    void browserPanel.load();
+    void chatgptControls.load().catch(error => notify(`ChatGPT connection status: ${error.message}`, true));
   } catch (error) {
     bootstrapping = false; freezeInterface(false); document.documentElement.dataset.uiReady = 'error';
     notify(`Interface recovery could not finish: ${interfaceError(error)}. Any pending recovery snapshot remains in host memory.`, true);
@@ -578,17 +601,24 @@ async function initializeInterface() {
 }
 
 const navigationMenu = createNavigationMenu({ el, getState: () => state, onAction: (...args) => act(() => navigationAction(...args)) });
-const runActivity = createRunActivity({ el, button, appendResult, selectChat, resolveApproval: async (id, allow) => { await request('approval.resolve', { id, allow }); await refresh(); } });
-const chatControls = createChatControls({ request, refresh, getChat: currentChat, getDraft: () => $('#prompt').value, modal, closeModal, el, button, field, actions, icon, notify });
+const runActivity = createRunActivity({ el, button, appendResult: (parent, result, image) => appendResult(parent, result, image, false), selectChat, resolveApproval: async (id, allow) => { await request('approval.resolve', { id, allow }); await refresh(); } });
+const chatControls = createChatControls({ request, refresh, getChat: currentChat, getDraft: () => $('#prompt').value, getModelName: () => modelDisplayName(currentProvider()?.id, currentChat()?.model || currentProvider()?.model, modelLabels), modal, closeModal, el, button, field, actions, icon, notify });
 $('#composer-bottom').prepend(chatControls.root);
-const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings });
-const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings });
+const browserPanel = createBrowserPanel({ request, subscribe: bridge?.subscribe, getChat: currentChat, getChats: () => state.chats, el, button });
+const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings: () => showSettings('models') });
+const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings: () => showSettings('connections'), createPromptChoice: () => preferences.createPromptChoice(), mountOpenAI: body => chatgptControls.mount(body) });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
+const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
+const preferences = createPreferences({ workspaceControls, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
+const chatgptControls = createChatGPTControls({ request, refresh, getChat: currentChat, getState: () => state, newChat, closeModal, el, button, field, selectField, actions, createPromptChoice: () => preferences.createPromptChoice(), notify });
 $('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
 $('#open-models').addEventListener('click', () => act(() => modelsBrowser.open()));
 $('#new-chat').addEventListener('click', () => act(newChat));
 $('#add-project').addEventListener('click', showProjectForm);
-$('#open-settings').addEventListener('click', showSettings);
+$('#open-settings').addEventListener('click', () => showSettings());
+$('#report-notice').addEventListener('click', () => act(preferences.showBugReport));
+window.addEventListener('error', event => rememberError(event.message || 'Unknown interface error'));
+window.addEventListener('unhandledrejection', event => rememberError(event.reason?.message || String(event.reason)));
 $('#open-tools').addEventListener('click', () => showTools());
 $('#composer-tools').addEventListener('click', () => showTools());
 let pickerDraftKey;
@@ -626,18 +656,32 @@ $('#stop-run').addEventListener('click', () => act(async () => { await request('
 $('#collapse-sidebar').addEventListener('click', () => { document.body.classList.add('sidebar-hidden'); document.body.classList.remove('sidebar-open'); });
 $('#show-sidebar').addEventListener('click', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); });
 function toggleActivity(force) { const rail = $('#activity-rail'); const open = force ?? (matchMedia('(max-width: 1000px)').matches ? !document.body.classList.contains('activity-open') : rail.hidden); rail.hidden = !open; document.body.classList.toggle('activity-open', open); $('#toggle-activity').setAttribute('aria-expanded', String(open)); }
-$('#toggle-activity').addEventListener('click', () => toggleActivity()); $('#close-activity').addEventListener('click', () => toggleActivity(false));
+$('#toggle-activity').addEventListener('click', () => { if (document.body.classList.contains('browser-open')) { browserPanel.show(false); toggleActivity(true); } else toggleActivity(); }); $('#close-activity').addEventListener('click', () => toggleActivity(false));
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
 function handleBridgeEvent(event) {
+    if (event.type === 'openSettings') { showSettings(); return; }
+    if (event.type === 'chatgpt') { chatgptControls.accept(event); return; }
     if (event.type === 'localModels') { chatControls.invalidate(); renderComposerControls(); if (event.state?.modelLabels) { ++modelLabelRequest; modelLabels = event.state.modelLabels; renderModelLabel(); } else void refreshModelLabels(); }
     if (event.type === 'models') downloadDirectory = event.state.downloadDirectory;
     if (event.type === 'voice' && uiHandoff) { handoffVoiceEvents.push(event); return; }
     if (event.type === 'state') acceptState(event.state);
-    else if (event.type === 'delta') {
-      if (Number.isSafeInteger(event.streamSequence)) { streamVersion = mergeRuntimeStreams(streams, event, streamVersion); if (event.chatId === selectedChatId) { renderStream(); renderComposerControls(); } return; }
-      let stream = streams.get(event.runId);
-      if (!stream) { const chat = state.chats.find(item => item.id === event.chatId); stream = { text: '', lastAssistantId: chat?.messages.filter(item => item.role === 'assistant').at(-1)?.id }; streams.set(event.runId, stream); }
-      stream.text += event.text; if (event.metrics) stream.metrics = event.metrics; if (event.chatId === selectedChatId) { renderStream(); renderComposerControls(); }
+    else if (event.type === 'delta' || event.type === 'progress') {
+      const previous = streams.get(event.runId);
+      if (Number.isSafeInteger(event.streamSequence)) {
+        const before = streamVersion; streamVersion = mergeRuntimeStreams(streams, event, streamVersion); if (event.sequence <= before) return;
+      } else {
+        let stream = previous;
+        if (!stream) { const chat = state.chats.find(item => item.id === event.chatId); stream = { text: '', lastAssistantId: chat?.messages.findLast(item => item.role === 'assistant')?.id }; streams.set(event.runId, stream); }
+        if (event.type === 'delta') stream.text = event.replace ? event.text : stream.text + event.text;
+        if (event.phase && event.phase !== stream.phase) stream.progressSummary = '';
+        if (event.phase) stream.phase = event.phase;
+        if (typeof event.summary === 'string') stream.progressSummary = event.summary;
+        if (event.modelCallId) stream.modelCallId = event.modelCallId;
+        if (event.metrics) stream.metrics = event.metrics;
+      }
+      const stream = streams.get(event.runId), call = state.runs.find(run => run.id === event.runId)?.modelCalls?.find(call => call.id === event.modelCallId);
+      if (call && stream) { if (stream.phase) call.phase = stream.phase; call.progressSummary = stream.progressSummary || ''; if (event.metrics) call.metrics = event.metrics; }
+      if (event.chatId === selectedChatId) { renderStream(); renderComposerControls(); if (event.type === 'progress' || previous?.phase !== stream?.phase) renderActivity(); }
     } else if (event.type === 'approval') act(refresh);
     else if (event.type === 'voice') {
       if (event.status !== 'transcript') voice = event;

@@ -1,8 +1,7 @@
 export const ACTIVE_STATUSES = new Set(['queued', 'running', 'waiting', 'awaiting_approval', 'waiting_approval', 'stopping']);
 export const PERMISSIONS = ['files', 'shell', 'computer', 'network', 'upgrade'];
 export function isActive(run) { return Boolean(run && ACTIVE_STATUSES.has(run.status)); }
-export function latestRun(state, chatId) { return [...(state.runs || [])].reverse().find(run => run.chatId === chatId); }
-export function visibleChats(state, projectId) { return (state.chats || []).filter(chat => chat.projectId === projectId && !chat.archived); }
+export function latestRun(state, chatId) { return (state.runs || []).findLast(run => run.chatId === chatId); }
 export function chatApprovals(state, chatId) {
   const runs = new Set(state.runs.filter(run => run.chatId === chatId).map(run => run.id));
   for (let changed = true; changed;) {
@@ -32,7 +31,7 @@ export function reconcileStreams(streams, state) {
   for (const [runId, stream] of streams) {
     const run = state.runs.find(item => item.id === runId);
     const chat = state.chats.find(item => item.id === run?.chatId);
-    const lastAssistant = chat?.messages.filter(item => item.role === 'assistant').at(-1);
+    const lastAssistant = chat?.messages.findLast(item => item.role === 'assistant');
     if (!isActive(run) || (lastAssistant && lastAssistant.id !== stream.lastAssistantId)) streams.delete(runId);
   }
 }

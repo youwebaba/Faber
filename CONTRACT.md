@@ -6,6 +6,12 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
+This contract describes Alpha 2.0 (internal version 2.0.2-alpha.1), including
+steering, project authority, profiles, recovery, core snapshots, external access
+and compaction hardening. Source/application validation is recorded in
+[VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
+assets, and earlier chronological evidence remains separate.
+
 ## Implementation ownership
 
 - `core/`, `test/core*.test.mjs`: runtime agent. Node ES modules, no Electron
@@ -23,6 +29,9 @@ applications' data or change their launchers.
   agents use the same manager, with host-owned networking and encrypted tokens.
 - `local-models/`: downloaded-file discovery, managed local server lifecycle and
   existing Ollama load/unload operations; see [LOCAL_MODELS.md](LOCAL_MODELS.md).
+- `native/src/`: bounded GGUF binary parsing in a Rust subprocess. The JS host
+  retains path authorization, open-file identity checks and result aggregation.
+  The worker receives an inherited read-only descriptor, never a model path.
 
 Use Node's test runner. Electron is the only initial runtime dependency; prefer
 standard-library code over adding a framework for this small first version.
@@ -32,13 +41,17 @@ standard-library code over adding a framework for this small first version.
 `core/runtime.mjs` exports `createRuntime({dataDir, sourceDir, host, provider?})`
 as an async factory. Runtime exposes `request(method, params = {})`,
 `subscribe(listener)` (returns unsubscribe), `registerTools(tools)`, and
-`close()`. The host also uses `emit(event)`, `setExtensions(metadata)` and
+`close()`. Host-only `createExternalSession(...)` and
+`withExternalProvider(...)` are described below. The host also uses
+`emit(event)`, `setExtensions(metadata)` and
 `replaceExtensionTools(tools, metadata)`; replacement validates before changing
 the active registry. An event is `{type, ...payload}`. A state change emits `state` with
 `state`; streaming emits `delta` with `chatId, runId, text`; other supported
-types are `approval`, `voice`, `models`, `error`. The `models` event carries a
+types are `approval`, `voice`, `models`, `error`, `browser`, `browserFrame`,
+`browserShortcut`, `browserFind`, `browserViewHidden`, `localModels`, `addons`
+and `gateway`. The `models` event carries a
 separate model-hub state snapshot. Runtime state contains `projects, chats, runs,
-providers, tools, extensions, approvals, settings`. It never includes secrets.
+providers, tools, extensions, approvals, settings, promptPresets`. It never includes secrets.
 Live response snapshots are transient UI state, not saved messages or provider
 input. Their sequence numbers let a refreshed renderer join an active response
 without dropping or repeating chunks received during startup.
@@ -48,6 +61,9 @@ Host hooks: `getSecret(id)`, `setSecret(id, value)`, `chooseDirectory()`,
 `reloadExtensions()`, `restart()`, and `openExternal(url)` for validated Hugging
 Face model pages. Hooks are optional; missing hooks produce
 an honest unavailable result. Host connects native voice events to the UI.
+`privatePaths` supplies protected profile/registry roots; scoped path checks also
+protect the current `dataDir`. The desktop supplies `backupCore(signal)` before
+shell execution; failure prevents the command. It snapshots source, not user data.
 The optional synchronous `assertProviderAvailable(providerId, model, options)` hook
 rejects a new run before message mutation when local lifecycle state prevents
 use of that connection/model or its selected context size differs from the loaded
@@ -61,22 +77,38 @@ check for the verified shipped Lightpanda addon. It must match the active
 registered execution function, fixed tool name, allowed browser permission and
 installer-pinned package digest. It returns false for other tools and revokes
 authority on addon disable, removal or replacement. It never grants a run/chat
-permission, including through `ctx.approve`.
+permission, including through `ctx.approve`. The built-in visible Chromium
+browser also uses this hook: automatic authority matches its exact registered
+execution function, fixed tool name and that tool's declared permission only.
+Closing the manager revokes it; unrelated tools receive no authority.
+`browser_download` requires ordinary files permission and receives no automatic
+authority. Persistent browser sessions and tabs belong to the calling chat;
+human takeover pauses all its agent browser tools until explicit Resume. See [BROWSER.md](BROWSER.md).
 
 Each tool is `{name, description, parameters, permission, execute(args, ctx)}`.
 Names use underscores for provider compatibility. Permission is one of `read`,
 `files`, `shell`, `computer`, `network`, `upgrade`. Read tools may inspect the
-current workspace and harness state. Privileged tools require a run-scoped
+current workspace and authorized harness metadata. Target-project authority is
+separate: inspection, coordination and structured file access in another project
+require that exact project's approval, even with a files/shell grant. Lists default
+to authorized projects. Revoking `projectGrants` removes authority from the chat
+tree and cancels dependent live work/pending approvals; it cannot undo completed
+effects. Privileged tools require a run-scoped
 approval or an explicit persistent chat grant. A grant is real host authority,
 not an OS sandbox; shell/plugins may access anything the user account can.
-The verified bundled Lightpanda browser tools have the narrow automatic host
-authority described above; configuration changes and unrelated tools do not.
+The verified bundled Lightpanda browser tools and built-in Chromium browser
+tools have the narrow automatic host authority described above; configuration
+changes and unrelated tools do not.
 The built-in read tool `system_time` returns the PC clock as UTC, local time,
 IANA timezone, UTC offset in minutes and Unix milliseconds without shell access.
 Tool args require JSON-schema validation before execution; reject unknown tools.
 `ctx` contains `runtime, chat, project, runId, signal, dataDir, sourceDir, host`,
-and `approve(permission, summary)`. All agents share the registered tool set;
-children inherit grants and cannot grant themselves authority. Stop cancels the
+and `approve(permission, summary)`, `authorizeProject(projectId, summary?)`,
+`authorizePath(absolutePath, summary?)`. File/image callers check paths before
+access and revalidate after awaits. The check resolves the most specific registered
+project, rejects protected profile paths and rechecks scope changes. Same-project
+children inherit bounded grants; cross-project children start without file/shell
+grants. Agents cannot grant themselves authority. Stop cancels the
 run and descendants, pending approvals and managed subprocesses. Restart never
 automatically replays interrupted side effects. Tools return JSON-serializable
 values; a screenshot may return `{image: 'data:image/png;base64,...', ...}`.
@@ -97,12 +129,22 @@ Requests and return values:
 - `project.archive` / `project.delete` `{projectId}` → result; records only,
   never workspace files. Delete requires stopped chats.
 - `chat.create` `{projectId,title?}` → chat.
-- `chat.update` `{id,title?,providerId?,model?,grants?,voice?,contextTokens?,thinking?}`
+- `chat.update` `{id,title?,providerId?,model?,grants?,projectGrants?,voice?,contextTokens?,thinking?,reasoningEffort?,systemPrompt?,systemPromptPresetId?}`
   → chat. Context is a positive integer or null (default); thinking is boolean or
-  null (provider default). Unsupported explicit values are rejected.
+  null (provider default). Unsupported explicit values are rejected. Prompt text
+  is a per-chat snapshot, up to 65,536 characters, and may intentionally be empty.
+  Selecting a preset ID alone copies the library text; custom text without an ID
+  clears the reference. Runs freeze the prompt/options at start. `projectGrants`
+  is the user's explicit set of additional project IDs; removing an ID revokes
+  dependent authority. Moving a stopped chat tree clears permission/project grants.
+  External session project/provider/authority fields cannot be changed.
 - `chat.controls` `{chatId}` → provider capabilities, selected options, context
   estimate and measured managed capacity when available.
-- `chat.send` `{chatId,text,images?}` → `{runId}` immediately; events carry progress.
+- `chat.send` `{chatId,text,images?}` → `{runId}` when starting, or
+  `{runId,queued:true,messageId}` for a busy-run followup. Text/images enter
+  the durable inbox (maximum 32 queued items), delivered before the next model
+  turn after the current assistant/tool-result group. Steering does not interrupt
+  an in-flight provider/tool call. Events carry progress.
   `images` is an optional array of PNG/JPEG/WebP base64 data URLs, with up to
   eight images and 8 MiB of encoded strings in total. Runtime validation precedes
   any message/run mutation; empty text is accepted when an image is present.
@@ -120,10 +162,29 @@ Requests and return values:
   Chat Completions), or `ollama` (native local API). Responses reasoning effort
   is optional: `low`, `medium`, `high`, `xhigh`, `max`; empty clears the setting.
 - `provider.test` `{id}` → `{ok,models?,error?}`; no paid inference by default.
-- `approval.resolve` `{id,allow,remember?}` → result.
+- `approval.resolve` `{id,allow,remember?}` → result. Project approval grants only
+  its target; remembering adds that project ID to the chat. `rememberable:false`
+  rejects remembered approval, including external tool calls.
 - `tool.run` `{chatId,name,args}` → result, same policy as model invocation.
-- `settings.update` `{theme?,maxDepth?,maxAgents?,runTimeoutMs?}` → settings.
+- `settings.update` `{theme?,maxDepth?,maxAgents?,runTimeoutMs?,uiScale?,onboardingComplete?}` → settings.
   Theme is `dark`, `light` or `system`; legacy context/turn settings are retired.
+  UI scale is 0.75–1.5 and changes Electron's whole-page zoom; onboarding is boolean.
+  `runTimeoutMs` is `0` (Off) or an integer from 1000 through 2147483647;
+  default 600000. Updates immediately reschedule active runs from their original
+  monotonic start, including approval/compaction time. An elapsed shortened
+  deadline stops work; Off removes the overall timer. Stop/forceStop and separate
+  tool/network/gateway deadlines remain effective.
+- `promptPresets.save` `{id?,name,text}` → preset; `promptPresets.delete/reset`
+  `{id}` → result. Save edits the library only. General cannot be deleted; deleting
+  another preset retains existing chat text. Reset restores a built-in default.
+- `app.bugReportDraft` `{description?,steps?,errors?}` → `{title,body}` with bounded,
+  commonly sensitive values redacted; `app.reportIssue` `{title,body}` opens only
+  the Faber GitHub new-issue URL for user review. Neither method submits an issue.
+- `app.openLink` `{url}` opens a user-clicked HTTP(S) link without embedded credentials.
+- `chatgpt.status/signIn/cancel/signOut/select/models/usage` are host-owned account
+  operations. `runtime.setAccountProviders(records)` is host-only and accepts no
+  tokens. Account providers use reserved `chatgpt:<id>` IDs and the fixed public
+  OpenAI Responses endpoint; `provider.save` cannot create/edit them. See [CHATGPT.md](CHATGPT.md).
 - `extensions.reload` → extension metadata.
 - `voice.start` `{chatId,mode}` (`dictation` or `assistant`) → result.
 - `voice.stop` `{chatId?}` → result.
@@ -132,6 +193,22 @@ Requests and return values:
   microphone capture.
 - `app.openPath` `{path}` → result.
 - `app.restart` → result.
+- `profiles.list {}` → `{currentId,profiles:[{id,name,current}],switchRequiresRestart:true}`.
+  `profiles.create {name}` / `profiles.rename {id,name}` return profile metadata.
+  `profiles.switch {id,draftsCleared:true}` selects/relaunches with
+  `{restarting:true,currentId}`; the current profile does not restart.
+  The renderer resolves/discards drafts/forms first. The host rejects active
+  runs/downloads/voice, UI handoffs, source mutations and external requests,
+  stops the idle gateway and rechecks before selection. No profile deletion API.
+- `app.recoveryStatus {}` → `{safeMode,reason}`; `app.restartNormal {}` asks for
+  confirmation before restarting without the forced Safe Mode flag.
+- `app.uiReady {}` → `{ready:true,safeMode,reason}` after renderer initialization.
+  Navigation alone does not mark startup ready. This is not a claim that every
+  addon/model/device is available.
+- `gateway.status/configure/start/stop/rotateToken` → [GATEWAY.md](GATEWAY.md).
+  Status is `{running,activeRequests,activeSessions,hasToken,config,baseUrl,mcpUrl}`;
+  `gateway` events carry it as `state`. Rotation alone returns `token` once after
+  stopping/canceling requests and sessions. There is no automatic start.
 - `app.reloadUI` `{state}` → `{id,reloading:true}` after accepting a versioned
   composer/view snapshot into host memory. Only the renderer reloads; runtime,
   model processes and download jobs continue. Backend source drift, voice work,
@@ -150,21 +227,41 @@ Requests and return values:
   [local model contract](LOCAL_MODELS.md).
   These host-owned methods are allowlisted in the bridge; agents share the same
   manager through registered tools. `localModels` events signal lifecycle changes.
+- `browser.state/frame/open/navigate/input/stop/close`, tab new/select/close,
+  back/forward/reload, takeover/resume/view, bookmarks/history/downloads/upload,
+  find/stopFind/zoom and toolbar-focus notifications → the persistent browser
+  manager in [BROWSER.md](BROWSER.md). User operations may select a chat explicitly;
+  agent tools own only their calling chat's tabs. Explicit toolbar navigation
+  acquires human control. All agent browser calls pause during human ownership;
+  Resume releases old calls as stale, never replaying input. Stop preserves tabs.
+  `browser` events carry session/tab ownership and library metadata;
+  `browserFrame` carries bounded PNGs with chat/tab IDs, URL, actual viewport,
+  sequence and observation handle. A native WebContentsView attaches only to the
+  validated selected page slot during human control; screenshots monitor agents.
+  Remote pages are sandboxed without preload, Node or the Faber bridge. Agent
+  input never moves the Windows pointer, injects OS keys or activates a window.
+  Tabs/ownership persist in profile metadata, cookies in Chromium partitions and
+  an encrypted host session-cookie store. Cookie values never enter UI/tool state.
+  Agent downloads require files approval, use a constrained directory and never
+  execute. Human uploads/downloads require explicit selection or a real gesture.
 - `addons.list/import/enable/disable/uninstall/reset/rollback/openDirectory` →
   the local package lifecycle in [ADDONS.md](ADDONS.md). `addons` events carry
   changed state; unchanged reads do not emit another event. Mutations serialize
   and code approval covers the complete package. Online sharing is excluded.
 
 Project: `{id,name,path,createdAt}`. Chat:
-`{id,projectId,title,providerId,model,grants:[],voice:{enabled:false,phrase:'Hey Faber',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
+`{id,projectId,title,providerId,model,grants:[],projectGrants:[],inbox:[],voice:{enabled:false,phrase:'Hey Faber',speakReplies:true},messages:[],createdAt,updatedAt,archived:false,parentChatId?}`.
 Message: `{id,role,content,createdAt,toolCalls?,toolName?,toolCallId?,status?,images?,runId?,modelCallId?,sourceMessageId?}`.
 User `images` are durable attachments, distinct from the singular `image` on a
 tool screenshot. Adapters encode user attachments in the original user message.
-Busy chats also have a durable `inbox`; agent messages enter the provider
-conversation only between complete assistant/tool-result groups. Messages may
-include `fromChatId` and `runId` for attribution.
+Busy chats have a durable `inbox` of `{id,text,source,createdAt,runId?,images?,fromChatId?}`.
+User steering and agent messages enter provider input between complete
+assistant/tool-result groups. Delivered user followups have `steering:true`.
+Pending items survive Stop/restart without starting a run automatically.
+Messages may include `fromChatId` and `runId` for attribution.
 Run: `{id,chatId,providerId,model,modelDisplayName?,requestMessageId?,parentRunId?,status,startedAt,endedAt?,error?,toolEvents:[],modelCalls:[]}`.
-The connection/model are captured when a run starts; older saved runs may omit them.
+The connection/model and `grants`/`projectGrants` are captured when a run starts;
+older saved runs may omit them. External runs also carry `externalSessionId`.
 Each model call records `{id,sequence,providerId,model,startedAt,endedAt?,status,usage?}`.
 Usage contains provider-reported `inputTokens`, `outputTokens` and optional
 `cachedInputTokens`/`reasoningTokens`; absent fields mean unknown, not zero.
@@ -176,7 +273,10 @@ New model-issued events and tool messages reference their triggering assistant
 message and model call. The renderer interleaves live activity using those links;
 older saved runs use available call IDs and transcript ordering. These fields are
 UI attribution metadata, not extra provider conversation content.
-Approval: `{id,chatId,runId,permission,summary}`.
+Approval: `{id,chatId,runId,permission,summary,rememberable?,externalSessionId?}`.
+Project approvals use `kind:'project',permission:'project',sourceProjectId`,
+`targetProjectId?`, `targetProjectPath` and `projectName`; a newly requested
+project without an ID cannot be remembered.
 Provider: `{id,name,kind,baseUrl,model,hasKey,reasoningEffort?}`. Tool metadata
 excludes execute. Saving a connection does not select it for a chat.
 
@@ -203,6 +303,29 @@ replaced by references in provider input. Their durable message contents remain
 unchanged. This projects redundant inspection snapshots, not a character or
 message budget. All ordinary conversation/tool content and actual provider
 continuation items remain intact.
+
+## Host-only external authority and startup
+
+`runtime.withExternalProvider({providerId,model?},callback)` validates a saved
+non-account connection and holds the provider-edit lock while the callback uses
+its cloned configuration. It exposes no credential and rejects account relaying.
+
+`runtime.createExternalSession({projectId,providerId,model,title?,toolNames,allowAutomatic:false})`
+returns `{id,tools(),callTool({name,args,signal?}),close()}`. It creates a dedicated
+chat with fixed project/provider/model, pins allowed registered execute functions,
+uses fresh grants per call, disables automatic tool authority and supplies an
+empty `ctx.runtime`. Administrative/coordination tools are unavailable.
+Close cancels work and archives the chat; restart archives old external chats.
+The gateway fixes the shipped tool allowlist and authenticates every route/
+handshake. Extensions and approved shell/native actions remain trusted host code.
+
+Profiles separate runtime data/credentials/browser state while sharing the
+versioned source workbench. The default keeps its existing directory; new profiles
+live under `%LOCALAPPDATA%\FaberProfiles\profiles\<id>`. The installer-owned
+journal tracks starting/ready/clean/failed. An incomplete previous run or
+`--safe-mode` suppresses addon autoload. Independent recovery does not import
+broken editable application code. See [INSTALLING.md](INSTALLING.md) for limits
+and the same-version workbench warning.
 
 ## Extending and upgrading
 
@@ -235,22 +358,42 @@ Source/extension actions must describe changed files and preserve user data.
 Installed extensions retain exact-source approvals across restart. Extension
 and updater mutations are serialized across concurrent agents. The source
 updater protects dependency manifests, launchers, `desktop/bootstrap.cjs`,
-`desktop/packaged-paths.mjs` and `desktop/recovery.mjs`;
+`desktop/boot-state.cjs`, `desktop/profile-path.cjs`, `desktop/packaged-paths.mjs`
+and `desktop/recovery.mjs`;
 the launcher can run that independent recovery entry without importing the app.
+Alpha 2.0 retains the staged `native/src/**/*.rs` / `native/worker.mjs` support
+introduced in RMb2.0.1.
+Rust source changes compile and run Rust tests before the existing Node suite.
+The generated `native/runtime.json` selects an immutable digest-named executable;
+it is backed up/restored with source, and a backend pins its executable until
+restart. Cargo manifests, toolchain, vendor dependencies and build/integrity
+helpers stay installer-owned. JS-only upgrades need no compiler. Independent
+recovery supports both legacy source records and compiled-pointer records.
+See [RUST_MIGRATION.md](RUST_MIGRATION.md) for build and activation details.
+Before staged apply/rollback and desktop shell execution, `backupCore` retains
+a hash-verified snapshot under `<profile>/upgrades/<id>/backup`, with
+`core-backup.json` and `last-core-backup.json` records. Coverage includes source,
+renderer assets, tests, bundled addons, manifests, build/scripts/docs, launchers
+and the active Rust worker. Weights, profiles, dependency/runtime caches, native
+vendor/target trees and unrelated binaries are excluded. Unchanged backups can
+be reused after source/backup hash checks; drift rejects the mutation. This is
+not a full-profile/system restore. Automatic rollback still restores only the
+eligible last-upgrade manifest and refuses newer unrelated edits.
+
 Ordinary `files_write` refuses writes to the running harness source, including
 symlink aliases. Shell grants remain unrestricted user-account authority.
 
-The model receives every registered tool schema and the full conversation text,
-tool results and arguments. There is no harness character/message budget or
-turn-count cutoff. The former `contextChars`, `contextMessages` and `maxTurns`
+Ordinary runs receive registered tool schemas and conversation/tool input subject
+to the checkpoint projection below. There is no fixed harness character/message
+budget or turn-count cutoff. The former `contextChars`, `contextMessages` and `maxTurns`
 settings are removed on startup and are no longer accepted by settings updates.
 Only the newest tool screenshot is included; earlier screenshot omissions remain
 explicit. Pasted user images remain with their original messages in context.
 Image, transport and individual tool limits still apply. Model/provider context
 capacity remains authoritative; Ollama uses its server/model context settings.
-Runs still stop on completion, errors, user cancellation or the configured
-wall-clock timeout (ten minutes by default). Agent depth/concurrency and approval
-controls remain active.
+Runs stop on completion, errors, user cancellation or an enabled overall time
+limit (ten minutes by default; `0` disables it). Agent depth/concurrency and
+approval controls remain active.
 
 ## Verification and truthfulness
 
@@ -260,3 +403,33 @@ Native PC/voice functions must report real availability and errors. No fabricate
 conversations, working badges, tool results or completion claims in the UI.
 Keep credentials, chat history, recordings, screenshots and runtime data outside
 Git/OneDrive. No cloud fallback or paid API calls during this build.
+
+## Context checkpoints and progress
+
+chat.compact {chatId} is a user bridge operation that starts a tool-free context
+summary followed by continuation of the existing request; it adds no user message.
+chat.contextCheckpoint version 2 stores a summary/boundary, validated
+`requestFacts` and any retained latest request ID; chat.messages remains the full
+transcript. Version 1/unmarked checkpoints are ignored for model projection.
+Saved originals feed a bounded rebuild before a response when known capacity
+requires it; upgrading may need one extra compaction. Failed/canceled rebuilds
+do not rewrite the old stored checkpoint/history.
+
+Checkpoints end on whole assistant/tool groups. Summary output must be a
+substantive JSON handoff with valid original `sourceMessageIds`; an invalid
+handoff receives one feedback retry. Selected exact historical user literals
+retain source IDs outside the lossy summary. They may be superseded and confer
+no permission. Failure to fit required retained facts fails without silently
+dropping them. Source-reference validation does not prove semantic completeness;
+summaries remain lossy.
+A model call may have purpose response or compaction, phase, and a public
+progressSummary. Summary calls retain usage and use bounded internal output.
+
+Transient progress events carry chatId/runId/modelCallId, phase, summary, sequence,
+streamSequence, lastAssistantId and metrics. Delta events with replace:true carry
+the entire canonical text, not an appended chunk. Snapshots retain cumulative
+text and progress so renderer reload cannot duplicate either. Completed Responses
+items remain exact for continuation; malformed/incomplete output never dispatches
+tools. A context rejection may trigger bounded compaction retries; a run with
+contextOverflow:true exposes manual recovery. This does not restore finite user
+turn limits or trim the saved transcript.

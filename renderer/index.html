@@ -4,35 +4,40 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Faber</title>
+  <title>Faber Alpha 2.0</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="models.css">
   <link rel="stylesheet" href="connections.css">
   <link rel="stylesheet" href="chat-media.css">
   <link rel="stylesheet" href="faber.css">
   <link rel="stylesheet" href="chat-controls.css">
+  <link rel="stylesheet" href="rich-content.css">
+  <link rel="stylesheet" href="preferences.css">
+  <link rel="stylesheet" href="browser.css">
   <script type="module" src="app.mjs"></script>
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
-      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label">b1.2rc</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
+      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label">Alpha 2.0</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
       <button id="new-chat" class="nav-button new-chat" data-icon="compose">New chat <kbd>Ctrl N</kbd></button>
       <button id="open-tools" class="nav-button" data-icon="tools">Tools & extensions</button>
       <button id="open-models" class="nav-button" data-icon="models">Models</button>
       <button id="open-addons" class="nav-button" data-icon="addons">Addons</button>
       <div class="section-heading"><span>Projects</span><button id="add-project" class="icon-button" title="Add project" aria-label="Add project" data-icon="plus"></button></div>
       <nav id="project-list" class="project-list" aria-label="Project navigation"></nav>
-      <div class="sidebar-bottom"><button id="open-settings" class="nav-button" data-icon="settings">Settings</button><div class="app-footnote">Your workspace. Your assistant.</div></div>
+      <div class="sidebar-bottom"><button id="profile-switcher" class="nav-button" disabled>Profile: loading…</button><button id="open-settings" class="nav-button" data-icon="settings">Settings</button><div class="app-footnote">Your workspace. Your assistant.</div></div>
     </aside>
     <main class="workspace">
       <header class="workspace-header">
         <button id="show-sidebar" class="icon-button" title="Show sidebar" aria-label="Show sidebar" data-icon="panel"></button>
         <div class="breadcrumb"><span id="project-name">Workspace</span><span class="slash">/</span><button id="chat-title" title="Rename chat">New chat</button></div>
         <span class="models-header-label">Models</span>
-        <div class="header-actions"><button id="chat-options" class="icon-button" title="Chat settings" aria-label="Chat settings" data-icon="sliders"></button><button id="toggle-activity" class="icon-button" title="Show activity" aria-label="Toggle activity" data-icon="activity" aria-expanded="true"></button></div>
+        <div class="header-actions"><button id="toggle-browser" type="button" aria-label="Toggle browser" aria-expanded="false" aria-controls="browser-panel" title="Open browser">Browser</button><button id="chat-options" class="icon-button" title="Chat settings" aria-label="Chat settings" data-icon="sliders"></button><button id="toggle-activity" class="icon-button" title="Show activity" aria-label="Toggle activity" data-icon="activity" aria-expanded="true"></button></div>
       </header>
-      <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="dismiss-notice" class="icon-button" aria-label="Dismiss notification" data-icon="close"></button></div>
+      <div id="notice" class="notice" role="alert" hidden><span id="notice-text"></span><button id="report-notice" class="button" hidden>Report a bug</button><button id="dismiss-notice" class="icon-button" aria-label="Dismiss notification" data-icon="close"></button></div>
+      <aside id="chatgpt-connected-notice" class="chatgpt-connected-notice" role="status" hidden></aside>
+      <aside id="safe-mode-status" class="safe-mode-status" role="status" hidden><strong>Currently in SAFEMODE</strong><span id="safe-mode-reason"></span><button type="button" id="safe-manage-addons" class="button">Manage addons</button><button type="button" id="safe-restart-normal" class="button">Restart normally</button></aside>
       <div class="chat-layout">
         <section class="conversation" aria-label="Conversation">
           <div id="transcript" class="transcript" tabindex="0" aria-label="Chat messages"></div>
@@ -58,6 +63,7 @@
                 <button type="submit" id="send-message" class="send-button" aria-label="Send message" title="Send message" data-icon="arrow"></button>
               </div>
             </form>
+            <div id="chatgpt-plan-status" class="chatgpt-plan-status" hidden></div>
             <div class="composer-caption"><span id="permission-caption">Actions ask for approval</span><span>Enter to send <span aria-hidden="true">·</span> Shift Enter for a new line</span></div>
           </div>
         </section>

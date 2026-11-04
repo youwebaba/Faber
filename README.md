@@ -1,4 +1,4 @@
-# Faber b1.2rc
+# Faber Alpha 2.0
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,13 +7,115 @@ October 31, 2026 direction is a fresh harness with a Codex-style interface,
 shared tools, agent delegation, voice, and upgrades the agents can author.
 Faber has its own source, launchers and release lifecycle.
 
-This is the Beta 1.2 release candidate. The [verification record](VERIFICATION.md) distinguishes tested
-behavior from remaining hardware and release checks.
+**Alpha 2.0** is the visible prerelease name. Its internal package/app version is
+`2.0.2-alpha.1`, with Windows build `2.0.2.0`; the GitHub release tag is
+`alpha-2.0`. See the [verification record](VERIFICATION.md) for source/application
+checks and the release assets for installer checksums and publication records.
+
+## Rust migration
+
+Alpha 2.0 retains the Rust metadata worker introduced in RMb2.0.1. GGUF parsing
+runs in a compiled subprocess using a read-only file handle validated by the host.
+The interface, agent orchestration, providers, local inference and addon APIs
+continue in JavaScript. This is a hybrid metadata migration, not a replacement
+inference engine.
+
+Core upgrades can stage Rust source, compile and test it, then activate it with
+the existing backup/rollback workflow. Compiled changes require a backend
+restart. The installer includes the worker; normal use requires no Rust compiler.
+Authoring Rust upgrades requires the pinned toolchain and Windows C++ build tools.
+See [Rust migration and upgrades](RUST_MIGRATION.md).
+
+## Included from b2.0.1
+
+- First-run quick start with **Continue with ChatGPT**, optional API setup and
+  explicit guidance to select local CPU/GPU hardware. Claude is marked Coming Soon.
+- An **OpenAI** model-picker tab for linked ChatGPT accounts. Available models
+  come from that account's catalog. Context capacity and reasoning options appear
+  only when supplied; Faber does not invent model access or adjustable limits.
+  See [ChatGPT connection](CHATGPT.md) for setup and current verification limits.
+- **Edit → Settings** with UI, system prompts, connections, models/hardware,
+  voice, addons and support categories. Interface scale is saved from 75% to 150%.
+- Editable prompt presets for content creation, education, extraction, meetings,
+  coding, general assistance and self-upgrading. Select a prompt when choosing a
+  model or apply it to a chat in Settings. Existing chats retain their saved text;
+  changes take effect on the next run.
+- Formatted replies: emphasis, underline, strikeout, text colors, nested lists,
+  tables and code. Valid embedded raster images appear in chat; `images_show`
+  displays a saved project screenshot/image. Remote image URLs are not fetched
+  automatically, and this tool does not itself generate images.
+- Green triangle Start and red square Stop controls, tighter top spacing, and
+  chat families that keep every agent below its parent. A parent reply promotes
+  the family; child replies only reorder that parent's agents.
+- **Report a bug** builds an editable draft from recent errors and opens the
+  repository's GitHub issue page after review. Nothing is submitted automatically.
+
+## New in Alpha 2.0
+
+Alpha 2.0 includes the following roadmap features. The new internal version
+selects a fresh `FaberWorkbench\2.0.2-alpha.1` source base while retaining profiles,
+credentials, addons and model locations. Earlier workbenches/custom core edits
+remain available and are not automatically merged. Reinstalling the same
+internal version reuses its workbench. See [INSTALLING.md](INSTALLING.md).
+
+- Busy-chat followups queue with their text/images and join the next model turn
+  after the current assistant/tool-result group completes. Stop remains available.
+- Cross-project inspection, messages and structured file access require permission
+  for the specific target project. Revocation cancels dependent work and pending
+  approvals. Shell/native grants still carry Windows-account authority.
+- Local profiles keep separate chats, credentials, settings and browser state.
+  Switching restarts the app, guards drafts/forms and blocks active runs,
+  downloads, voice, updates and external requests. The source workbench is shared;
+  profiles are not OS sandboxes.
+- Startup readiness tracking and Safe Mode suppress automatic addon loading.
+  Installer-owned recovery can roll back an eligible upgrade, disable addons or
+  remove addon code while retaining private data. Executable cleanup is skipped;
+  owned external resources may need manual cleanup.
+- Before staged apply/rollback and approved shell commands, the host snapshots
+  covered application source/assets, tests, manifests and the active Rust worker.
+  Model weights, profiles and dependency/runtime caches are excluded.
+- **Settings → External access** configures off-by-default, authenticated
+  OpenAI-compatible model serving and project-bound MCP tools. Explicit remote
+  binding uses unencrypted HTTP; see [GATEWAY.md](GATEWAY.md).
+- **Settings → UI → Overall run time limit** supports custom minutes or Off.
+  Changes apply to active/future runs from their original elapsed start;
+  a shortened elapsed deadline can stop work immediately. Separate tool/network/
+  gateway deadlines and Stop/Force stop still apply.
+
+Clustering, installer signing and online addon sharing remain excluded.
+
+The **Browser** toolbar button opens a tabbed Chromium pane beside the chat.
+Drag its divider or use the divider's arrow keys to resize it; Faber remembers the
+width. Tabs and website sign-ins persist in each chat's separate browser profile.
+The address bar supports addresses and Google searches, with back/forward,
+reload/stop, history, bookmarks and downloads. **Take over** opens the real page
+for ordinary mouse/keyboard interaction, forms, selection, copy/paste and file
+pickers while pausing agent browser access. Navigating or changing tabs yourself
+also takes human control. **Resume browsing** explicitly returns
+that access; agents must observe the page again before continuing.
+
+Agent monitoring uses live screenshots sized to the pane. Structured and
+screenshot-based tools send input inside Chromium, without moving the Windows
+pointer, injecting OS keys or activating a window. Browser shortcuts, find and
+page zoom work within the browser pane; the chat and composer remain available.
+Lightpanda remains available separately. See [Visible Chromium browser](BROWSER.md)
+for tools, persistent storage, ownership and supported browser behavior.
+
+Context recovery now condenses older conversation into a separate model-facing
+checkpoint before a known window fills, or after a provider context rejection.
+The complete visible/saved chat remains available. Alpha 2.0 validates
+structured handoffs and original message references, retries invalid handoffs
+once, and retains selected exact historical user literals outside the summary.
+Old checkpoints are ignored for model input and rebuilt from saved originals
+when needed; failed/canceled rebuilds preserve prior storage. Upgrading may need
+one extra compaction. Summaries remain lossy and use extra model calls. Thinking
+pulses while waiting, provider progress is shown when available, and completed
+Responses output reconciles streamed text.
 
 ## Screenshots
 
-Faber b1.1 on Windows, captured in a clean demo profile. The b1.2rc changes are
-described below; these screenshots show the previous release.
+Faber b1.1 on Windows, captured in a clean demo profile. These historical
+screenshots predate Alpha 2.0; current features are described above.
 
 **Workspace** — projects, chats, model selection, attachments, voice, and
 context, token-speed and thinking controls in the composer.
@@ -40,9 +142,10 @@ through Tools & extensions.
 
 </details>
 
-## Beta desktop release
+## Alpha 2.0 desktop prerelease
 
-The b1.2rc installer installs **Faber.exe** and shortcuts without a terminal window.
+The `Faber-Setup-Alpha-2.0-x64.exe` installer installs **Faber.exe** and shortcuts
+without a terminal window.
 It includes Electron and a local model runner with CPU, CUDA and Vulkan backends;
 model weights are downloaded separately. Existing b1 profile data
 and the selected model library remain in their original locations.
@@ -66,7 +169,7 @@ There is no new harness context or turn limit.
 AI-authoring contract. Online addon sharing and OTA updates are not included.
 
 Composer controls include context size/usage, TPS and a per-chat thinking
-toggle. Sidebar menus manage chats/projects, and expandable activity shows work. See
+slider. Sidebar menus manage chats/projects, and expandable activity shows work. See
 [CHAT_CONTROLS.md](CHAT_CONTROLS.md) for supported providers and behavior.
 
 b1.2rc places each activity batch beside the output that triggered it as work
@@ -91,10 +194,11 @@ See [INSTALLING.md](INSTALLING.md) for installation, updates, recovery and build
 
 ## Run
 
-Requires Windows, Node.js 24 or later, and the npm dependencies in the lockfile.
+Requires Windows, Node.js 24 or later, the npm dependencies in the lockfile, and
+the Rust build prerequisites in [INSTALLING.md](INSTALLING.md).
 Use `Start-Faber.cmd` to launch the built executable when present, or set up and
 launch the source app. For manual setup, run `npm ci`, `npm exec -- install-electron`,
-then `npm start` in this folder. `npm test` runs deterministic checks. `npm run smoke`
+then `npm run prepare:native` and `npm start` in this folder. `npm test` runs deterministic checks. `npm run smoke`
 checks the desktop with isolated data; it does not prove a model can complete
 arbitrary tasks.
 
@@ -134,17 +238,19 @@ models, under the existing approvals. No cloud fallback is automatic. OpenAI's
 requires Responses for Astra and GPT-6.1 Sol tool calling; a connection catalog
 check does not prove inference access or task quality.
 
-The harness sends full conversation text and tool results without its former
-character/message budget or turn-count cutoff. Model/provider context limits
-still apply, and sending more history can increase API usage. Context selection
-configures supported runtimes without trimming history. Stop remains available, and the existing
-run timeout (ten minutes by default) still applies.
+The full transcript is retained without the former character/message budget or
+turn-count cutoff. Model input uses that history until compaction replaces older
+groups with a fallible checkpoint; saved originals remain available. Provider
+context limits and API usage still apply. Context selection configures supported
+runtimes without deleting history. The overall run time limit defaults to ten
+minutes and is adjustable or Off in Settings → UI. Stop remains available;
+individual tool/network deadlines remain separate.
 
 Chat and agent inspection tools return message/result references instead of
 embedding another full transcript. Selected messages and tool results remain
 readable on demand. Existing inspection snapshots are compacted only in model
-input; the saved transcript is preserved. Ordinary conversation content and
-tool results are still sent in full.
+input; the saved transcript is preserved. Ordinary content/results remain
+intact in storage; checkpointed model input may summarize older groups.
 
 The chat's **Activity → Token usage** view lists each model call's input and output counts
 reported by the provider, including calls made between tool executions. Missing
@@ -217,11 +323,12 @@ Model adapters translate that same conversation and tool contract for native
 Ollama or an OpenAI-compatible API. A different adapter can be added without
 rewriting the interface or individual tools.
 
-Every agent sees the same registered tools. Delegation creates another durable
-chat and a child run. Children inherit the parent's permissions. Stop propagates
-to descendants and pending approvals; interrupted work is not replayed on
-restart. Coordination tools can read and message other harness chats/projects.
-They do not automatically control chats in a different product.
+Agents use the same validated registry under their current authority. Delegation
+creates another durable chat and child run. Same-project children inherit bounded
+parent authority; another project needs its own approval and does not inherit
+file/shell grants. Stop propagates to descendants and approvals; interrupted work
+is not replayed on restart. Coordination metadata/reads are scoped to authorized
+projects. External MCP sessions use a fixed tool subset.
 
 Modules are ordinary source files behind the contracts in [CONTRACT.md](CONTRACT.md).
 An extension registers tools plus declarative UI actions. The interface creates
@@ -282,9 +389,10 @@ tool metadata and source control must never contain them. The microphone starts
 off. Voice mode must show its actual listening or error status; assistant mode
 uses the selected chat's configurable activation phrase.
 
-Files in the selected project and harness state are available through scoped
-tools. Wider file access, shell commands, PC interaction, network access and
-upgrades require an approval or an explicit chat grant. Those grants are actual
+Scoped file/image tools check registered project authority and deny private Faber
+profile paths. Cross-project access needs target-specific approval, separate from
+file/shell/computer permissions. Shell commands, PC interaction, network access
+and upgrades require their own approval or an explicit chat grant. Those grants are actual
 Windows-account authority. Shell commands and executable extensions are trusted
 code, not an operating-system sandbox. Agents cannot approve their own pending
 requests or grant themselves permissions. Changes to source are reviewable and
@@ -296,6 +404,7 @@ can be tested; passing tests does not make arbitrary generated code safe.
 - [REQUIREMENTS.md](REQUIREMENTS.md): requested capabilities and acceptance work.
 - [VERIFICATION.md](VERIFICATION.md): integrated evidence and limitations.
 - [HUGGINGFACE.md](HUGGINGFACE.md): model browser, downloads and agent tools.
+- [GATEWAY.md](GATEWAY.md): external endpoints, protocols and compatibility limits.
 
 Upgrades retain an existing b1 profile in place, including its chats, credentials,
 settings and model routes. Other applications' data and launchers are separate.

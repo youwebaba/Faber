@@ -144,3 +144,16 @@ test('unchanged addon reads emit no event loop and do not rewrite approval state
   await manager.installPath(await writeKit(f.root,kit('evented')));assert.equal(events.length,2);
   await manager.request('addons.list');assert.equal(events.length,2);
 });
+
+test('Safe Mode imports no enabled addon until individually approved and removal skips code hooks',async t=>{
+  const f=await fixture(t),file=await writeKit(f.root,kit('unsafe','1.0.0','globalThis.__safeModeExecuted=(globalThis.__safeModeExecuted||0)+1; export function deactivate(){throw Error("Unsafe deactivate");} export function uninstall(){throw Error("Unsafe uninstall");}'));
+  const pkg=await readAddonPackage(file),folder=path.join(f.root,'addons','unsafe');
+  for(const [relative,bytes] of pkg.files){const target=path.join(folder,relative);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,bytes);}
+  await fs.mkdir(path.join(f.root,'addon-manager'),{recursive:true});await fs.writeFile(path.join(f.root,'addon-manager','state.json'),JSON.stringify({schemaVersion:1,legacyMigrated:true,records:{unsafe:{enabled:true,digest:pkg.digest}},bundledSeen:[]}));
+  const manager=createAddons({dataDir:f.root,runtime:f.runtime,safeMode:true,confirm:async()=>true});t.after(()=>{delete globalThis.__safeModeExecuted;});
+  let state=await manager.initialize();assert.equal(state.safeMode,true);assert.equal(state.addons[0].safeDisabled,true);assert.equal(f.tools.length,0);assert.equal(globalThis.__safeModeExecuted,undefined);
+  await manager.request('addons.list');assert.equal(globalThis.__safeModeExecuted,undefined);
+  await manager.request('addons.enable',{id:'unsafe'});assert.equal(globalThis.__safeModeExecuted,1);assert.equal(f.tools.length,1);
+  await manager.request('addons.disable',{id:'unsafe'});assert.equal(f.tools.length,0);
+  state=await manager.request('addons.uninstall',{id:'unsafe'});assert.equal(state.addons.length,0);assert.match(state.warnings.join(' '),/Safe Mode skipped executable cleanup/);
+});

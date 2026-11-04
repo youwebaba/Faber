@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { runAttachmentSmoke } from './desktop-attachments-smoke.mjs';
+import { runReasoningSliderSmoke } from './desktop-reasoning-slider-smoke.mjs';
 
 export async function runDesktopSmoke({window,runtime,chat,dataDir,live=false}){
   const checks=[],screenshots={};
@@ -13,7 +14,7 @@ export async function runDesktopSmoke({window,runtime,chat,dataDir,live=false}){
   await until(()=>js(`!![...document.querySelectorAll('.chat-nav')].find(e=>e.title===${JSON.stringify(chat.title)})`),'chat navigation');
   await js(`[...document.querySelectorAll('.chat-nav')].find(e=>e.title===${JSON.stringify(chat.title)}).click()`);
   assert.equal(await js(`document.querySelector('#chat-title').textContent`),chat.title);checks.push('Select real fixture chat through navigation DOM');
-  if(!live){const attachment=await runAttachmentSmoke({window,runtime,chat,dataDir});checks.push(attachment.check);}
+  if(!live){const attachment=await runAttachmentSmoke({window,runtime,chat,dataDir});checks.push(attachment.check); const slider=await runReasoningSliderSmoke({window,dataDir});checks.push(slider.check);Object.assign(screenshots,slider.screenshots);}
   await click('#model-picker');assert.ok(await js(`[...document.querySelectorAll('#modal input,#modal select')].some(e=>e.value==='qwen3.5:9b')`));await click('#close-modal');checks.push('Open model picker');
   await click('#open-tools');const toolCount=await js(`document.querySelectorAll('.tool-row').length`);assert.equal(toolCount,(await state()).tools.length);await click('#close-modal');checks.push(`Render all ${toolCount} registered tools`);
   async function theme(value){await click('#open-settings');await js(`(()=>{const e=document.querySelector('#modal select');e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('change',{bubbles:true}))})()`);await until(()=>js(`document.documentElement.dataset.theme===${JSON.stringify(value)}`),`theme ${value}`);await click('#close-modal');await until(()=>js(`!document.querySelector('#modal').open`),'settings dialog closed');await js(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);await pause(100);const filename=path.join(dataDir,`smoke-${value}.png`);await fs.writeFile(filename,(await window.webContents.capturePage()).toPNG());screenshots[value]=filename;}

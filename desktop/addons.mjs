@@ -110,9 +110,9 @@ export async function readAddonPackage(filename) {
   return packageFromFiles(files);
 }
 
-export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit = () => {},loadTimeoutMs=10000,bundledSource,bundledResources={}}) {
+export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit = () => {},loadTimeoutMs=10000,bundledSource,bundledResources={},safeMode=false}) {
   const directory = path.join(dataDir,'addons'), storage = path.join(dataDir,'addon-manager'), dataRoot = path.join(dataDir,'addon-data');
-  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map(), bundledSeen = new Set(), factoryDigests = new Map();
+  const stateFile = path.join(storage,'state.json'), active = new Map(), records = new Map(), bundledSeen = new Set(), factoryDigests = new Map(), safeEnabled=new Set();
   const automaticNames = new Set(['lightpanda_status','lightpanda_setup','lightpanda_connect','lightpanda_navigate','lightpanda_read','lightpanda_click','lightpanda_type','lightpanda_evaluate','lightpanda_close','lightpanda_stop']);
   const unsubscribeRuns=runtime.subscribe?.(event=>{
     if(event.type!=='state')return;
@@ -123,7 +123,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     }
   });
   let rows = [], warnings = [], initialized = false, legacyMigrated = false, registryInitialized = false, queue = Promise.resolve(), restartRequired = false, publishedSnapshot, savedState, automaticPaused=false;
-  const snapshot = () => ({directory,addons:structuredClone(rows),warnings:[...warnings],restartRequired});
+  const snapshot = () => ({directory,addons:structuredClone(rows),warnings:[...warnings],restartRequired,safeMode});
   const publish = () => {const state=snapshot(),serialized=JSON.stringify(state);if(serialized===publishedSnapshot)return;publishedSnapshot=serialized;try {emit({type:'addons',state});} catch { /* UI lifetime is independent of host state. */ }};
   const persist = async() => {const text=JSON.stringify({schemaVersion:1,legacyMigrated,records:Object.fromEntries(records),bundledSeen:[...bundledSeen]},null,2);if(text===savedState)return;await atomicWrite(stateFile,text);savedState=text;};
   async function setup() {
@@ -155,7 +155,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     entry.controller.abort(new Error('Addon disabled')); restartRequired = true;
     entry.runs.clear();
     let timer;
-    const cleanup = Promise.allSettled([...entry.pending, ...(typeof entry.module.deactivate === 'function' ? [Promise.resolve().then(() => entry.module.deactivate(entry.context))] : [])]);
+    const cleanup = Promise.allSettled([...entry.pending, ...(!safeMode&&typeof entry.module.deactivate === 'function' ? [Promise.resolve().then(() => entry.module.deactivate(entry.context))] : [])]);
     try {await Promise.race([cleanup,new Promise(resolve => {timer=setTimeout(resolve,entry.context?.resources?120000:1000);})]);} finally {clearTimeout(timer);}
   }
   async function replace(entries) {await runtime.replaceExtensionTools([...entries.values()].flatMap(entry => entry.tools),[...entries.values()].map(entry => entry.metadata));registryInitialized=true;}
@@ -200,11 +200,12 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
         if (!folder.isDirectory() || folder.isSymbolicLink()) throw new Error('Addon folder is not an ordinary directory');
         const pkg = await readFolder(path.join(directory,id),id);
         row = {...row,...pkg.manifest,status:record?.digest === pkg.digest ? 'disabled' : 'untrusted'};
-        if (record?.enabled && record.digest === pkg.digest) {
+        if (record?.enabled && record.digest === pkg.digest && (!safeMode||safeEnabled.has(id))) {
           const entry = active.get(id)?.digest === pkg.digest ? active.get(id) : await load(pkg,undefined,signal);
           if(entry.tools.some(tool=>reserved.has(tool.name))) {if(entry!==active.get(id))await release(entry);throw new Error('Addon tool name conflicts with another installed tool');}
           entry.tools.forEach(tool=>reserved.add(tool.name));next.set(id,entry);row.enabled=true;row.status='enabled';
         } else if (record?.digest && record.digest !== pkg.digest) row.error='Files changed since approval. Enable to review and trust this version.';
+        else if(safeMode&&record?.enabled)row.safeDisabled=true;
       } catch(error) {row.status=/Incompatible/.test(error.message)?'incompatible':'error';row.error=error.message;}
       updated.push(row);
     }
@@ -271,6 +272,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
         records.set(id,record);
       }
     }catch(error){if(error.code!=='ENOENT'){records.clear();bundledSeen.add('lightpanda');warnings.push('Saved addon approvals could not be read. Addons require approval again.');}}
+    if(safeMode){initialized=true;return refresh();}
     if(bundledSource) try {
       const catalog=JSON.parse(await fs.readFile(path.join(bundledSource,'catalog.json'),'utf8'));
       if(catalog.schemaVersion!==1||!Array.isArray(catalog.addons))throw new Error('Invalid bundled addon catalog');
@@ -312,22 +314,23 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
   }
   async function enable(id,signal) {
     const pkg=await readFolder(await containedPath(directory,id),id);await trust(pkg,signal);
-    const previous=records.get(id);records.set(id,{...previous,enabled:true,digest:pkg.digest});
+    const previous=records.get(id);records.set(id,{...previous,enabled:true,digest:pkg.digest});safeEnabled.add(id);
     const result=await refresh(signal);const row=result.addons.find(item=>item.id===id);
-    if(!row?.enabled){if(previous)records.set(id,previous);else records.delete(id);await persist();throw new Error(row?.error||'Addon could not be enabled');}
+    if(!row?.enabled){safeEnabled.delete(id);if(previous)records.set(id,previous);else records.delete(id);await persist();throw new Error(row?.error||'Addon could not be enabled');}
     return result;
   }
   async function disable(id,signal) {
     signal?.throwIfAborted();const record=records.get(id);
-    if(record)records.set(id,{...record,enabled:false});await persist();return refresh();
+    safeEnabled.delete(id);if(record)records.set(id,{...record,enabled:false});await persist();return refresh();
   }
   async function uninstall(id,signal) {
     signal?.throwIfAborted();
     active.get(id)?.controller.abort(new Error('Addon uninstalling'));
     const record=records.get(id);let module=active.get(id)?.module;
-    if(!module&&record?.digest)try{const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);if(pkg.digest!==record.digest)throw new Error('Approved uninstall hook changed on disk');module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);}catch(error){warnings.push(`Addon ${id}: cleanup hook skipped because approved cache was unavailable or invalid (${error.message}). Only addon files will be removed; check any external runtime manually.`);}
+    if(!safeMode&&!module&&record?.digest)try{const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);if(pkg.digest!==record.digest)throw new Error('Approved uninstall hook changed on disk');module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);}catch(error){warnings.push(`Addon ${id}: cleanup hook skipped because approved cache was unavailable or invalid (${error.message}). Only addon files will be removed; check any external runtime manually.`);}
     await disable(id,signal);signal?.throwIfAborted();
-    if(typeof module?.uninstall==='function'){const timeout=AbortSignal.timeout(120000);await untilAborted(module.uninstall({id,dataDir:await containedPath(dataRoot,id,{missing:true}),resources:bundledResources[id],signal}),signal?AbortSignal.any([signal,timeout]):timeout);}
+    if(!safeMode&&typeof module?.uninstall==='function'){const timeout=AbortSignal.timeout(120000);await untilAborted(module.uninstall({id,dataDir:await containedPath(dataRoot,id,{missing:true}),resources:bundledResources[id],signal}),signal?AbortSignal.any([signal,timeout]):timeout);}
+    if(safeMode)warnings.push(`Addon ${id}: Safe Mode skipped executable cleanup; check owned external resources manually.`);
     signal?.throwIfAborted();
     await removeOwned(directory,id);records.delete(id);await persist();
     await removeOwned(storage,`versions/${id}`);
@@ -339,12 +342,13 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
     signal?.throwIfAborted(); if(active.has(id))throw new Error('Disable this addon before resetting its data');
     // Runtime ownership records must outlive cleanup; never orphan a bundled service by erasing them first.
     const record=records.get(id);
-    if(bundledResources[id]&&record?.digest){
+    if(!safeMode&&bundledResources[id]&&record?.digest){
       const pkg=await readFolder(await containedPath(storage,`versions/${id}/${record.digest}`),id);
       if(pkg.digest!==record.digest)throw new Error('Approved reset cleanup hook changed on disk; private data was preserved');
       const module=await importModule(await containedPath(storage,`versions/${id}/${record.digest}/${pkg.manifest.entry}`),signal);
       if(typeof module.uninstall==='function'){const timeout=AbortSignal.timeout(120000),cleanupSignal=signal?AbortSignal.any([signal,timeout]):timeout;await untilAborted(module.uninstall({id,dataDir:await containedPath(dataRoot,id,{missing:true}),resources:bundledResources[id],signal:cleanupSignal}),cleanupSignal);}
     }
+    if(safeMode)warnings.push(`Addon ${id}: Safe Mode skipped executable cleanup before data reset; check owned external resources manually.`);
     signal?.throwIfAborted();
     await removeOwned(dataRoot,id);return refresh();
   }

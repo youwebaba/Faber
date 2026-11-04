@@ -21,20 +21,21 @@ export async function containedPath(root, relative = '.', {missing = false} = {}
 }
 
 const schema = properties => ({type:'object', properties, additionalProperties:false});
+async function authorizedPath(ctx,relative,options){const file=await containedPath(ctx.project.path,relative,options);await ctx.authorizePath?.(file,`Access a file in another registered project: ${file}`);ctx.signal?.throwIfAborted();if(await containedPath(ctx.project.path,relative,options)!==file)throw new Error('File path changed while waiting for approval');return file;}
 export function fileTools() {
   return [
     {name:'files_list', description:'List a project-relative directory (maximum 500 entries).',permission:'read',parameters:schema({path:{type:'string'}}),execute:async (args,ctx) => {
-      const entries = await fs.readdir(await containedPath(ctx.project.path,args.path ?? '.'),{withFileTypes:true});
+      const entries = await fs.readdir(await authorizedPath(ctx,args.path ?? '.'),{withFileTypes:true});
       return {entries:entries.slice(0,500).map(e=>({name:e.name,type:e.isSymbolicLink()?'symlink':e.isDirectory()?'directory':'file'})),truncated:entries.length>500};
     }},
     {name:'files_read',description:'Read UTF-8 text in the project, up to 1 MiB.',permission:'read',parameters:{...schema({path:{type:'string'}}),required:['path']},execute:async (args,ctx)=>{
-      const file=await containedPath(ctx.project.path,args.path); const stat=await fs.stat(file);
+      const file=await authorizedPath(ctx,args.path); const stat=await fs.stat(file);
       if(!stat.isFile()||stat.size>1024*1024) throw new Error('Expected a text file up to 1 MiB');
       const text=await fs.readFile(file,'utf8');return {path:args.path,text,sha256:crypto.createHash('sha256').update(text).digest('hex')};
     }},
     {name:'files_write',description:'Atomically write UTF-8 text in the project, retaining a previous-content backup outside the project. Optional expectedSha256 prevents overwriting newer edits.',permission:'files',parameters:{...schema({path:{type:'string'},text:{type:'string',maxLength:1048576},expectedSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}}),required:['path','text']},execute:async(args,ctx)=>{
       ctx.signal?.throwIfAborted();
-      const file=await containedPath(ctx.project.path,args.path,{missing:true});
+      const file=await authorizedPath(ctx,args.path,{missing:true});
       if(ctx.sourceDir){const relative=path.relative(await fs.realpath(ctx.sourceDir),file);if(relative===''||(!relative.startsWith(`..${path.sep}`)&&relative!=='..'&&!path.isAbsolute(relative)))throw new Error('Running harness source is protected: use upgrade_stage, upgrade_verify, and upgrade_apply');}
       let previous=null;try{previous=await fs.readFile(file);}catch(error){if(error.code!=='ENOENT')throw error;}
       const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');

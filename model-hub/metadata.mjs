@@ -20,7 +20,7 @@ export function modelSummary(raw) {
   const formats = new Set();
   if (raw.safetensors || raw.tags?.includes('safetensors')) formats.add('safetensors');
   if (raw.gguf || raw.tags?.includes('gguf')) formats.add('gguf');
-  for (const file of Array.isArray(raw.siblings) ? raw.siblings : []) if (typeof file.rfilename === 'string' && format(file.rfilename) !== 'other') formats.add(format(file.rfilename));
+  for (const file of Array.isArray(raw.siblings) ? raw.siblings : []) if (typeof file.rfilename === 'string') { const kind = format(file.rfilename); if (kind !== 'other') formats.add(kind); }
   let weightBytes = 0;
   const dtypes = raw.safetensors?.parameters;
   if (dtypes && typeof dtypes === 'object' && !Array.isArray(dtypes) && Object.keys(dtypes).length) {

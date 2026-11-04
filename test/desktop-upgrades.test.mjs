@@ -132,3 +132,32 @@ test('activation check fails closed during an apply awaiting confirmation withou
   release(true);const result=await applying;assert.equal(result.uiRefreshRequested,false);assert.equal(result.uiRefreshPending,true);
   assert.equal((await manager.activationStatus()).restartRequired,false);
 });
+
+test('core snapshots cover complete application source and reuse only verified unchanged backups',async t=>{
+  const {sourceDir,dataDir,manager}=await fixture(t,{runner:verifiedRunner});
+  for(const [relative,content] of [['desktop/bootstrap.cjs','immutable bootstrap'],['renderer/app.mjs','interface'],['docs/contract.md','contract'],['CONTRACT.md','root contract'],['package.json','{}'],['Start-Faber.ps1','launcher'],['native/vendor/dependency.c','dependency'],['node_modules/package/index.js','dependency'],['models/weights.gguf','weights'],['.git/config','git metadata']]){const file=path.join(sourceDir,relative);await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(file,content);}
+  await fs.mkdir(dataDir,{recursive:true});await fs.writeFile(path.join(dataDir,'secrets.json'),'never back up private state');
+  const first=await manager.backupCore(),manifest=JSON.parse(await fs.readFile(path.join(dataDir,'upgrades',first.id,'core-backup.json'),'utf8'));
+  assert.equal(manifest.schemaVersion,1);for(const name of ['core/value.mjs','desktop/bootstrap.cjs','renderer/app.mjs','docs/contract.md','CONTRACT.md','package.json','Start-Faber.ps1'])assert.ok(manifest.files.some(file=>file.path===name),name);
+  assert.equal(manifest.files.some(file=>/node_modules|vendor|weights|secrets|\.git\//.test(file.path)),false);
+  assert.equal((await manager.backupCore()).id,first.id);assert.equal((await manager.backupCore()).reused,true);
+  await fs.writeFile(path.join(sourceDir,'core/value.mjs'),'export const value=9;');const changed=await manager.backupCore();assert.notEqual(changed.id,first.id);
+  await fs.writeFile(path.join(changed.backupDir,'core/value.mjs'),'tampered');await assert.rejects(manager.backupCore(),/integrity mismatch/);
+});
+
+test('a staged mutation saves untouched core files too and backup failure prevents activation',async t=>{
+  const {sourceDir,dataDir,manager}=await fixture(t,{runner:verifiedRunner});await fs.writeFile(path.join(sourceDir,'core/untouched.mjs'),'retain this source');
+  const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);await manager.verify(stage.id);
+  const originalWrite=fs.writeFile.bind(fs);t.mock.method(fs,'writeFile',async(filename,...args)=>{if(String(filename).includes(`${path.sep}backup${path.sep}`))throw Error('Synthetic backup failure');return originalWrite(filename,...args);});
+  await assert.rejects(manager.apply(stage.id),/backup failure/);assert.equal(await fs.readFile(path.join(sourceDir,'core/value.mjs'),'utf8'),'export const value=1;');t.mock.restoreAll();
+  await manager.apply(stage.id);assert.equal(await fs.readFile(path.join(dataDir,'upgrades',stage.id,'backup/core/untouched.mjs'),'utf8'),'retain this source');
+});
+
+test('reusing a core snapshot rejects a source edit made after its initial byte capture',async t=>{
+  const {sourceDir,dataDir,manager}=await fixture(t,{runner:verifiedRunner}),file=path.join(sourceDir,'core/value.mjs');
+  const first=await manager.backupCore(),pointer=path.join(dataDir,'upgrades','last-core-backup.json'),readFile=fs.readFile.bind(fs);let edit=true;
+  t.mock.method(fs,'readFile',async(filename,...args)=>{const bytes=await readFile(filename,...args);if(edit&&filename===pointer){edit=false;await fs.writeFile(file,'newer concurrent source');}return bytes;});
+  await assert.rejects(manager.backupCore(),/Source changed during core backup/);
+  assert.equal(await readFile(file,'utf8'),'newer concurrent source');
+  assert.equal(await readFile(path.join(first.backupDir,'core/value.mjs'),'utf8'),'export const value=1;');
+});

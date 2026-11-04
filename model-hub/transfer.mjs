@@ -88,18 +88,31 @@ export async function transferFile({ job, file, fetchImpl, token, signal, progre
     await noLinks(path.dirname(target)); signal.throwIfAborted();
     handle = await fs.open(temporary, 'wx', 0o600);
     reader = response.body.getReader();
-    const hash = createHash('sha256');
+    // Batch small network chunks instead of waiting for a filesystem write after each one.
+    const hash = createHash('sha256'), buffer = Buffer.allocUnsafe(1024 * 1024);
+    let buffered = 0, flushedAt = Date.now();
+    async function flush() {
+      if (!buffered) return;
+      let offset = 0;
+      while (offset < buffered) { signal.throwIfAborted(); const written = await handle.write(buffer, offset, buffered - offset); if (!written.bytesWritten) throw new Error('Unable to write downloaded file'); offset += written.bytesWritten; }
+      hash.update(buffer.subarray(0, buffered)); file.bytes += buffered; buffered = 0; flushedAt = Date.now(); progress();
+    }
     file.status = 'downloading'; progress();
     while (true) {
       const { done, value } = await waitFor(reader.read(), signal);
       if (done) break;
       signal.throwIfAborted();
       const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
-      if (file.size !== null && file.bytes + chunk.length > file.size) throw new Error('Downloaded bytes exceed the advertised file size');
+      if (file.size !== null && file.bytes + buffered + chunk.length > file.size) throw new Error('Downloaded bytes exceed the advertised file size');
       let offset = 0;
-      while (offset < chunk.length) { signal.throwIfAborted(); const written = await handle.write(chunk, offset, chunk.length - offset); if (!written.bytesWritten) throw new Error('Unable to write downloaded file'); offset += written.bytesWritten; }
-      hash.update(chunk); file.bytes += chunk.length; progress();
+      while (offset < chunk.length) {
+        const count = Math.min(buffer.length - buffered, chunk.length - offset);
+        chunk.copy(buffer, buffered, offset, offset + count); buffered += count; offset += count;
+        if (buffered === buffer.length) await flush();
+      }
+      if (Date.now() - flushedAt >= 250) await flush();
     }
+    await flush();
     if (file.size !== null && file.bytes !== file.size) throw new Error('Downloaded file size does not match pinned metadata');
     const actual = hash.digest('hex');
     if (file.sha256 && actual !== file.sha256) throw new Error('Downloaded file SHA-256 does not match pinned metadata');

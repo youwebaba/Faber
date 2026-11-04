@@ -33,10 +33,16 @@ export function refreshBlocker({ sending, pendingReads, pendingPicker, pendingRe
 export function mergeRuntimeStreams(streams, value, version = -1) {
   if (!Number.isSafeInteger(value.streamSequence) || value.streamSequence < version) return version;
   if (Array.isArray(value.streams)) { streams.clear(); for (const stream of value.streams) streams.set(stream.runId, { ...stream }); }
-  else if (value.type === 'delta' && Number.isSafeInteger(value.sequence) && value.sequence > version) {
+  else if (['delta', 'progress'].includes(value.type) && Number.isSafeInteger(value.sequence) && value.sequence > version) {
     const previous = streams.get(value.runId);
-    const text = previous?.lastAssistantId === value.lastAssistantId ? previous.text : '';
-    streams.set(value.runId, { runId: value.runId, chatId: value.chatId, lastAssistantId: value.lastAssistantId, sequence: value.sequence, text: (text || '') + value.text, ...(value.metrics ? { metrics: value.metrics, modelCallId: value.modelCallId } : {}) });
+    const sameCall = previous?.lastAssistantId === value.lastAssistantId && (!previous?.modelCallId || !value.modelCallId || previous.modelCallId === value.modelCallId);
+    const stream = sameCall ? { ...previous } : { text: '' };
+    if (value.type === 'delta') stream.text = value.replace ? value.text : (stream.text || '') + value.text;
+    if (value.phase && value.phase !== stream.phase) stream.progressSummary = '';
+    if (value.phase) stream.phase = value.phase;
+    if (typeof value.summary === 'string') stream.progressSummary = value.summary;
+    if (typeof value.progressSummary === 'string') stream.progressSummary = value.progressSummary;
+    streams.set(value.runId, { ...stream, runId: value.runId, chatId: value.chatId, lastAssistantId: value.lastAssistantId, sequence: value.sequence, ...(value.modelCallId ? { modelCallId: value.modelCallId } : {}), ...(value.metrics ? { metrics: value.metrics } : {}) });
   }
   return value.streamSequence;
 }

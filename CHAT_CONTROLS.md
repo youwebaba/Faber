@@ -1,4 +1,4 @@
-# Chat controls in Faber b1.2rc
+# Chat controls in Faber b2.0.1
 
 The bottom of the composer has context usage, a context-size control, tokens per
 second (TPS), and a brain button. Settings belong to the selected chat and are
@@ -8,6 +8,19 @@ Managed local connections display the detected model/file name in the composer,
 selector and run details. The internal server alias remains an API routing value.
 New runs retain the name captured at their start, including after another model
 is selected. A stopped managed connection retains its last known model name.
+
+The selector has **Local & APIs** and **OpenAI** tabs. The latter lists linked
+ChatGPT accounts and their advertised models. It shows fixed context capacity
+when supplied and reasoning choices when advertised. Unknown capabilities remain
+unknown; signing in does not unlock every OpenAI model. See [CHATGPT.md](CHATGPT.md).
+Managed local model controls use a green triangle to start and red square to stop.
+
+Choose a system prompt in the model selector. Settings → System prompts edits
+the preset library or applies instructions to the selected chat. Each chat keeps
+its own snapshot, including an intentionally empty custom prompt. An active run
+retains the prompt captured at its start; later edits affect the next run.
+The self-upgrader preset prefers dedicated tools over shell commands. Prompts
+guide the model but do not confer or restrict operating-system permissions.
 
 ## Context size and usage
 
@@ -42,15 +55,26 @@ processing; live character-based output rates are labeled approximate. Missing
 counts do not become zero. **Activity → Token usage** retains per-call input and
 output usage. These counters are not billing or rate-limit reservation estimates.
 
-The brain button toggles thinking for this chat when a corresponding provider
-parameter is supported. Ollama uses `think`; managed GGUFs use the chat template's
+The brain button opens a thinking slider for this chat, with the selected level,
+model name and a reset-to-default button. ChatGPT account connections offer only
+the reasoning levels advertised by their catalog; Off appears only when `none`
+is supported. Choosing a level clears an older on/off override so the selected
+effort reaches the model. Default leaves the model's settings in charge.
+
+Ollama and supported managed GGUFs offer Default, Off and On, since their existing
+controls are boolean. Ollama uses `think`; managed GGUFs use the chat template's
 `enable_thinking` only when the inspected template declares that parameter.
-Their model/template still determines the response. Unsupported
-APIs/models have a disabled button with a reason. In particular, Astra and GPT-6.1
-Sol do not expose a supported thinking-off setting. A toggle does not reveal
-private reasoning or guarantee a model's answer quality.
+Unsupported APIs/models have a disabled button with a reason. Existing API
+connection-level reasoning settings remain in the connection editor. Changes are
+per chat and disabled during an active run. Arrow keys move between slider stops;
+Escape or clicking outside closes it. This control does not reveal private
+reasoning or guarantee a model's answer quality.
 
 ## Chat and project menus
+
+The sidebar orders parent chats by their own activity and keeps each agent below
+the chat that spawned it. A child reply reorders siblings without promoting the
+family above other parent chats. Nested agents retain their hierarchy.
 
 Right-click a chat, or focus it and press Shift+F10, to archive, delete, force
 stop, or move it to an existing/new project. Moving preserves the conversation
@@ -82,3 +106,29 @@ their command/file/action, status, arguments, output or error, and approval stat
 Child agents are included. Details stay available after completion. This view
 shows actual recorded operations and provider text; it does not invent hidden
 reasoning or make unreported command output visible.
+
+## Context recovery and response progress
+
+Faber checks the actual configured/reported context capacity before model calls.
+Around 80% estimated usage it condenses older complete conversation/tool groups
+into a separate checkpoint, retaining the current prompt and latest user request.
+The original saved/visible transcript is unchanged and remains accessible with
+chat_read message IDs. Images and opaque provider items are never cut into partial
+protocol objects; checkpointed images are represented as references.
+
+Already-full requests recover through smaller, tool-free summary calls to the
+same selected model. These calls appear separately as Context summary usage.
+Only rejected requests are retried; completed tool actions are not replayed by
+the recovery mechanism. Stop cancels summaries too. Unknown token estimates and
+a latest request/system prompt that alone cannot fit can still require a larger
+context or shorter request. Failed recovery offers Compact & continue without
+adding another generic Continue message. Summaries are fallible and consume
+additional model usage. Normal model calls still have no harness turn limit or
+new output-token cap; only internal summary output is bounded.
+
+Thinking pulses while no visible reply is arriving and honors reduced-motion
+settings. Provider-supplied public progress/summary events can replace the generic
+status; hidden reasoning is never displayed. Hover over the TPS counter for time
+to first visible text and its speed basis. A wall-clock rate is labeled tok/s avg
+and includes reported reasoning output. Responses text is assembled per item and
+content part and reconciled to the validated completed output before saving.

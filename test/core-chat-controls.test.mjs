@@ -159,6 +159,7 @@ for(const action of ['delete','move'])test(`agent delivery rejects a target ${ac
 test('deleting a project detaches surviving cross-project chat/run lineage and preserves their history',async t=>{
   const {runtime,chat,project}=await fixture(t,async function*(){yield {type:'delta',text:'Preserved child reply'};});
   const other=await runtime.request('project.create',{name:'Other project',path:project.path});
+  await runtime.request('chat.update',{id:chat.id,projectGrants:[other.id]});
   const child=await runtime.request('tool.run',{chatId:chat.id,name:'chat_create',args:{projectId:other.id,title:'Cross-project child'}});
   const sent=await runtime.request('tool.run',{chatId:chat.id,name:'agent_send',args:{chatId:child.id,text:'reply'}});await finished(runtime,sent.runId);
   // Completion status can be published just before the execution settlement fence clears.

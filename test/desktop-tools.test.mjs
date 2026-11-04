@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {containedPath,fileTools} from '../tools/files.mjs';
-import {runProcess} from '../tools/process.mjs';
+import {runProcess,shellTool} from '../tools/process.mjs';
 import {activationTarget} from '../desktop/voice.mjs';
 const temp=()=>fs.mkdtemp(path.join(os.tmpdir(),'harness-tools-test-'));
 
@@ -57,4 +57,17 @@ test('voice routing requires enabled phrase, resolves selected duplicate, and ho
   assert.equal(activationTarget(chats,'Hey Fabernna hello','a'),null);
   assert.equal(activationTarget(chats,'Computer hello','c'),null);
   assert.throws(()=>activationTarget(chats,'Hey Faber hello','missing'),/Several chats/);
+});
+
+test('file tools consult project path authority before touching files',async t=>{
+  const root=await temp();t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.writeFile(path.join(root,'value.txt'),'retain');
+  const ctx={project:{path:root},authorizePath:async()=>{throw Error('Target project consent required');}};
+  for(const [name,args] of [['files_list',{}],['files_read',{path:'value.txt'}],['files_write',{path:'value.txt',text:'overwrite'}]])await assert.rejects(fileTools().find(tool=>tool.name===name).execute(args,ctx),/Target project/);
+  assert.equal(await fs.readFile(path.join(root,'value.txt'),'utf8'),'retain');
+});
+
+test('shell source backup finishes before execution and a failed backup prevents the command',async t=>{
+  const root=await temp();t.after(()=>fs.rm(root,{recursive:true,force:true}));const target=path.join(root,'command-ran.txt'),command=process.platform==='win32'?"Set-Content -LiteralPath 'command-ran.txt' -Value 'ran'":"printf ran > command-ran.txt";
+  await assert.rejects(shellTool().execute({command},{project:{path:root},host:{backupCore:async()=>{throw Error('Backup unavailable');}}}),/Backup unavailable/);await assert.rejects(fs.stat(target),/ENOENT/);
+  const result=await shellTool().execute({command},{project:{path:root},host:{backupCore:async()=>{await assert.rejects(fs.stat(target),/ENOENT/);return {id:'backup-id'};}}});assert.equal(result.code,0);assert.equal(result.coreBackup.id,'backup-id');assert.match(await fs.readFile(target,'utf8'),/ran/);
 });

@@ -269,8 +269,8 @@
     },
     {
       "path": "licenses/THIRD-PARTY-NOTICES.txt",
-      "size": 1420,
-      "sha256": "eb26a666b636652c7c729394fda35b1cc7bc55231a09ee0be943c9ef4bd1866a"
+      "size": 2569,
+      "sha256": "7dc60b95ee1f6c2b309e6f2de94f85a40f9c99ca3e0f30b113c27305a7272cc6"
     },
     {
       "path": "licenses/WINPTHREADS-LICENSE.txt",

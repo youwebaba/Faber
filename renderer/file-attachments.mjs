@@ -21,7 +21,7 @@ export async function readTextFile(file) {
   if (/[\u0000-\u0008\u000b\u000e-\u001f\u007f]/.test(content)) throw new Error(`${file.name}: binary files cannot be attached as text.`);
   return content;
 }
-function snapshotImage(image) {
+export function snapshotImage(image) {
   if (typeof image !== 'string' || image.length > MAX_IMAGE_BYTES) return false;
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]*={0,2})$/.exec(image);
   if (!match || !match[2] || match[2].length % 4) return false;

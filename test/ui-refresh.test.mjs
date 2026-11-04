@@ -67,3 +67,23 @@ test('snapshot plus queued deltas resumes exactly once, rejects stale snapshots 
   version = mergeRuntimeStreams(streams, delta, version); assert.equal(streams.size, 0);
   mergeRuntimeStreams(streams, { ...delta, text: 'Next turn', sequence: 6, streamSequence: 6, lastAssistantId: 'committed' }, version); assert.equal(streams.get('r').text, 'Next turn');
 });
+
+
+test('progress stays outside answer text and canonical replacement survives reload and stale events', () => {
+  const streams = new Map(); let version = -1;
+  const base = { runId: 'r', chatId: 'c', modelCallId: 'call', lastAssistantId: null };
+  version = mergeRuntimeStreams(streams, { ...base, type: 'progress', phase: 'thinking', summary: 'Checking the request', sequence: 1, streamSequence: 1 }, version);
+  assert.equal(streams.get('r').text, ''); assert.equal(streams.get('r').progressSummary, 'Checking the request');
+  version = mergeRuntimeStreams(streams, { ...base, type: 'delta', phase: 'responding', text: 'Partial draft', metrics: { firstTokenMs: 1250 }, sequence: 2, streamSequence: 2 }, version);
+  assert.equal(streams.get('r').progressSummary, '');
+  version = mergeRuntimeStreams(streams, { ...base, type: 'delta', phase: 'responding', text: 'Canonical answer', replace: true, sequence: 3, streamSequence: 3 }, version);
+  assert.equal(streams.get('r').text, 'Canonical answer'); assert.equal(streams.get('r').metrics.firstTokenMs, 1250);
+  const restored = new Map(); let restoredVersion = mergeRuntimeStreams(restored, { streams: [...streams.values()], streamSequence: version });
+  restoredVersion = mergeRuntimeStreams(restored, { ...base, type: 'delta', text: 'Canonical answer', replace: true, sequence: 3, streamSequence: 3 }, restoredVersion);
+  restoredVersion = mergeRuntimeStreams(restored, { ...base, type: 'progress', phase: 'thinking', sequence: 1, streamSequence: 1 }, restoredVersion);
+  assert.equal(restored.get('r').text, 'Canonical answer'); assert.equal(restored.get('r').phase, 'responding');
+  restoredVersion = mergeRuntimeStreams(restored, { ...base, type: 'delta', text: '', replace: true, sequence: 4, streamSequence: 4 }, restoredVersion);
+  assert.equal(restored.get('r').text, '');
+  mergeRuntimeStreams(restored, { ...base, modelCallId: 'next-call', type: 'progress', phase: 'connecting', sequence: 5, streamSequence: 5 }, restoredVersion);
+  assert.equal(restored.get('r').text, ''); assert.equal(restored.get('r').metrics, undefined);
+});

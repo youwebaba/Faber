@@ -1,0 +1,11 @@
+[package]
+name = "faber-native"
+version = "2.0.1-rm.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "=1.0.145"
+
+[profile.release]
+strip = true

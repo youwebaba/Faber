@@ -161,12 +161,12 @@ test('provider secrets stay in host and registry replacement removes stale tools
   assert.ok(!(await runtime.request('state.get')).tools.some(tool => tool.name === 'extension_one'));
 });
 
-test('model cannot add workspace roots without files approval', async t => {
+test('model cannot add workspace roots without distinct target-project approval', async t => {
   const { runtime, chat, options } = await fixture(t);
   const action = runtime.request('tool.run', { chatId: chat.id, name: 'project_create', args: { name: 'Outside root', path: options.dataDir } });
   const rejection = assert.rejects(action, /denied/);
   const state = await until(runtime, state => state.approvals.length === 1);
-  assert.equal(state.approvals[0].permission, 'files'); assert.equal(state.projects.length, 1);
+  assert.equal(state.approvals[0].permission, 'project'); assert.equal(state.approvals[0].kind, 'project'); assert.equal(state.projects.length, 1);
   await runtime.request('approval.resolve', { id: state.approvals[0].id, allow: false }); await rejection;
   assert.equal((await runtime.request('state.get')).projects.length, 1);
 });

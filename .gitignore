@@ -12,3 +12,6 @@ release/
 *.safetensors
 *.onnx
 *.partial
+native/target/
+native/bin/
+native/runtime.json

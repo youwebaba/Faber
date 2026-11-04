@@ -69,7 +69,7 @@ async function refreshB11Branding(bundledSource, sourceDir) {
   catch (error) { console.warn(`Branding refresh report could not be written: ${error.message}`); }
 }
 
-export const sourceFolders = ['core', 'desktop', 'renderer', 'tools', 'extensions', 'model-hub', 'local-models', 'test', 'build', 'scripts', 'bundled-addons'];
+export const sourceFolders = ['core', 'desktop', 'renderer', 'tools', 'extensions', 'model-hub', 'local-models', 'native', 'test', 'build', 'scripts', 'bundled-addons'];
 export async function prepareWorkbench({ bundledSource, workbenchRoot, version }) {
   if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error('Invalid packaged source version');
   const sourceDir = path.join(workbenchRoot, version), marker = path.join(sourceDir, '.faber-workbench.json');

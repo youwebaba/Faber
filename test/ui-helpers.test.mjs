@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeImage, parseArguments, extensionActions, reconcileStreams, streamText, latestRun, visibleChats, sameMessage, chatApprovals } from '../renderer/ui-helpers.mjs';
+import { safeImage, parseArguments, extensionActions, reconcileStreams, streamText, latestRun, sameMessage, chatApprovals } from '../renderer/ui-helpers.mjs';
 
 test('screenshots accept inert raster data and reject active or remote sources', () => {
   assert.equal(safeImage('data:image/png;base64,aGVsbG8='), 'data:image/png;base64,aGVsbG8=');
@@ -31,10 +31,11 @@ test('extension actions use registry metadata and disappear when unloaded', () =
   assert.deepEqual(extensionActions([{ actions: [{ label: 'Broken' }, { tool: 'missing_label' }] }]), []);
 });
 
-test('navigation excludes archives and run selection is scoped to the chat', () => {
-  const state = { chats: [{ id: 'a', projectId: 'p', archived: false }, { id: 'b', projectId: 'p', archived: true }, { id: 'c', projectId: 'other' }], runs: [{ id: 'r1', chatId: 'a' }, { id: 'r2', chatId: 'b' }, { id: 'r3', chatId: 'a' }] };
-  assert.deepEqual(visibleChats(state, 'p').map(chat => chat.id), ['a']);
+test('latest run selection is scoped to the chat without changing run order', () => {
+  const state = { runs: [{ id: 'r1', chatId: 'a' }, { id: 'r2', chatId: 'b' }, { id: 'r3', chatId: 'a' }] };
   assert.equal(latestRun(state, 'a').id, 'r3');
+  assert.deepEqual(state.runs.map(run => run.id), ['r1', 'r2', 'r3']);
+  assert.equal(latestRun(state, 'missing'), undefined);
 });
 
 test('unchanged state snapshots reuse message DOM while edits and attribution invalidate it', () => {

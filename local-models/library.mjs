@@ -18,7 +18,7 @@ function trackedFiles(root, downloads) {
     for (const file of job.files) {
       try { validFilePath(file.path); } catch { continue; }
       const target = path.resolve(job.directory, ...file.path.split('/'));
-      if (inside(root, target)) tracked.set(folded(target), { jobStatus: job.status, fileStatus: file.status, size: file.size });
+      if (inside(root, target)) tracked.set(folded(target), { jobStatus: job.status, fileStatus: file.status, size: file.size, repositoryPath: file.path });
     }
   }
   return tracked;
@@ -99,7 +99,9 @@ export async function scanLocalModels({ directory, downloads = [] }) {
       try { validFilePath(relativePath); await checkedPath(root, target); }
       catch (error) { warnings.push({ path: relativePath, reason: error.message }); continue; }
       if (child.isDirectory()) { pending.push(target); continue; }
-      if (!child.isFile() || auxiliaryGGUF(relativePath)) continue;
+      const track = tracked.get(folded(target));
+      // A repository's name does not identify its downloaded files as auxiliary.
+      if (!child.isFile() || auxiliaryGGUF(track?.repositoryPath ?? relativePath)) continue;
       const extension = /\.(gguf|safetensors)$/i.exec(child.name);
       if (!extension) continue;
       const format = extension[1].toLowerCase(), bare = relativePath.slice(0, -extension[0].length);
@@ -110,7 +112,6 @@ export async function scanLocalModels({ directory, downloads = [] }) {
       try {
         const stat = await fs.lstat(target);
         if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('File changed during scan; refresh the model list');
-        const track = tracked.get(folded(target));
         let reason;
         if (track && (track.jobStatus !== 'completed' || track.fileStatus !== 'completed')) reason = `Tracked download is not complete (${track.jobStatus || 'unknown'}/${track.fileStatus || 'unknown'})`;
         else if (track && Number.isSafeInteger(track.size) && track.size !== stat.size) reason = 'File size differs from its completed download record';

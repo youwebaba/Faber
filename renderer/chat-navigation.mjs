@@ -1,5 +1,28 @@
 import { isActive } from './ui-helpers.mjs';
 
+export function orderedChatFamilies(state, projectId) {
+  const chats = state.chats.filter(chat => chat.projectId === projectId && !chat.archived);
+  const byId = new Map(chats.map(chat => [chat.id, chat]));
+  const activity = new Map(chats.map(chat => [chat.id, chat.messages?.findLast(message => message.role === 'assistant' && !message.fromChatId)?.createdAt || chat.createdAt || '']));
+  const compare = (a, b) => String(activity.get(b.id)).localeCompare(String(activity.get(a.id))) || String(a.id).localeCompare(String(b.id));
+  const children = new Map();
+  for (const chat of chats) {
+    const parent = byId.has(chat.parentChatId) && chat.parentChatId !== chat.id ? chat.parentChatId : null;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(chat);
+  }
+  const result = [], visited = new Set();
+  function append(chat, depth) {
+    if (visited.has(chat.id)) return;
+    visited.add(chat.id); result.push({ chat, depth });
+    for (const child of (children.get(chat.id) || []).sort(compare)) append(child, depth + 1);
+  }
+  for (const chat of (children.get(null) || []).sort(compare)) append(chat, 0);
+  // Keep malformed historical cycles visible without letting them recurse forever.
+  for (const chat of [...chats].sort(compare)) if (!visited.has(chat.id)) append(chat, 0);
+  return result;
+}
+
 export function chatFamily(state, chatId) {
   const ids = new Set([chatId]);
   for (let changed = true; changed;) {

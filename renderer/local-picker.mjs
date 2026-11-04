@@ -91,7 +91,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     if ((!choice || choice.source === 'download') && state.runtime?.available === false) status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
     if (isLocalOllama(provider) && state.ollama?.error) status.textContent += ` Ollama: ${state.ollama.error}`;
     progress.hidden = !(ownOperation || info.busy);
-    hardware.setContext(state, choice?.source === 'download');
+    hardware.setContext(state, !provider || choice?.source === 'download');
     start.disabled = Boolean(operation) || !info.canStart || choice?.source === 'download' && hardware.isDirty();
     stop.disabled = operation?.type === 'stop' || !(info.canStop || ownOperation && operation.type === 'start');
     refreshButton.disabled = loadingList;
@@ -124,8 +124,8 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   }
   const control = (text, callback) => { const node = el('button', 'button', text); node.type = 'button'; node.addEventListener('click', callback); return node; };
   const refreshButton = control('Refresh folder', () => refreshList()); refreshButton.id = 'local-model-refresh';
-  const start = control('Start model', () => operate('start')); start.id = 'local-model-start';
-  const stop = control('Stop model', () => operate('stop')); stop.id = 'local-model-stop';
+  const start = control('▶', () => operate('start')); start.id = 'local-model-start'; start.classList.add('model-start'); start.title = 'Start model'; start.setAttribute('aria-label', 'Start model');
+  const stop = control('■', () => operate('stop')); stop.id = 'local-model-stop'; stop.classList.add('model-stop'); stop.title = 'Stop model'; stop.setAttribute('aria-label', 'Stop model');
   controls.append(refreshButton, start, stop);
   select.addEventListener('change', () => { showError(''); render(); });
   let unsubscribe;

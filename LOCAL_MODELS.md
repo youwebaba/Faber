@@ -8,7 +8,9 @@ chat run. Model selection still requires **Use in this chat**.
 
 Standalone GGUF files and complete, originally named GGUF shard sets are listed.
 Discovery checks file metadata and the GGUF header. It skips auxiliary models,
-hidden/partial files and filesystem links. Incomplete or failed tracked downloads
+hidden/partial files and filesystem links. Tracked downloads classify auxiliary
+files using their repository-relative file paths, so a repository name containing
+MTP does not hide its main model. Incomplete or failed tracked downloads
 and unsupported formats are unavailable. File discovery is not a guarantee that
 the model is complete, fits memory or supports the selected runtime.
 

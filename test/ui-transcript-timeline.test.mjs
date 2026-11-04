@@ -70,3 +70,13 @@ test('stopped local selection uses the host-provided scanner ID, not a hash infe
   assert.equal(preferredLocalChoice(state, [other, selected], undefined, 'faber-alias', other.value), other);
   assert.equal(preferredLocalChoice({ ...state, process: { status: 'ready', modelId: other.id } }, [other], undefined, 'faber-alias', ''), undefined, 'A removed model must not silently select a different loaded model');
 });
+
+
+test('waiting progress and context-summary output never create an empty or summary answer bubble', () => {
+  const state = fixture(); state.chats[0].messages.length = 1; state.runs.length = 1; state.runs[0].status = 'running'; state.runs[0].toolEvents = [];
+  for (const stream of [{ phase: 'thinking', text: '' }, { phase: 'compacting', text: 'A private working-context summary' }]) {
+    const rows = transcriptTimeline(state, 'c', new Map([['r', stream]]));
+    assert.ok(rows.some(row => row.kind === 'activity')); assert.ok(!rows.some(row => row.kind === 'stream'));
+    assert.equal(rows.filter(row => row.kind === 'message').length, 1);
+  }
+});

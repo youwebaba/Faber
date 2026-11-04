@@ -1,4 +1,11 @@
-Faber b1.1 bundled runtime notices
+Faber bundled runtime notices
+
+The Faber metadata worker is built with Rust 1.99.1. The Rust standard library's
+copyright and dependency notices are retained in build/licenses/rust, including
+the linked license texts. The worker's Cargo dependencies are identified exactly
+in native/Cargo.lock; their unmodified source, checksum metadata and upstream
+licenses are included under native/vendor. Cargo uses those vendored sources for
+offline self-upgrade builds. The Rust compiler itself is not bundled.
 
 Lightpanda Browser 1.0.2 is included as a separate optional WSL2 addon runtime.
 Lightpanda is AGPL-3.0-or-later. Its unmodified binary, full license and exact

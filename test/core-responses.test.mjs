@@ -4,8 +4,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createRuntime } from '../core/runtime.mjs';
-import { streamProvider, testProvider } from '../core/provider.mjs';
-import { responsesInput } from '../core/responses.mjs';
+import { streamProvider, testProvider, providerBody } from '../core/provider.mjs';
+import { responsesInput, responseEvents } from '../core/responses.mjs';
 import { fileTools } from '../tools/files.mjs';
 import { createUpgrades, upgradeTools } from '../desktop/upgrades.mjs';
 
@@ -152,4 +152,146 @@ test('large ordinary tool text and opaque response items replay exactly', async 
   assert.equal(JSON.parse(returned.output).text, '// long source fixture\n'.repeat(2000));
   assert.deepEqual(requests[1].input.filter(item => ['reasoning', 'function_call'].includes(item.type)), output);
   assert.ok(state.chats[0].messages.find(item => item.role === 'tool').content.length > 38000);
+});
+
+const textDelta = (output_index, content_index, item_id, delta, type = 'response.output_text.delta') => ({ type, output_index, content_index, item_id, delta });
+const visibleText = events => events.reduce((text, event) => event.type === 'text' ? event.text : event.type === 'delta' ? text + event.text : text, '');
+
+test('Responses tracks interleaved output items and content parts and preserves phases for replay', async () => {
+  const commentary = { ...message('Checking '), id: 'msg_commentary', phase: 'commentary' };
+  commentary.content.push({ type: 'output_text', text: 'files.\n', annotations: [] });
+  const final = { ...message('Done.'), id: 'msg_final', phase: 'final_answer' };
+  const output = [commentary, final, call('after_text', 'project_list', {})];
+  const events = await collect(async () => response([
+    textDelta(0, 1, commentary.id, 'files.\n'), textDelta(1, 0, final.id, 'Done.'),
+    textDelta(0, 0, commentary.id, 'Check'), textDelta(0, 0, commentary.id, 'ing '), completed(output),
+  ]));
+  assert.equal(visibleText(events), 'Checking files.\nDone.');
+  assert.deepEqual(events.filter(event => event.type === 'text').map(event => event.text), ['Checkfiles.\nDone.', 'Checking files.\nDone.']);
+  const saved = events.find(event => event.type === 'provider_output').data;
+  assert.deepEqual(saved.items, output);
+  assert.deepEqual(responsesInput([{ role: 'assistant', content: visibleText(events), providerOutput: saved }], configuration), output);
+  assert.ok(events.findIndex(event => event.type === 'tool') > events.findIndex(event => event.type === 'provider_output'));
+});
+
+test('Responses reconciles validated completed text including revisions, prefixes and legacy deltas', async t => {
+  const first = text => ({ ...message(text), id: 'first', phase: 'commentary' });
+  const last = text => ({ ...message(text), id: 'last', phase: 'final_answer' });
+  for (const [name, frames, output, expected, replacement] of [
+    ['terminal suffix', [textDelta(0, 0, 'last', 'Ans')], [last('Answer')], 'Answer', false],
+    ['same-part revision', [textDelta(0, 0, 'last', 'Draft')], [last('Final')], 'Final', true],
+    ['terminal is shorter', [textDelta(0, 0, 'last', 'Answer with extra text')], [last('Answer')], 'Answer', true],
+    ['missing earlier suffix', [textDelta(0, 0, 'first', 'Check'), textDelta(1, 0, 'last', 'Answer')], [first('Checking '), last('Answer')], 'Checking Answer', true],
+    ['terminal only contains final', [textDelta(0, 0, 'first', 'Checking '), textDelta(1, 0, 'last', 'Answer')], [last('Answer')], 'Answer', true],
+    ['legacy revision', [{ type: 'response.output_text.delta', delta: 'Draft' }], [last('Final')], 'Final', true],
+    ['mixed indexed and legacy', [textDelta(0, 0, 'last', 'An'), { type: 'response.output_text.delta', delta: 'swer' }], [last('Answer')], 'Answer', false],
+    ['terminal only', [], [last('Answer')], 'Answer', false],
+    ['refusal', [textDelta(0, 0, 'last', 'Cannot', 'response.refusal.delta')], [{ ...last(''), content: [{ type: 'refusal', refusal: 'Cannot help.' }] }], 'Cannot help.', false],
+  ]) await t.test(name, async () => {
+    const events = await collect(async () => response([...frames, completed(output)]));
+    assert.equal(visibleText(events), expected);
+    assert.equal(events.some(event => event.type === 'text'), replacement);
+    assert.deepEqual(events.find(event => event.type === 'provider_output').data.items, output);
+  });
+});
+
+test('Responses malformed terminal text and invalid stream identities never release tools', async t => {
+  const valid = call('must_not_execute', 'project_list', {});
+  const invalidMessage = content => ({ ...message(''), content });
+  for (const [name, frames] of [
+    ['non-string text', [completed([valid, invalidMessage([{ type: 'output_text', text: 7 }])])]],
+    ['missing refusal', [completed([valid, invalidMessage([{ type: 'refusal' }])])]],
+    ['unknown content', [completed([valid, invalidMessage([{ type: 'input_text', text: 'wrong' }])])]],
+    ['unfinished message', [completed([valid, { ...message('wrong'), status: 'in_progress' }])]],
+    ['invalid index', [textDelta(-1, 0, 'first', 'wrong'), completed([valid])]],
+    ['changed item ID', [textDelta(0, 0, 'first', 'one'), textDelta(0, 1, 'different', 'two'), completed([valid])]],
+    ['changed part type', [textDelta(0, 0, 'first', 'one'), textDelta(0, 0, 'first', 'two', 'response.refusal.delta'), completed([valid])]],
+  ]) await t.test(name, async () => {
+    const events = [];
+    await assert.rejects(async () => { for await (const event of responseEvents(frames, configuration)) events.push(event); });
+    assert.equal(events.some(event => event.type === 'tool' || event.type === 'provider_output'), false);
+  });
+});
+
+test('Responses progress exposes supplied public summaries and never hidden reasoning', async () => {
+  const tool = call('tool', 'project_list', {});
+  const events = await collect(async () => response([
+    { type: 'response.output_item.added', item: reasoning, output_index: 0 },
+    { type: 'response.reasoning_text.delta', delta: 'hidden reasoning must not appear', output_index: 0 },
+    { type: 'response.reasoning_summary_text.delta', item_id: reasoning.id, summary_index: 0, delta: 'Checking' },
+    { type: 'response.reasoning_summary_text.delta', item_id: reasoning.id, summary_index: 0, delta: ' files.' },
+    { type: 'response.reasoning_summary_text.done', item_id: reasoning.id, summary_index: 0, text: 'Checking files.' },
+    { type: 'response.output_item.added', item: tool, output_index: 1 },
+    { type: 'response.function_call_arguments.delta', delta: '{}', output_index: 1 },
+    { type: 'response.output_item.added', item: message(''), output_index: 2 },
+    textDelta(2, 0, 'msg_fixture', 'Done.'), completed([reasoning, tool, message('Done.')]),
+  ]));
+  assert.deepEqual(events.filter(event => event.type === 'progress'), [
+    { type: 'progress', phase: 'thinking' },
+    { type: 'progress', phase: 'thinking', summary: 'Checking' },
+    { type: 'progress', phase: 'thinking', summary: 'Checking files.' },
+    { type: 'progress', phase: 'preparing_tools' },
+    { type: 'progress', phase: 'responding' },
+  ]);
+  assert.equal(visibleText(events), 'Done.');
+  const bounded = await collect(async () => response([{ type: 'response.reasoning_summary_text.delta', delta: 'x'.repeat(2100) }, completed([message('Done')])]));
+  assert.equal(bounded.find(event => event.type === 'progress').summary.length, 2000);
+});
+
+test('Responses cancellation between progress, reconciliation and terminal calls prevents tool release', async t => {
+  for (const stopAt of ['progress', 'text', 'provider_output']) await t.test(stopAt, async () => {
+    const controller = new AbortController(), events = [];
+    const frames = [textDelta(0, 0, 'msg_fixture', 'Draft'), completed([message('Final'), call('cancelled', 'project_list', {})])];
+    await assert.rejects(async () => {
+      for await (const event of responseEvents(frames, configuration, controller.signal)) {
+        events.push(event);
+        if (event.type === stopAt) controller.abort(new Error('Fixture canceled'));
+      }
+    }, /Fixture canceled/);
+    assert.equal(events.some(event => event.type === 'tool'), false);
+    if (stopAt === 'progress') assert.equal(events.some(event => event.type === 'delta' || event.type === 'text'), false);
+  });
+});
+
+test('only internal compaction requests add output budgets and preserve local context options', () => {
+  for (const kind of ['openai-responses', 'openai', 'ollama']) {
+    const provider = { ...configuration, kind, chatOptions: { contextTokens: 32000, thinking: false } };
+    const body = extra => providerBody({ provider: { ...provider, ...extra }, messages: [{ role: 'user', content: 'summary fixture' }], tools: [] });
+    for (const compactionTokens of [undefined, 0, -1, 1.5]) {
+      const ordinary = body({ compactionTokens });
+      assert.equal(ordinary.max_output_tokens, undefined); assert.equal(ordinary.max_tokens, undefined); assert.equal(ordinary.options?.num_predict, undefined);
+      if (kind === 'ollama') assert.equal(ordinary.options.num_ctx, 32000);
+    }
+    const summary = body({ compactionTokens: 2048 });
+    if (kind === 'openai-responses') assert.equal(summary.max_output_tokens, 2048);
+    else if (kind === 'openai') assert.equal(summary.max_tokens, 2048);
+    else assert.deepEqual(summary.options, { num_ctx: 32000, num_predict: 2048 });
+  }
+});
+
+test('indexed completed text parts correct visible output before response completion', async t => {
+  for (const kind of ['output_text', 'refusal']) await t.test(kind, async () => {
+    const controller = new AbortController(), events = [];
+    const key = kind === 'output_text' ? 'text' : 'refusal';
+    async function* frames() {
+      yield textDelta(0, 0, 'msg_fixture', 'Draft', `response.${kind}.delta`);
+      yield { type: `response.${kind}.done`, output_index: 0, content_index: 0, item_id: 'msg_fixture', [key]: 'Canonical answer.' };
+      assert.equal(visibleText(events), 'Canonical answer.');
+      assert.equal(events.some(event => event.type === 'provider_output' || event.type === 'tool'), false);
+      yield completed([{ ...message(''), content: [{ type: kind, [key]: 'Canonical answer.' }] }]);
+    }
+    for await (const event of responseEvents(frames(), configuration, controller.signal)) events.push(event);
+    assert.deepEqual(events.filter(event => event.type === 'text'), [{ type: 'text', text: 'Canonical answer.' }]);
+  });
+});
+
+test('all provider protocols reject explicitly truncated compaction responses', async t => {
+  for (const kind of ['openai-responses', 'openai', 'ollama']) await t.test(kind, async () => {
+    const frames = kind === 'openai-responses'
+      ? response([{ type: 'response.output_text.delta', delta: 'Partial summary' }, { type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }])
+      : kind === 'openai'
+        ? response([{ choices: [{ delta: { content: 'Partial summary' }, finish_reason: 'length' }] }])
+        : new Response(JSON.stringify({ message: { content: 'Partial summary' }, done: true, done_reason: 'length' }) + '\n');
+    await assert.rejects(collect(async () => frames, { provider: { ...configuration, kind, compactionTokens: 2048 } }), /token limit|max_output_tokens/);
+  });
 });

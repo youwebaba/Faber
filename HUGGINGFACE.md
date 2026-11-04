@@ -82,8 +82,10 @@ or protected destinations and path traversal, Windows reserved names/ADS, and
 symlink escapes. Do not overwrite existing mismatched files. Commit a file only
 after its advertised byte length and available SHA-256 are verified. Persist
 completion only after publication. Partials are never labeled completed.
-Stream data to disk with backpressure; do not buffer model weights in RAM.
-Bound concurrent transfers and reject overlapping output paths.
+Stream data to disk with backpressure using a bounded 1 MiB write buffer per
+transfer. Flush full buffers, the final tail, and a received partial batch after
+250 ms; progress counts completed writes. Bound concurrent transfers and reject
+overlapping output paths. Length/hash verification and cancellation still apply.
 
 Safe publication currently requires hard-link support, such as NTFS. A small
 preflight checks this before transferring model bytes and gives an actionable
@@ -123,13 +125,15 @@ Primary references: [Hub API](https://huggingface.co/docs/hub/api),
 
 Use deterministic tests for malformed metadata, estimates, HTTP errors,
 credential redirects, file containment, concurrent jobs, streamed progress,
-cancellation, byte/hash mismatch and persistence/restart. Live proof is limited
-to public search/details and the 453,864-byte `model.safetensors` from
+cancellation, byte/hash mismatch and persistence/restart. Initial live proof used
+public search/details and the 453,864-byte `model.safetensors` from
 `hf-internal-testing/tiny-random-gpt2` at
 `71034c5d8bde858ff824298bdedc65515b97d2b9` (SHA-256
 `8111d5afb0715dbf5a31396d31432cb56370ba23f6650a035ea0fc8a20b4e500`).
 No large model download, paid service, inference-provider change or execution of
 downloaded code is needed to verify this feature.
 
-The controlled desktop flows and the single public download passed; see
-[VERIFICATION.md](VERIFICATION.md) for the report locations and remaining limits.
+The controlled desktop flows and the single public download passed. November 4
+checks also compared bounded ranges from a pinned large GGUF; those short samples
+do not establish sustained full-model throughput. See [VERIFICATION.md](VERIFICATION.md)
+for the report locations and remaining limits.

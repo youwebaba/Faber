@@ -46,7 +46,7 @@ export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
   assert.equal((await tool('hf_download_status',{})).result.downloadDirectory,agentDirectory);
   checks.push('All six hf_* tools share the runtime registry; search/files permissions gate real manager operations');
   const destination=path.join(dataDir,'models','selected');
-  await click('#open-settings');await until(()=>js(`!!document.querySelector('#model-download-directory')`),'folder setting');
+  await click('#open-settings');await click('[data-settings-category="models"].nav-button');await until(()=>js(`!!document.querySelector('#model-download-directory')`),'folder setting');
   await set('#model-download-directory',destination);await click('#model-save-settings');await until(async()=> (await state()).downloadDirectory===destination,'saved folder');
   await click('#close-modal');checks.push('Settings saves the selected download folder in the real isolated manager');
   await click('#open-models');await set('#model-search-query','tiny');await js(`document.querySelector('#model-search-format').value='safetensors';document.querySelector('#model-search-form').requestSubmit()`);
@@ -59,7 +59,7 @@ export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
   const active=await until(async()=> (await state()).downloads.find(job=>job.status==='downloading'&&job.downloadedBytes>0&&job.speedBytesPerSecond>0),'streamed progress and speed');
   const laterBytes=active.downloadedBytes+4096;
   await set('#model-search-query','preserve this search draft');
-  await click('#open-settings');const draft=path.join(dataDir,'unsaved-folder');await set('#model-download-directory',draft);
+  await click('#open-settings');await click('[data-settings-category="models"].nav-button');const draft=path.join(dataDir,'unsaved-folder');await set('#model-download-directory',draft);
   await until(async()=> (await state()).downloads.find(job=>job.id===active.id)?.downloadedBytes>laterBytes,'later progress event');
   assert.equal(await js(`document.querySelector('#model-download-directory').value`),draft);assert.equal(await js(`document.querySelector('#model-search-query').value`),'preserve this search draft');
   await click('#close-modal');
@@ -78,7 +78,7 @@ export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
   assert.equal((await tool('hf_cancel_download',{id:agentDownload.result.id})).result.status,'canceled');assert.equal((await tool('hf_download_status',{id:agentDownload.result.id})).result.status,'canceled');
   checks.push('AI download requests fixed-destination files approval; AI status/cancel operate on the same background job');
   window.setSize(1100,760);await click('#model-browse-tab');await capture('models-browser-compact');
-  await click('#open-settings');await js(`document.querySelector('#model-download-settings').scrollIntoView({block:'center'})`);await capture('models-settings-compact');await click('#close-modal');
+  await click('#open-settings');await click('[data-settings-category="models"].nav-button');await js(`document.querySelector('#model-download-settings').scrollIntoView({block:'center'})`);await capture('models-settings-compact');await click('#close-modal');
   const result={ok:true,kind:'deterministic-controlled-fetch',checks,destination,completed:{id:completed.id,file,bytes:weights.length,sha256:digest(weights)},canceled:{id:canceled.id,status:canceled.status},screenshots};
   const report=path.join(dataDir,'models-smoke-report.json');await fs.writeFile(report,JSON.stringify(result,null,2));return {...result,report};
 }

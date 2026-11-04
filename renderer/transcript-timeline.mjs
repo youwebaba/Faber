@@ -9,7 +9,7 @@ const time = value => { const stamp = Date.parse(value); return Number.isFinite(
 export function transcriptTimeline(state, chatId, streams = new Map()) {
   const messages = (state.chats.find(chat => chat.id === chatId)?.messages || []).filter(message => message.role !== 'system');
   const runs = state.runs.filter(run => run.chatId === chatId), slots = new Map(), representedCalls = new Set(), representedMessages = new Set();
-  const owner = message => runs.find(run => run.id === message.runId) || (message.runId ? undefined : [...runs].reverse().find(run => time(message.createdAt) !== null && time(run.startedAt) !== null && time(message.createdAt) >= time(run.startedAt)));
+  const owner = message => runs.find(run => run.id === message.runId) || (message.runId ? undefined : runs.findLast(run => time(message.createdAt) !== null && time(run.startedAt) !== null && time(message.createdAt) >= time(run.startedAt)));
   const slotAt = stamp => { const at = time(stamp); if (at === null) return messages.length; let slot = 0; for (let i = 0; i < messages.length; i++) if (time(messages[i].createdAt) !== null && time(messages[i].createdAt) <= at) slot = i + 1; return slot; };
   const add = (slot, activity) => { if (!slots.has(slot)) slots.set(slot, []); slots.get(slot).push({ kind: 'activity', key: activity.id, activity }); };
   for (const run of runs) {
@@ -32,7 +32,7 @@ export function transcriptTimeline(state, chatId, streams = new Map()) {
     const children = state.runs.filter(child => child.parentRunId === run.id);
     if (!batches.length && (isActive(run) || children.length)) batches.push({ id: `${run.id}:step:0`, run, events: [], slot: run.requestMessageId && messages.some(message => message.id === run.requestMessageId) ? messages.findIndex(message => message.id === run.requestMessageId) + 1 : slotAt(run.startedAt), at: run.startedAt, childRuns: [] });
     for (const child of children) {
-      const batch = batches.find(item => item.events.some(event => event.result?.runId === child.id)) || [...batches].reverse().find(item => time(item.at) !== null && time(child.startedAt) !== null && time(item.at) <= time(child.startedAt)) || batches[0];
+      const batch = batches.find(item => item.events.some(event => event.result?.runId === child.id)) || batches.findLast(item => time(item.at) !== null && time(child.startedAt) !== null && time(item.at) <= time(child.startedAt)) || batches[0];
       if (batch) {
         const ids = new Set([child.id]);
         for (let changed = true; changed;) { changed = false; for (const nested of state.runs) if (ids.has(nested.parentRunId) && !ids.has(nested.id)) { ids.add(nested.id); changed = true; } }
@@ -55,7 +55,7 @@ export function transcriptTimeline(state, chatId, streams = new Map()) {
     rows.push({ kind: 'message', key: message.id, message });
   }
   for (const run of runs.filter(isActive)) {
-    const text = streamText(streams.get(run.id)?.text, run, messages);
+    const stream = streams.get(run.id), text = stream?.phase === 'compacting' ? '' : streamText(stream?.text, run, messages);
     if (text) rows.push({ kind: 'stream', key: run.id, run, text });
   }
   return rows;

@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
 
 // Names from ggml-org/llama.cpp/tools/quantize/quantize.cpp and ggml/docs/gguf.md.
-const encodings = new Set(('Q1_0 Q2_0 Q2_K Q2_K_S Q3_K Q3_K_S Q3_K_M Q3_K_L Q4_0 Q4_1 Q4_K Q4_K_S Q4_K_M Q5_0 Q5_1 Q5_K Q5_K_S Q5_K_M Q6_K Q8_0 Q8_1 Q8_K IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XXS IQ3_XS IQ3_S IQ3_M IQ4_NL IQ4_XS TQ1_0 TQ2_0 MXFP4 MXFP4_MOE F16 BF16 F32').split(' '));
-const encodingSuffixes = [...encodings].sort((a, b) => b.length - a.length);
+const encodingSuffixes = 'Q1_0 Q2_0 Q2_K Q2_K_S Q3_K Q3_K_S Q3_K_M Q3_K_L Q4_0 Q4_1 Q4_K Q4_K_S Q4_K_M Q5_0 Q5_1 Q5_K Q5_K_S Q5_K_M Q6_K Q8_0 Q8_1 Q8_K IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XXS IQ3_XS IQ3_S IQ3_M IQ4_NL IQ4_XS TQ1_0 TQ2_0 MXFP4 MXFP4_MOE F16 BF16 F32'.split(' ').sort((a, b) => b.length - a.length);
 export const auxiliaryGGUF = file => /(?:^|[\/_.-])(mmproj|mtp|adapter|projector|lora|vocab)(?:[\/_.-]|$)/i.test(file);
 
 export function quantizationCatalog(files, estimateVram) {
@@ -12,16 +11,16 @@ export function quantizationCatalog(files, estimateVram) {
     const bare = file.path.replace(/\.gguf$/i, '');
     const split = /-(\d+)-of-(\d+)$/i.exec(bare);
     const stem = split ? bare.slice(0, split.index) : bare;
-    const basename = stem.split('/').at(-1);
+    const basename = stem.split('/').at(-1).toUpperCase();
     // shortcut: only terminal, documented encodings are catalogued; unusual names remain manual files until explicitly supported.
-    const encoding = encodingSuffixes.find(value => basename.toUpperCase() === value || basename.toUpperCase().endsWith(`-${value}`) || basename.toUpperCase().endsWith(`.${value}`));
+    const encoding = encodingSuffixes.find(value => basename === value || basename.endsWith(`-${value}`) || basename.endsWith(`.${value}`));
     if (!encoding) continue;
     let group = groups.get(stem);
     if (!group) { group = { stem, encoding, entries: [] }; groups.set(stem, group); }
     group.entries.push({ file, index: split ? Number(split[1]) : null, total: split ? Number(split[2]) : null, valid: !split || (split[1].length === 5 && split[2].length === 5) });
   }
   const foldedPaths = new Map();
-  for (const file of files) foldedPaths.set(file.path.toLowerCase(), (foldedPaths.get(file.path.toLowerCase()) || 0) + 1);
+  for (const file of files) { const folded = file.path.toLowerCase(); foldedPaths.set(folded, (foldedPaths.get(folded) || 0) + 1); }
   return [...groups.values()].map(({ stem, encoding, entries }) => {
     const split = entries.some(entry => entry.index !== null), totals = new Set(entries.map(entry => entry.total));
     const total = entries[0].total;

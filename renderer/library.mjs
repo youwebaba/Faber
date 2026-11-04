@@ -15,7 +15,7 @@ export function libraryEntries(local, downloads) {
     const paths = model.files.map(file => pathKey(local.directory, file)); const downloading = paths.some(path => reserved.has(path));
     if (downloading && paths.every(path => reserved.has(path))) continue;
     const running = local.process?.modelId === model.id && ['loading', 'ready', 'stopping'].includes(local.process.status);
-    const job = [...downloads].reverse().find(job => job.files.length === paths.length && job.files.every(file => paths.includes(pathKey(job.directory, file.path))));
+    const job = downloads.findLast(job => job.files.length === paths.length && job.files.every(file => paths.includes(pathKey(job.directory, file.path))));
     rows.push({ kind: 'disk', id: `disk:${model.id}`, label: model.label, model, job, canDelete: !running && !downloading,
       deleteReason: running ? 'Stop this model before moving its files.' : downloading ? 'Cancel the active download first.' : '',
       status: running ? `Runtime ${local.process.status}` : model.available ? 'On disk' : 'On disk · unavailable for this runtime' });
