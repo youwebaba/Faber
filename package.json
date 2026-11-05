@@ -20,7 +20,9 @@
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
     "prepare:lightpanda": "node scripts/prepare-lightpanda.mjs",
-    "prepare:addons": "node scripts/prepare-bundled-addons.mjs"
+    "prepare:addons": "node scripts/prepare-bundled-addons.mjs",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "privacy:check:release": "node scripts/privacy-check.mjs --release"
   },
   "engines": {
     "node": ">=24"
@@ -76,6 +78,7 @@
     "npmRebuild": false,
     "asarUnpack": ["native/bin/**"],
     "beforePack": "build/verify-runtime.cjs",
+    "afterPack": "scripts/privacy-after-pack.cjs",
     "win": {
       "target": [
         {

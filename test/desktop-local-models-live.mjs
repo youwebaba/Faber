@@ -1,4 +1,4 @@
-// Explicit opt-in: load existing weights; a second flag permits one tiny GPU inference.
+// Explicit opt-in: --model-path selects existing weights; a second flag permits one tiny GPU inference.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,6 +10,10 @@ import { createRuntime } from '../core/runtime.mjs';
 import { createLocalModels } from '../local-models/index.mjs';
 
 if (!process.argv.includes('--allow-existing-local-load')) throw new Error('Requires --allow-existing-local-load; allocates GPU/RAM until Stop.');
+const modelIndex = process.argv.indexOf('--model-path'), modelPath = modelIndex === -1 ? '' : process.argv[modelIndex + 1];
+assert.ok(modelPath && !modelPath.startsWith('--'), '--model-path requires the path to an existing GGUF file');
+const original = path.resolve(modelPath), before = await fs.stat(original);
+assert.ok(before.isFile() && before.size > 0, '--model-path must select a nonempty file');
 const infer = process.argv.includes('--allow-bundled-gpu-inference');
 const contextIndex=process.argv.indexOf('--context-tokens'),contextTokens=contextIndex===-1?null:Number(process.argv[contextIndex+1]);
 assert.ok(contextTokens===null||Number.isSafeInteger(contextTokens)&&contextTokens>0&&contextTokens<=2147483647,'--context-tokens requires a positive runtime context size');
@@ -17,8 +21,6 @@ const executable = infer ? fileURLToPath(new URL('../release/win-unpacked/resour
 if (executable) assert.ok((await fs.stat(executable)).isFile());
 const gpuMemory = async () => (await promisify(execFile)('nvidia-smi.exe', ['--query-gpu=name,memory.total,memory.used,memory.free', '--format=csv,noheader'], { windowsHide: true, timeout: 10000 })).stdout.trim();
 const memoryBefore = infer ? await gpuMemory() : undefined;
-const original = 'C:\\Users\\youwe\\.ollama\\models\\blobs\\sha256-6aa74acf170f8fb8e6ff8dae9bc9ea918d3a14b6ba95d0b0287da31b09a4848c';
-const before = await fs.stat(original); assert.equal(before.size, 3825807040);
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'FaberHarness-local-live-')), directory = path.join(root, 'models');
 await fs.mkdir(directory); const linked = path.join(directory, 'fixture.gguf'); await fs.link(original, linked);
 const secrets = new Map(), children = []; let manager, runtime, startupLog='';
@@ -76,7 +78,7 @@ try {
   assert.ok(children.length === 1 && children.every(child => child.exitCode !== null || child.signalCode));
   assert.ok(!(await fs.readdir(path.join(root, 'data', 'local-models'))).some(name => name.endsWith('.key')));
   const after = await fs.stat(original); assert.equal(after.size, before.size); assert.equal(after.mtimeMs, before.mtimeMs); assert.equal(after.ino, before.ino);
-  const report = { ok: true, sourceModel: 'llama2-uncensored:7b (existing Ollama weight)', sourceBytes: before.size, hardLinkOnly: true, loadElapsedMs, ready: true, authenticatedModelListing: true, stoppedAndExited: true, privateKeyFileRemoved: true, inferenceRequests: infer?1:0, downloadedBytes: 0, details,requestedContextTokens:contextTokens,observedContextCapacityTokens:current.process.contextCapacityTokens,
+  const report = { ok: true, sourceModel: 'Explicitly selected existing local weight', sourceBytes: before.size, hardLinkOnly: true, loadElapsedMs, ready: true, authenticatedModelListing: true, stoppedAndExited: true, privateKeyFileRemoved: true, inferenceRequests: infer?1:0, downloadedBytes: 0, details,requestedContextTokens:contextTokens,observedContextCapacityTokens:current.process.contextCapacityTokens,
     ...(infer?{inference,gpuMemory:{scope:'Total device memory, including other applications; runner logs independently verify offloaded layers.',before:memoryBefore,loaded:memoryLoaded,afterStop:await gpuMemory()}}:{}) };
   const reportPath = path.join(root, 'report.json'); await fs.writeFile(reportPath, JSON.stringify(report, null, 2)); console.log(JSON.stringify({ ...report, reportPath }));
 } finally {

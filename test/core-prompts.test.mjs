@@ -79,11 +79,11 @@ test('pre-b2 state migrates without losing messages and validates new preference
 test('account provider registration is host-only, token-free, and preserves disconnected chats',async t=>{
   const f=await fixture(t),account={id:'chatgpt:fixture',accountId:'fixture',name:'ChatGPT · Account 1',kind:'openai-responses',authKind:'chatgpt',baseUrl:'https://api.openai.com/v1',model:'',hasKey:true,connected:true,models:[{id:'model-fixture',name:'Fixture',contextTokens:null,reasoningEfforts:[]}]};
   await assert.rejects(f.runtime.request('provider.save',{id:account.id,name:'Bad',kind:'openai',baseUrl:'http://localhost:1234',model:''}),/ChatGPT accounts/);
-  await assert.rejects(f.runtime.setAccountProviders([{...account,access_token:'must-not-persist'}]),/unknown property/);
+  await assert.rejects(f.runtime.setAccountProviders([{...account,access_token:'fake-must-not-persist'}]),/unknown property/);
   await assert.rejects(f.runtime.setAccountProviders([{...account,baseUrl:'https://example.com'}]));
   await f.runtime.setAccountProviders([account]);
   await f.runtime.request('chat.update',{id:f.chat.id,providerId:account.id,model:'model-fixture'});
   await f.runtime.setAccountProviders([]);
   const state=await f.runtime.request('state.get');assert.equal(state.providers.find(provider=>provider.id===account.id).connected,false);assert.equal(state.chats[0].providerId,account.id);
-  assert.equal(JSON.stringify(state).includes('must-not-persist'),false);
+  assert.equal(JSON.stringify(state).includes('fake-must-not-persist'),false);
 });

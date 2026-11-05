@@ -171,10 +171,10 @@ for (const kind of ['openai', 'ollama', 'openai-responses']) test(`gateway reuse
     else { response.writeHead(200, { 'Content-Type': 'text/event-stream' }); response.end([{ type: 'response.output_text.delta', delta: 'draft' }, { type: 'response.completed', response: { id: 'resp_fixture', status: 'completed', usage: { input_tokens: 9, output_tokens: 2 }, output: [{ type: 'message', id: 'msg_fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'canonical', annotations: [] }] }] } }].map(frame => `data: ${JSON.stringify(frame)}\n\n`).join('')); }
   });
   upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening'); t.after(() => new Promise(resolve => { upstream.close(resolve); upstream.closeAllConnections(); }));
-  const f = await fixture(t, { adapter: true, kind, baseUrl: `http://127.0.0.1:${upstream.address().port}${kind === 'ollama' ? '' : '/v1'}`, apiKey: 'UPSTREAM-SECRET-FIXTURE' }); await f.start();
+  const f = await fixture(t, { adapter: true, kind, baseUrl: `http://127.0.0.1:${upstream.address().port}${kind === 'ollama' ? '' : '/v1'}`, apiKey: 'fake-UPSTREAM-SECRET-FIXTURE' }); await f.start();
   const output = await (await f.fetch('/v1/chat/completions', { model: 'fixture-model', messages: user, stream: true, stream_options: { include_usage: true } })).text();
   assert.equal(frames(output).flatMap(frame => frame.choices).map(choice => choice.delta.content || '').join(''), 'canonical'); assert.equal(frames(output).at(-1).usage.total_tokens, 11);
-  assert.equal(received.length, 1); assert.equal(received[0].authorization, 'Bearer UPSTREAM-SECRET-FIXTURE'); assert.equal(JSON.stringify(received[0].body).includes('PRIVATE'), false); assert.equal(output.includes('UPSTREAM-SECRET-FIXTURE'), false); assert.equal(output.includes('draft'), false);
+  assert.equal(received.length, 1); assert.equal(received[0].authorization, 'Bearer fake-UPSTREAM-SECRET-FIXTURE'); assert.equal(JSON.stringify(received[0].body).includes('PRIVATE'), false); assert.equal(output.includes('fake-UPSTREAM-SECRET-FIXTURE'), false); assert.equal(output.includes('draft'), false);
   assert.equal(received[0].url, kind === 'ollama' ? '/api/chat' : kind === 'openai' ? '/v1/chat/completions' : '/v1/responses');
 });
 test('Stop fences requests paused before model or MCP admission without waiting for route reads', { timeout: 3000 }, async t => {

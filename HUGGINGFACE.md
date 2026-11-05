@@ -1,8 +1,8 @@
 # Hugging Face model browser and downloads
 
-Bill requested this feature on October 31, 2026: search/list Hugging Face models
-with size, parameter count and VRAM information where available; let users and
-agents download them with progress/speed; choose the destination in Settings.
+Browse Hugging Face models with size, parameter count and VRAM information
+where available. Users and agents can download models with progress and speed
+tracking, and choose the destination in Settings.
 This feature downloads files. Loading them for inference still requires a
 compatible local runtime; downloaded does not mean installed or running.
 
@@ -13,8 +13,7 @@ compatible local runtime; downloaded does not mean installed or running.
 - UI agent owns renderer additions: model browser, file selection, progress and
   Settings. Preserve the existing interface and keep model-hub UI in a module.
 - Integration agent owns desktop bridge/start/close wiring and desktop smoke
-  tests, plus independent integration review. Do not touch unrelated legacy edits
-  or the pre-existing untracked `harness/temp.txt`.
+  tests, plus independent integration review. Preserve unrelated edits.
 
 `model-hub/index.mjs` exports async
 `createModelHub({dataDir,sourceDir,host,emit,fetchImpl?})`. It returns

@@ -5,24 +5,26 @@ its root; do not push the containing repository into this remote. Preserve
 unrelated edits, commit only this task's verified source, fetch before pushing,
 and do not force-push. Runtime data and binaries are not source files.
 
-For this PC, the parent clocal.ai memory policy applies via
-`C:/Users/youwe/OneDrive/Desktop/clocal.ai/voice-assistant/tools/PROJECT-MEMORY-PROTOCOL.md`.
-Only the designated isolated GPT-6 Luna librarian accesses that log. If it is
-unavailable on another installation, report that limitation; do not invent a log.
+Keep distributable source, docs, screenshots, build metadata and reports free of
+maintainer names, personal credentials and developer-machine paths. Use project-
+relative paths or explicit user inputs. Preserve required third-party credits,
+canonical project links and functional user data. Check release artifacts for
+these categories before publication.
+Write public posts in the maintainer's voice; describe the product directly in docs.
 
 Read `ADDONS.md` before authoring a removable feature. b1 includes only local
 addon management; no online addon sharing, publishing, catalog or OTA updates.
 
-Bill's October 31, 2026 instruction for this application is a fresh harness,
-Codex-style interface and modular backbone. This folder is independent of the
+Faber is a fresh harness with a Codex-style interface and modular backbone.
+This folder is independent of the
 older native and pinned-Hermes developer builds. Do not apply their glass
 UI or Hermes milestone requirements to this new application. Preserve their
 source, launchers and runtime data.
 
-All parent project-memory requirements still apply. Delegate unified-memory
-reads/writes to the required isolated GPT-6 Luna librarian. If that facility is
-unavailable to an agent running inside this harness, report the limitation and
-retain a pending change brief; never read/write the private log directly.
+Follow any project-memory policy supplied by the development workspace. Delegate
+unified-memory reads/writes to the designated isolated GPT-6 Luna librarian. If
+that facility is unavailable, report the limitation and retain a pending change
+brief; never read/write the private log directly.
 
 Read `CONTRACT.md`, `README.md` and the relevant modules before making changes.
 The Electron host owns OS/credential access, the core owns run and approval

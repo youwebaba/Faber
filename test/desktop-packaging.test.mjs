@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { prepareWorkbench, packagedRuntime } from '../desktop/packaged-paths.mjs';
+import { prepareWorkbench, packagedRuntime, refreshAlphaPrivacy } from '../desktop/packaged-paths.mjs';
 import {getProfileDirectory} from '../desktop/profile-path.cjs';
 import {validUpgradePath} from '../desktop/recovery.mjs';
 
@@ -103,3 +103,57 @@ test('Lightpanda packaging rejects added payloads and altered pinned source/bina
   await fs.writeFile(path.join(directory,'lightpanda'),'changed');await assert.rejects(verifyLightpanda(root),/integrity mismatch/);
 });
 
+
+
+test('Alpha privacy refresh updates exact stock, preserves edits and links, and resumes safely', async t => {
+  const {createHash} = await import('node:crypto');
+  const {nativeSourceHash, nativeExecutableSuffix} = await import('../native/integrity.mjs');
+  const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'Faber-privacy-refresh-'));
+  t.after(() => fs.rm(root, {recursive:true, force:true}));
+  const bundledSource = path.join(root, 'bundle'), workbenchRoot = path.join(root, 'workbench');
+  const write = async (base, relative, bytes) => {const filename=path.join(base,relative);await fs.mkdir(path.dirname(filename),{recursive:true});await fs.writeFile(filename,bytes);};
+  for (const relative of ['native/Cargo.toml','native/Cargo.lock','native/rust-toolchain.toml','native/.cargo/config.toml','native/src/main.rs']) await write(bundledSource,relative,'fixture source');
+  const sourceHash = await nativeSourceHash(bundledSource), oldBytes = Buffer.from('original fixture worker'), newBytes = Buffer.from('private-path-free fixture worker');
+  const worker = hash(oldBytes), newWorker = hash(newBytes);
+  const manifest = sha256 => Buffer.from(JSON.stringify({schemaVersion:1,protocol:1,sourceHash,sha256,binary:`bin/${sha256}${nativeExecutableSuffix}`}));
+  const oldManifest = manifest(worker), newManifest = manifest(newWorker);
+  await write(bundledSource,'native/runtime.json',oldManifest);await write(bundledSource,`native/bin/${worker}${nativeExecutableSuffix}`,oldBytes);
+  for (const relative of ['README.md','REQUIREMENTS.md','build/fixture.md','core/runtime.mjs']) await write(bundledSource,relative,'original fixture instructions');
+  const options = {bundledSource,workbenchRoot,version:'2.0.2-alpha.1'}, sourceDir = await prepareWorkbench(options);
+  await write(sourceDir,'REQUIREMENTS.md','custom instructions');
+  const outside = path.join(root,'outside');await fs.mkdir(outside);await write(outside,'fixture.md','outside instructions');
+  await fs.unlink(path.join(sourceDir,'build/fixture.md'));await fs.rmdir(path.join(sourceDir,'build'));await fs.symlink(outside,path.join(sourceDir,'build'),process.platform==='win32'?'junction':'dir');
+  for (const relative of ['README.md','REQUIREMENTS.md','build/fixture.md','core/runtime.mjs','scripts/privacy-check.mjs']) await write(bundledSource,relative,'clean fixture instructions');
+  await write(bundledSource,'native/runtime.json',newManifest);await write(bundledSource,`native/bin/${newWorker}${nativeExecutableSuffix}`,newBytes);
+  const stock = {files:Object.fromEntries(['README.md','REQUIREMENTS.md','build/fixture.md'].map(name=>[name,[hash('original fixture instructions')]])),runtimeHashes:[hash(oldManifest)],worker,sourceHash};
+  stock.files['scripts/privacy-check.mjs']=[];
+  // An independently edited native source blocks only the worker replacement.
+  await write(sourceDir,'native/src/main.rs','custom native source');
+  await refreshAlphaPrivacy(bundledSource,sourceDir,stock);
+  assert.equal(await fs.readFile(path.join(sourceDir,'README.md'),'utf8'),'clean fixture instructions');
+  assert.equal(await fs.readFile(path.join(sourceDir,'REQUIREMENTS.md'),'utf8'),'custom instructions');
+  assert.equal(await fs.readFile(path.join(outside,'fixture.md'),'utf8'),'outside instructions');
+  assert.equal(await fs.readFile(path.join(sourceDir,'core/runtime.mjs'),'utf8'),'original fixture instructions');
+  assert.equal(await fs.readFile(path.join(sourceDir,'scripts/privacy-check.mjs'),'utf8'),'clean fixture instructions');
+  assert.deepEqual(await fs.readFile(path.join(sourceDir,'native/runtime.json')),oldManifest);
+  await write(sourceDir,'native/src/main.rs','fixture source');
+  await write(sourceDir,'native/bin/unrelated-worker','custom worker');
+  const rename=fs.rename.bind(fs);
+  t.mock.method(fs,'rename',async(from,to)=>{
+    if(to===path.join(sourceDir,'native/runtime.json'))assert.deepEqual(await fs.readFile(path.join(sourceDir,`native/bin/${newWorker}${nativeExecutableSuffix}`)),newBytes);
+    return rename(from,to);
+  });
+  await refreshAlphaPrivacy(bundledSource,sourceDir,stock);
+  assert.deepEqual(await fs.readFile(path.join(sourceDir,'native/runtime.json')),newManifest);
+  await assert.rejects(fs.stat(path.join(sourceDir,`native/bin/${worker}${nativeExecutableSuffix}`)),{code:'ENOENT'});
+  assert.equal(await fs.readFile(path.join(sourceDir,'native/bin/unrelated-worker'),'utf8'),'custom worker');
+  // Resume a partial attempt with the replacement worker already published.
+  await write(sourceDir,'native/runtime.json',oldManifest);await write(sourceDir,`native/bin/${worker}${nativeExecutableSuffix}`,oldBytes);
+  await refreshAlphaPrivacy(bundledSource,sourceDir,stock);
+  assert.deepEqual(await fs.readFile(path.join(sourceDir,'native/runtime.json')),newManifest);
+  await assert.rejects(fs.stat(path.join(sourceDir,`native/bin/${worker}${nativeExecutableSuffix}`)),{code:'ENOENT'});
+  await fs.rmdir(path.join(sourceDir,'build'));await write(sourceDir,'build/fixture.md','custom instructions');
+  const writes=[];t.mock.method(fs,'writeFile',async(...args)=>{writes.push(args[0]);throw Error('Unexpected repeat write');});
+  await refreshAlphaPrivacy(bundledSource,sourceDir,stock);assert.deepEqual(writes,[]);
+});

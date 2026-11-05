@@ -18,12 +18,17 @@ export async function buildNative({sourceDir, outputDir = path.join(sourceDir, '
   const env = {...process.env};
   // Keep the pinned toolchain and bundled CRT flags consistent with the source manifest.
   for (const name of ['RUSTUP_TOOLCHAIN', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS']) delete env[name];
+  // Cargo merges these flags with the pinned target flags, retaining the static CRT.
+  const remaps = [[os.homedir(), '/faber-build-home'], [sourceDir, '/faber'], [target, '/faber-target']]
+    .map(([from, to]) => `--remap-path-prefix=${path.resolve(from)}=${to}`);
+  if (process.platform === 'win32') remaps.push('-C', 'link-arg=/Brepro');
+  const rustflags = `${process.platform === 'win32' ? 'target.x86_64-pc-windows-msvc' : 'build'}.rustflags=${JSON.stringify(remaps)}`;
   let stdout = '', stderr = '';
   try {
     for (const command of ['test', 'build']) {
       let result;
       try {
-        result = await runner(cargo, [command, '--locked', '--offline', '--release', '--target-dir', target], {
+        result = await runner(cargo, [command, '--locked', '--offline', '--release', '--target-dir', target, '--config', rustflags], {
           cwd: path.join(sourceDir, 'native'), signal, timeout: 180000, maxOutput: 2 * 1024 * 1024, env,
         });
       } catch (error) {

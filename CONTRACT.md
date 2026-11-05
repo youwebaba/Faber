@@ -1,7 +1,7 @@
 # Faber implementation contract
 
-Bill requested a fresh harness on October 31, 2026, with a Codex-style UI,
-modular tools, local/cloud models, agent delegation, chats/projects, PC access,
+Faber provides a Codex-style UI, modular tools, local/cloud models, agent
+delegation, chats/projects, PC access,
 voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.

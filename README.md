@@ -2,15 +2,15 @@
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
-A Windows desktop workspace for local and API-connected AI agents. Bill's
-October 31, 2026 direction is a fresh harness with a Codex-style interface,
-shared tools, agent delegation, voice, and upgrades the agents can author.
-Faber has its own source, launchers and release lifecycle.
+Faber is a Windows desktop workspace for local and API-connected AI agents,
+with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
+the agents can author. It has its own source, launchers and release lifecycle.
 
 **Alpha 2.0** is the visible prerelease name. Its internal package/app version is
-`2.0.2-alpha.1`, with Windows build `2.0.2.0`; the GitHub release tag is
-`alpha-2.0`. See the [verification record](VERIFICATION.md) for source/application
-checks and the release assets for installer checksums and publication records.
+`2.0.2-alpha.1`, with Windows build `2.0.2.0`. Download the current installer from
+[GitHub Releases](https://github.com/youwebaba/Faber/releases). See the
+[verification record](VERIFICATION.md) for source/application checks and release
+history; checksums and publication records accompany the release assets.
 
 ## Rust migration
 
@@ -208,8 +208,8 @@ not used by either desktop smoke command.
 
 For the local connection, run the installed Ollama service, choose Local Ollama
 in the connection settings, and test `http://127.0.0.1:11434`. Select an installed
-model with tool support, such as the existing `qwen3.5:9b` on this PC. No model
-download or cloud fallback is implicit. A connection check lists models; it does
+model with tool support, such as `qwen3.5:9b`. No model download or cloud fallback
+is implicit. A connection check lists models; it does
 not establish their reasoning, vision, or tool-use quality.
 Endpoint redirects are rejected. API keys require HTTPS except on loopback.
 

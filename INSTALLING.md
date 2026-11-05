@@ -30,8 +30,9 @@ Only use the artifact from the trusted project source; signing is not configured
 
 The interface/release name is **Alpha 2.0**. The internal package/app version is
 `2.0.2-alpha.1` and the Windows build version is `2.0.2.0`, ordered above
-`2.0.1-rm.beta.1` / `2.0.1.2`. The GitHub release tag is `alpha-2.0` and the
-release is a prerelease. Source/application checks are recorded in
+`2.0.1-rm.beta.1` / `2.0.1.2`. Download the current prerelease installer from
+[GitHub Releases](https://github.com/youwebaba/Faber/releases). Source/application
+checks and release history are recorded in
 [VERIFICATION.md](VERIFICATION.md); installer checksums and publication records
 accompany the release assets.
 
@@ -170,8 +171,26 @@ node scripts/prepare-lightpanda.mjs
 & .\node_modules\.bin\electron.cmd build/render-logos.cjs
 powershell -NoProfile -File build/make-icon.ps1
 npm test
+npm run privacy:check
 npm run build:installer
 ```
+
+The offline privacy gate checks tracked source, shipped text and the packaged
+`app.asar` (including unpacked native workers) for personal names, home paths,
+credential literals and private keys. Owned `native/bin` workers are also checked
+for embedded ASCII/UTF-16 strings; extra workers outside the runtime manifest fail.
+Before packaging, set `FABER_PRIVACY_TERMS` in the current shell to a JSON array
+of local names/identifiers to block, then run `npm run privacy:check:release`.
+Keep these values out of files, command transcripts and Git. If the OS username
+is the complete identity to check on a clean generic machine, explicitly opt in
+with `FABER_PRIVACY_USE_OS_IDENTITY=1` instead. Packaging fails without either
+configuration. `npm run privacy:check` still checks paths/secrets and the OS
+username without this release configuration; third-party legal attribution is
+excluded only from name matching. Extracted source/workbenches without `.git`
+use the packaging manifest; Git enumeration failures in checkouts stop the check.
+Reports contain relative locations and
+categories, never matched values. Images and third-party binary metadata require
+separate review; this gate does not prove their absence of private data.
 
 Runtime preparation reads the installed Ollama runtime directory by default;
 `FABER_RUNTIME_SOURCE` can point to the same reviewed snapshot elsewhere.

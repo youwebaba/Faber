@@ -1,9 +1,7 @@
 # Requested capabilities and acceptance
 
-Requester: Bill Wang, October 31, 2026, current coordinator chat.
-Coordinator: `/root`; implementation: delegated core, desktop/tools and UI agents.
-Local models are the explicitly selected first live target. Earlier Hermes/glass
-plans remain historical context for the separate earlier application.
+Local models are the first live target. Implementation is divided across core,
+desktop/tools and UI modules, with the acceptance evidence below.
 
 | Request | Module boundary | Acceptance evidence required |
 | --- | --- | --- |
