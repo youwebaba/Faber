@@ -1,4 +1,4 @@
-export const releaseLabel = 'a2.1';
+export const releaseLabel = 'a2.2';
 
 export function redactReport(value) {
   return String(value ?? '').slice(0, 24000)

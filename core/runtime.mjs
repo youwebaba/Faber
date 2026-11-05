@@ -13,6 +13,8 @@ import {workingMessages,compactContext,isContextOverflow,contextCapacityFromErro
 import {defaultPromptPresets,generalPrompt,promptTextSchema,promptIdSchema,reasoningEffortSchema} from './prompts.mjs';
 import {bugReportDraft,redactReport,reportIssueUrl,externalWebUrl} from './bug-report.mjs';
 
+import { createRemoteWorkspace } from './remote-workspace.mjs';
+
 const now = () => new Date().toISOString();
 const active = run => ['running', 'waiting_approval'].includes(run.status);
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -87,7 +89,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
   const recentErrors = [];
   let closed = false;
-  function emit(event) { if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
+  const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, modelDisplayName:host.modelDisplayName });
+  function emit(event) { remoteWorkspace.notify(event); if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
   function snapshot() { return structuredClone({ ...state, tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
   function clearStream(runId) { if (streams.delete(runId)) streamSequence++; }
   async function changed() { stateRevision++; await store.save(state); emit({ type: 'state', state: snapshot() }); }
@@ -768,7 +771,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     }
   }
   const runtime = {
-    request, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, emit,
+    remoteRequest: remoteWorkspace.dispatch, request, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, emit,
     registerTools(tools) { install(tools); },
     async withExternalProvider({ providerId, model }, callback) {
       if (closed) throw new Error('Runtime is closed');
@@ -839,7 +842,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     },
     async setExtensions(metadata) { state.extensions = structuredClone(metadata); await changed(); },
     async replaceExtensionTools(tools, metadata) { const copy = structuredClone(metadata); install(tools, true); state.extensions = copy; await changed(); },
-    async close() { if (closed) return; closed = true; const done = [...live.values()].map(item => item.done); for (const runId of [...live.keys()]) await stopRun(runId); await Promise.all(done); await store.flush(); listeners.clear(); },
+    async close() { if (closed) return; closed = true; remoteWorkspace.close(); const done = [...live.values()].map(item => item.done); for (const runId of [...live.keys()]) await stopRun(runId); await Promise.all(done); await store.flush(); listeners.clear(); },
   };
   const builtin = (name, description, parameters, execute) => ({ name, description, parameters, permission: 'read', execute });
   runtime.registerTools([

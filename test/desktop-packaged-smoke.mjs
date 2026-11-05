@@ -17,6 +17,8 @@ export async function runPackagedSmoke({window,runtime,localModels,dataDir,sourc
   const metadata=await readGGUFMetadata(nativeFixture);assert.equal(metadata.complete,true);assert.equal(metadata.bytesRead,24);
   const hardware = await localModels.request('localModels.hardware'); assert.equal(hardware.runtime.available,true);
   const state = await runtime.request('state.get');
+  const remote = await window.webContents.executeJavaScript("window.faber.request('remote.status')");
+  assert.equal(remote.config.allowConnections,false);assert.equal(remote.hosting.state,'off');assert.deepEqual(remote.devices,[]);
   for(const name of ['shell_run','upgrade_stage','upgrade_verify','upgrade_apply','local_model_start','local_model_delete'])assert.ok(state.tools.some(tool=>tool.name===name),`Missing packaged tool ${name}`);
   assert.match(await window.webContents.executeJavaScript('document.body.innerText'),/Faber/);
   const fixture=path.join(dataDir,'recovery-source');await fs.mkdir(path.join(fixture,'desktop'),{recursive:true});await fs.mkdir(path.join(fixture,'test'));
@@ -33,7 +35,7 @@ export async function runPackagedSmoke({window,runtime,localModels,dataDir,sourc
   assert.equal((JSON.parse(await fs.readFile(path.join(recoveryProfile,'recovery-report.json'),'utf8'))).rolledBack,true);
   assert.equal(await fs.readFile(path.join(recoverySource,'desktop','main.mjs'),'utf8'),original);
   const screenshot=path.join(dataDir,'packaged-faber.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-  const report={ok:true,packaged:true,version:bootstrap.version,sourceDir,dataDir,node:process.versions.node,electron:process.versions.electron,tools:state.tools.length,bundledRuntime:hardware.runtime,gpus:hardware.gpus.map(item=>({id:item.id,name:item.name})),nativeScriptsRealPaths:true,compiledMetadataWorker:native.manifest,compiledMetadataParsed:true,packagedNodeVerifier:true,independentRecovery:true,noInference:true,screenshot};
+  const report={ok:true,packaged:true,version:bootstrap.version,sourceDir,dataDir,node:process.versions.node,electron:process.versions.electron,tools:state.tools.length,bundledRuntime:hardware.runtime,gpus:hardware.gpus.map(item=>({id:item.id,name:item.name})),nativeScriptsRealPaths:true,compiledMetadataWorker:native.manifest,compiledMetadataParsed:true,packagedNodeVerifier:true,independentRecovery:true,remoteHostingOffByDefault:true,noInference:true,screenshot};
   const reportPath=path.join(dataDir,'packaged-report.json');await fs.writeFile(reportPath,JSON.stringify(report,null,2));return {...report,reportPath};
 }
 

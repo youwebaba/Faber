@@ -2,6 +2,7 @@ import { PERMISSIONS, isActive, latestRun, safeImage, displayText, parseArgument
 import { createModelsBrowser } from './models.mjs';
 import { createBrowserPanel } from './browser.mjs';
 import { createConnections } from './connections.mjs';
+import { createRemoteConnections } from './remote-connections.mjs';
 import { createAddonManager } from './addons.mjs';
 import { callUsage } from './chat-media.mjs';
 import { createAttachmentDrafts, attachmentMessage, FILE_ACCEPT } from './file-attachments.mjs';
@@ -43,6 +44,7 @@ const icons = {
   tools: ['m14 6 4-3 3 3-3 4', 'M14 6a6 6 0 0 0-7 7l-4 4a2.8 2.8 0 0 0 4 4l4-4a6 6 0 0 0 7-7'],
   models: ['m12 3 9 5-9 5-9-5Z', 'm3 12 9 5 9-5', 'm3 16 9 5 9-5'],
   addons: ['M4 4h6v5a2 2 0 1 0 4 0V4h6v6h-5a2 2 0 1 0 0 4h5v6h-6v-5a2 2 0 1 0-4 0v5H4v-6h5a2 2 0 1 0 0-4H4Z'],
+  connections: ['M3 4h12v10H3Z', 'M7 14v3m-3 0h6', 'M17 10h4v11h-7v-4'],
   paperclip: ['m21 11-9 9a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7l-10 10a2 2 0 0 1-2.8-2.8l9-9'],
   plus: ['M12 5v14', 'M5 12h14'], close: ['m6 6 12 12', 'M6 18 18 6'],
   settings: ['m9 3-.8 3-3 .8-2 3 2 2-.2 3.2 3 1.8 1 3.2h4l1-3.2 3-1.8-.2-3.2 2-2-2-3-3-.8L13 3Z', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'],
@@ -424,7 +426,7 @@ function showRename(kind, entity) {
   const body = modal(`Rename ${kind}`); const name = field('Name', kind === 'chat' ? entity.title : entity.name); body.append(name.wrapper);
   body.append(actions(button('Cancel', closeModal), button('Save', async () => { const value = name.input.value.trim(); if (!value) throw new Error('Enter a name.'); await request(`${kind}.update`, { id: entity.id, [kind === 'chat' ? 'title' : 'name']: value }); await refresh(); closeModal(); }, 'button primary'))); name.input.focus(); name.input.select();
 }
-function showSettings(category = 'ui') { preferences.show(category); }
+function showSettings(category = 'ui') { remoteConnections.workspace.close(); preferences.show(category); }
 function showModelPicker() { connections.showPicker(); }
 const permissionDescriptions = {
   files: 'Write files in permitted project folders.', shell: 'Run commands with your Windows user permissions.', computer: 'Take screenshots, control this computer, and use microphone or speech tools.', network: 'Make requests to external services.', upgrade: 'Stage or activate changes to Faber and its extensions.',
@@ -521,6 +523,7 @@ function cleanSettings() {
   return $('#modal-body').dataset.settingsClean === 'true' && !hasUnsentDrafts({ fields: document.querySelectorAll('#modal input, #modal textarea, #modal select') });
 }
 function refreshReason(manual) {
+  if (remoteConnections.refreshReason()) return remoteConnections.refreshReason();
   if (document.querySelector('#profile-switch-dialog').open) return 'Close the profile switcher before refreshing.';
   if (navigationMenu.isOpen()) return 'Close the chat or project menu before refreshing.';
   if (composing) return 'Finish composing text before refreshing.';
@@ -608,10 +611,12 @@ const browserPanel = createBrowserPanel({ request, subscribe: bridge?.subscribe,
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings: () => showSettings('models') });
 const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings: () => showSettings('connections'), createPromptChoice: () => preferences.createPromptChoice(), mountOpenAI: body => chatgptControls.mount(body) });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
-const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
-const preferences = createPreferences({ workspaceControls, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
+const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, showConnections: () => showSettings('connections'), suspendLocal: () => { browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: scheduleUIRefresh });
+const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => remoteConnections.hasDrafts() || hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
+const preferences = createPreferences({ workspaceControls, remoteConnections, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
 const chatgptControls = createChatGPTControls({ request, refresh, getChat: currentChat, getState: () => state, newChat, closeModal, el, button, field, selectField, actions, createPromptChoice: () => preferences.createPromptChoice(), notify });
 $('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
+$('#open-connections').addEventListener('click', () => showSettings('connections'));
 $('#open-models').addEventListener('click', () => act(() => modelsBrowser.open()));
 $('#new-chat').addEventListener('click', () => act(newChat));
 $('#add-project').addEventListener('click', showProjectForm);
@@ -657,7 +662,7 @@ $('#collapse-sidebar').addEventListener('click', () => { document.body.classList
 $('#show-sidebar').addEventListener('click', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); });
 function toggleActivity(force) { const rail = $('#activity-rail'); const open = force ?? (matchMedia('(max-width: 1000px)').matches ? !document.body.classList.contains('activity-open') : rail.hidden); rail.hidden = !open; document.body.classList.toggle('activity-open', open); $('#toggle-activity').setAttribute('aria-expanded', String(open)); }
 $('#toggle-activity').addEventListener('click', () => { if (document.body.classList.contains('browser-open')) { browserPanel.show(false); toggleActivity(true); } else toggleActivity(); }); $('#close-activity').addEventListener('click', () => toggleActivity(false));
-document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
+document.addEventListener('keydown', event => { if (remoteConnections.workspace.isOpen()) return; if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
 function handleBridgeEvent(event) {
     if (event.type === 'openSettings') { showSettings(); return; }
     if (event.type === 'chatgpt') { chatgptControls.accept(event); return; }

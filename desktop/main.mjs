@@ -1,4 +1,4 @@
-import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,WebContentsView} from 'electron';
+import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,WebContentsView,powerMonitor,powerSaveBlocker} from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,6 +20,7 @@ import {createUIReload} from './ui-reload.mjs';
 import {packagedRuntime} from './packaged-paths.mjs';
 import {getProfileDirectory,createProfiles,assertProfileSwitchAllowed} from './profile-path.cjs';
 import {validate} from '../core/registry.mjs';
+import {createRemoteService,remoteMethods} from './remote-service.mjs';
 import {createGateway} from './gateway.mjs';
 import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
@@ -57,8 +58,8 @@ const uiMethods=new Set(['app.reloadUI','app.uiState','app.uiStateAck']);
 const chatGPTMethods=new Set(['chatgpt.status','chatgpt.signIn','chatgpt.cancel','chatgpt.signOut','chatgpt.select','chatgpt.models','chatgpt.usage']);
 const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.start','gateway.stop','gateway.rotateToken']);
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
-const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...profileMethods,...browserMethods]);
-let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
+const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods]);
+let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
@@ -95,6 +96,7 @@ const host={
 app.on('window-all-closed',()=>app.quit());
 async function shutdown(){
   clearTimeout(bootTimer);voice?.close();const failures=[];
+  try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
   const results=await Promise.allSettled([browser?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
   for(const result of results)if(result.status==='rejected')failures.push(result.reason);
@@ -155,6 +157,7 @@ uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assert
 runtime.registerTools([...fileTools(),...imageTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
+try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
 gateway=await createGateway({dataDir,runtime,host,emit:event=>runtime.emit(event)});
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 function applyZoom(value){if(window&&!window.isDestroyed()&&Number.isFinite(value)&&value>=0.75&&value<=1.5&&lastZoom!==value){window.webContents.setZoomFactor(value);lastZoom=value;}}
@@ -195,6 +198,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
       app.relaunch({args:process.argv.slice(1).filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true,currentId:params.id};
     }catch(error){switchingProfile=false;throw error;}
   }
+  if(remoteMethods.includes(method)){if(!remote)throw new Error(remoteStartupError||'Remote connections unavailable');return remote.request(method,params);}
   if(gatewayMethods.has(method))return gateway.request(method,params);
   if(uiMethods.has(method))return uiReload.request(method,params);
   if(browserMethods.includes(method)){

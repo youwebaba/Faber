@@ -16,7 +16,7 @@ export function runTimeoutChoice(mode, minutes) {
   return milliseconds;
 }
 
-export function createPreferences({ workspaceControls, request, refresh, getState, getChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors, showOpenAI }) {
+export function createPreferences({ workspaceControls, remoteConnections, request, refresh, getState, getChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors, showOpenAI }) {
   const categories = [['ui', 'UI'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['profiles', 'Profiles'], ['external', 'External access'], ['about', 'About & support']];
   function createPromptChoice() {
     const chat = getChat(), presets = getState().promptPresets || [];
@@ -57,9 +57,10 @@ export function createPreferences({ workspaceControls, request, refresh, getStat
       runControls.append(timeoutMode.wrapper, timeoutMinutes.wrapper, el('p', 'hint', 'Applies to running and future tasks. Duration is measured from each task’s original start. A shorter limit can stop work that has already exceeded it. Stop and Force stop remain available. Individual tool and network timeouts are separate.'), saveTimeout); pane.append(runControls);
     } else if (category === 'prompts') renderPrompts(pane, presetId);
     else if (category === 'connections') {
-      pane.append(el('h3', '', 'Model connections'), el('p', 'hint', 'Choose a saved connection in the model selector to use it for a chat.'), button('OpenAI / ChatGPT accounts', showOpenAI));
-      for (const provider of getState().providers.filter(item => item.authKind !== 'chatgpt')) { const row = button('', () => connections.showForm(provider), 'provider-row'), text = el('span'); text.append(el('strong', '', provider.name), el('small', '', `${providerKindLabel(provider.kind)} · ${provider.baseUrl}`)); row.append(text, el('span', '', 'Edit')); pane.append(row); }
-      pane.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => connections.showForm())));
+      remoteConnections?.mount(pane);
+      const models = el('details', 'remote-model-settings'); models.append(el('summary', '', 'Model & API connections'), el('p', 'hint', 'Choose a saved connection in the model selector to use it for a local chat.'), button('OpenAI / ChatGPT accounts', showOpenAI));
+      for (const provider of getState().providers.filter(item => item.authKind !== 'chatgpt')) { const row = button('', () => connections.showForm(provider), 'provider-row'), text = el('span'); text.append(el('strong', '', provider.name), el('small', '', `${providerKindLabel(provider.kind)} · ${provider.baseUrl}`)); row.append(text, el('span', '', 'Edit')); models.append(row); }
+      models.append(actions(button('Add local connection', () => connections.showForm(undefined, 'ollama')), button('Add cloud/API connection', () => connections.showForm()))); pane.append(models);
     } else if (category === 'models') {
       pane.append(el('h3', '', 'Local hardware'), el('p', 'hint', 'Before starting a local model, select the CPU and GPUs you want it to use. Check disk offloading in its hardware settings if you want to allow memory-mapped model files.'), button('Choose hardware & local model', showHardware)); modelsBrowser.mountSettings(pane);
     } else if (category === 'voice') {
@@ -70,7 +71,7 @@ export function createPreferences({ workspaceControls, request, refresh, getStat
       const mount = category === 'profiles' ? workspaceControls.mountProfiles : workspaceControls.mountGateway;
       void mount(pane).catch(error => { if (pane.isConnected) pane.append(el('p', 'error-text', error.message)); });
     } else {
-      pane.append(wordmark('about-wordmark'), el('h3', '', 'Faber a2.1'), el('p', 'hint', 'Your workspace. Your assistant.'), button('Report a bug', showBugReport), button('Open quick start', showQuickStart), button('Tools & extensions', () => showTools('extensions')), button('Restart app', () => request('app.restart')));
+      pane.append(wordmark('about-wordmark'), el('h3', '', 'Faber a2.2'), el('p', 'hint', 'Your workspace. Your assistant.'), button('Report a bug', showBugReport), button('Open quick start', showQuickStart), button('Tools & extensions', () => showTools('extensions')), button('Restart app', () => request('app.restart')));
     }
     const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
     body.append(el('p', 'hint settings-footer-note', 'Refresh interface keeps loaded models and composer drafts. Backend changes require Restart app.'), actions(reload, button('Done', closeModal)));
