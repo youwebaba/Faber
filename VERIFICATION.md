@@ -5,6 +5,12 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.2
+
+Two disposable desktop-service profiles exercised pairing over the public HTTPS/WebSocket route to the proof-of-concept relay. An in-memory model on the host handled a chat, queued a follow-up, performed an approved fixture tool action, and stopped on request. The controller reconnected after both services restarted. Revocation denied its next request. Both profiles ran on one Windows PC. This check used synthetic data and no inference provider credits.
+
+Electron renderer checks exercised the Connections screens, browsing 205 remote chats, host model selection, streaming, reconnect and separation from the local workspace. The standalone relay suite covers admission, pinned TLS, encrypted forwarding, reconnect and backpressure. The desktop and relay suites run separately. The hosted smoke requires an explicit operator opt-in.
+
 ## a2.1
 
 A synthetic ChatGPT subscription session reproduced the empty-answer error in

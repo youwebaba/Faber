@@ -3,7 +3,7 @@ import { isActive } from './ui-helpers.mjs';
 export function orderedChatFamilies(state, projectId) {
   const chats = state.chats.filter(chat => chat.projectId === projectId && !chat.archived);
   const byId = new Map(chats.map(chat => [chat.id, chat]));
-  const activity = new Map(chats.map(chat => [chat.id, chat.messages?.findLast(message => message.role === 'assistant' && !message.fromChatId)?.createdAt || chat.createdAt || '']));
+  const activity = new Map(chats.map(chat => [chat.id, chat.messages?.findLast(message => message.role === 'assistant' && !message.fromChatId)?.createdAt || chat.lastAssistantAt || chat.createdAt || '']));
   const compare = (a, b) => String(activity.get(b.id)).localeCompare(String(activity.get(a.id))) || String(a.id).localeCompare(String(b.id));
   const children = new Map();
   for (const chat of chats) {

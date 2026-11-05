@@ -1,4 +1,4 @@
-# Faber a2.1
+# Faber a2.2
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -6,12 +6,14 @@ Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
 
-**a2.1 fixes a ChatGPT streaming bug** that could erase a completed reply or drop
+**a2.2 adds remote sessions.** Pair a laptop with your home PC to browse projects, send messages, follow agents and approve or stop work while the model runs at home. The release includes a standalone Windows relay kit for testing across networks. [Pair two PCs](REMOTE.md).
+
+**a2.1 fixed a ChatGPT streaming bug** that could erase a completed reply or drop
 a requested tool call when the final event contained an empty output list.
 Faber now recovers completed items from the stream and runs each validated tool
 call once. If only partial text arrived, it stays visible with an error.
 
-Download the [a2.1 Windows installer and checksum](https://github.com/youwebaba/Faber/releases/tag/a2.1).
+Download the [a2.2 Windows installer, relay kit and checksums](https://github.com/youwebaba/Faber/releases/tag/a2.2).
 Each version has its own full release, patch notes and installer. Earlier
 versions are available in the [release history](https://github.com/youwebaba/Faber/releases).
 

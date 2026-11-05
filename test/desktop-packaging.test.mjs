@@ -186,3 +186,20 @@ test('a2.1 seeds the repaired parser separately and preserves edits in both vers
   assert.equal(await fs.readFile(path.join(previous,'core/custom-feature.mjs'),'utf8'),'approved Alpha 2.0 feature');
   assert.deepEqual(await fs.readFile(path.join(previous,'.faber-workbench.json')),previousMarker);
 });
+
+
+test('a2.2 seeds its own editable workbench and preserves a2.1 customizations',async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-a22-package-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const bundledSource=path.join(root,'bundle'),workbenchRoot=path.join(root,'workbench');
+  await fs.mkdir(path.join(bundledSource,'desktop'),{recursive:true});
+  await fs.writeFile(path.join(bundledSource,'desktop/main.mjs'),'previous stock');
+  const previous=await prepareWorkbench({bundledSource,workbenchRoot,version:'2.1.0'});
+  await fs.writeFile(path.join(previous,'desktop/main.mjs'),'approved a2.1 customization');
+  await fs.writeFile(path.join(bundledSource,'desktop/main.mjs'),'a2.2 stock');
+  const options={bundledSource,workbenchRoot,version:'2.2.0'},current=await prepareWorkbench(options);
+  assert.notEqual(current,previous);assert.equal(await fs.readFile(path.join(current,'desktop/main.mjs'),'utf8'),'a2.2 stock');
+  await fs.writeFile(path.join(current,'desktop/main.mjs'),'approved a2.2 customization');
+  assert.equal(await prepareWorkbench(options),current);
+  assert.equal(await fs.readFile(path.join(current,'desktop/main.mjs'),'utf8'),'approved a2.2 customization');
+  assert.equal(await fs.readFile(path.join(previous,'desktop/main.mjs'),'utf8'),'approved a2.1 customization');
+});

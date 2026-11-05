@@ -1,0 +1,176 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { validate } from './registry.mjs';
+import { imageBytesLimit, validateChatImages } from './images.mjs';
+
+const id = { type: 'string', minLength: 1, maxLength: 256 };
+const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
+const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
+const chatRef = object({ chatId: id });
+const methods = new Map(Object.entries({
+  'workspace.ping': object({}), 'workspace.models': object({}),
+  'chat.selectModel': object({ chatId:id, providerId:id, model:{type:'string',minLength:1,maxLength:300} }),
+  'workspace.list': object({ since: id, offset: bounded(0, 10000000), limit: bounded(1, 500) }, []),
+  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000) }, ['chatId']),
+  'chat.send': object({ chatId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','text']),
+  'chat.create': object({ projectId: id, title: { type: 'string', maxLength: 200 } }, ['projectId']),
+  'chat.stop': chatRef, 'chat.forceStop': chatRef, 'chat.compact': chatRef,
+  'approval.resolve': object({ chatId: id, id, allow: { type: 'boolean' } }),
+}));
+const pick = (item, fields) => Object.fromEntries(fields.filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+const chatFields = ['id','providerId','title','projectId','parentChatId','archived','createdAt','updatedAt','model'];
+function chatRow(chat, providers, displayName) {
+  const provider = providers.find(row => row.id === chat.providerId);
+  const model = chat.model || provider?.model || '';
+  return { ...pick(chat, chatFields), model, modelName: provider && model ? displayName?.(provider.id, model) || provider.models?.find(m=>m.id===model)?.name || model : '', providerName: provider?.name || '',
+    lastAssistantAt: chat.messages.findLast(row => row.role === 'assistant' && row.content)?.createdAt ?? null,
+    readOnly: !!chat.externalSessionId || !!chat.archived };
+}
+function hostModels(providers, displayName) {
+  return providers.filter(p => p.connected !== false).map(p => {
+    const catalog = new Map();
+    if (p.model) catalog.set(p.model,{id:p.model,name:displayName?.(p.id,p.model) || p.modelName || p.model});
+    for (const m of p.models || []) {
+      const modelId = typeof m === 'string' ? m : m?.id;
+      if (modelId) catalog.set(modelId,{id:modelId,name:m.name || modelId});
+    }
+    return {id:p.id,name:p.name,model:p.model || '',models:[...catalog.values()]};
+  });
+}
+function chatFamily(chats, chatId) {
+  const children = new Map(), family = new Set([chatId]);
+  for (const chat of chats) if (chat.parentChatId) {
+    if (!children.has(chat.parentChatId)) children.set(chat.parentChatId,[]);
+    children.get(chat.parentChatId).push(chat.id);
+  }
+  for (const parent of family) for (const child of children.get(parent) || []) family.add(child);
+  return family;
+}
+function visibleMessage(message) {
+  const text = message.role === 'tool' ? '' : String(message.content ?? '');
+  const row = { ...pick(message, ['id','role','createdAt','status','runId','sourceMessageId','modelCallId','toolName','toolCallId','fromChatId','steering']),
+    content: text.length > 500000 ? text.slice(0,500000) + '\n[Open on the host to read the rest of this message.]' : text };
+  if (message.toolCalls?.length) row.toolCalls = message.toolCalls.slice(0,64).map(call=>pick(call,['id','name']));
+  const images = message.images ?? (message.image ? [message.image] : []);
+  if (images.length) {
+    try { validateChatImages(images); row.images = [...images]; } catch { row.imageCount = images.length; }
+  }
+  return row;
+}
+function runRow(run) {
+  return { ...pick(run, ['id','chatId','status','startedAt','endedAt','requestMessageId','parentRunId','contextOverflow']), error: String(run.error ?? '').slice(0,2000),
+    modelCalls: (run.modelCalls || []).slice(-64).map(call=>pick(call,['id','status','phase','progressSummary'])),
+    toolEvents: run.toolEvents.slice(-64).map(event => ({ ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
+      summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) })) };
+}
+
+// Only the desktop device transport receives this dispatcher. Never expose the general runtime RPC here.
+export function createRemoteWorkspace({ current, request, modelDisplayName }) {
+  const epoch = randomUUID(), waiters = new Set(), mutations = new Map();
+  let closed = false;
+  function revision(view, family) {
+    let token = epoch + '.' + view.stateRevision;
+    if (family) {
+      let sequence = 0;
+      for (const row of view.streams.values()) if (family.has(row.chatId)) sequence = Math.max(sequence,row.sequence);
+      token += '.' + sequence;
+    }
+    return token;
+  }
+  function notify(event) {
+    if (!['state','delta','progress'].includes(event.type)) return;
+    for (const row of waiters) if (event.type === 'state' || row.family.has(event.chatId)) row.wake();
+  }
+  async function wait(family, ms, signal) {
+    signal?.throwIfAborted();
+    await new Promise(resolve => {
+      const row = { family, wake() { clearTimeout(timer); waiters.delete(row); signal?.removeEventListener('abort',row.wake); resolve(); } };
+      const timer = setTimeout(row.wake,ms);
+      waiters.add(row); signal?.addEventListener('abort',row.wake,{once:true});
+    });
+    signal?.throwIfAborted();
+    if (closed) throw new Error('Remote workspace closed');
+  }
+  function directory(view, {offset = 0, limit = 200, since}) {
+    const token = revision(view), {projects,chats,providers} = view.state;
+    if (since === token && !offset) return { unchanged: true, revision: token };
+    const end = offset + limit, total = projects.length + chats.length;
+    return { projects: projects.slice(offset,end).map(p => pick(p,['id','name','archived','createdAt','updatedAt'])),
+      chats: chats.slice(Math.max(0,offset-projects.length),Math.max(0,end-projects.length)).map(c => chatRow(c,providers,modelDisplayName)),
+      runs: offset === 0 ? view.state.runs.filter(r=>['running','waiting_approval'].includes(r.status)).slice(-256).map(r=>pick(r,['id','chatId','parentRunId','status','startedAt'])) : [],
+      nextOffset: end < total ? end : null, revision: token };
+  }
+  function findChat(state, chatId) {
+    const chat = state.chats.find(row => row.id === chatId);
+    if (!chat) throw new Error('Chat no longer exists');
+    return chat;
+  }
+  async function transcript(args, signal) {
+    const {chatId, since, before, limit = 30, waitMs = 0} = args;
+    let view = current(), family = chatFamily(view.state.chats,chatId), token = revision(view,family);
+    findChat(view.state,chatId);
+    if (!before && since === token && waitMs) { await wait(family,waitMs,signal); view = current(); family = chatFamily(view.state.chats,chatId); token = revision(view,family); }
+    if (!before && since === token) return { unchanged: true, revision: token };
+    const {state,streams} = view, chat = findChat(state,chatId), source = chat.messages;
+    const live = [...streams.values()].filter(row => family.has(row.chatId)).map(row => ({
+      ...pick(row,['runId','chatId','phase','progressSummary','sequence','lastAssistantId','modelCallId']), text: String(row.text ?? '').slice(0,500000) }));
+    if (!before && waitMs && since?.startsWith(revision(view) + '.')) return { liveOnly:true, chatId, streams:live, revision:token };
+    let cursor = before ? source.findIndex(row => row.id === before) : source.length;
+    if (cursor < 0) throw new Error('Chat history changed. Reload this chat.');
+    const messages = []; let bytes = 0;
+    while (cursor > 0 && messages.length < limit) {
+      const message = source[cursor-1];
+      if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && message.image)) || (!message.content && !message.images?.length && !message.image && !message.toolCalls?.length)) { cursor--; continue; }
+      const row = visibleMessage(message), size = Buffer.byteLength(JSON.stringify(row));
+      if (messages.length && bytes + size > 10 * 1024 * 1024) break;
+      messages.push(row); bytes += size; cursor--;
+    }
+    messages.reverse();
+    const inbox = (chat.inbox || []).filter(item => item.source === 'user').slice(0,32).map(item => ({...pick(item,['id','source','createdAt','runId']),text:String(item.text || '').slice(0,8000)}));
+    return { chat: { ...chatRow(chat,state.providers,modelDisplayName), messages, inbox }, before: cursor ? messages[0]?.id ?? null : null, revision: token,
+      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(runRow),
+      streams: live,
+      approvals: state.approvals.filter(row => family.has(row.chatId)).map(row => pick(row,['id','kind','chatId','runId','permission','toolName','summary'])) };
+  }
+  async function mutate(method, params) {
+    const {state} = current();
+    const chat = params.chatId && findChat(state,params.chatId);
+    const project = state.projects.find(row => row.id === (chat?.projectId ?? params.projectId));
+    if (!project || project.archived || chat?.archived || chat?.externalSessionId) throw new Error('This remote project or chat is read-only.');
+    if (method === 'chat.selectModel') {
+      const provider = hostModels(state.providers,modelDisplayName).find(row => row.id === params.providerId);
+      if (!provider?.models.some(m => m.id === params.model)) throw new Error('Choose a configured model on the host.');
+      return chatRow(await request('chat.update',{id:chat.id,providerId:provider.id,model:params.model}),state.providers,modelDisplayName);
+    }
+    if (method === 'chat.create') return chatRow(await request(method,params),state.providers,modelDisplayName);
+    if (method === 'approval.resolve') {
+      if (!state.approvals.some(a => a.chatId === chat.id && a.id === params.id)) throw new Error('Approval is no longer pending for this chat');
+      return request(method,{id:params.id,allow:params.allow});
+    }
+    return request(method,params);
+  }
+  async function dispatch(method, params, { device, signal, requestId } = {}) {
+    if (closed) throw new Error('Remote workspace closed');
+    signal?.throwIfAborted();
+    const schema = methods.get(method);
+    if (!schema) throw new Error('Unsupported remote workspace action');
+    validate(params,schema);
+    if (method === 'workspace.ping') return { online: true };
+    if (method === 'workspace.models') return {providers:hostModels(current().state.providers,modelDisplayName)};
+    if (method === 'workspace.list') return directory(current(),params);
+    if (method === 'chat.read') return transcript(params,signal);
+    if (!device?.id || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('A device request ID is required');
+    const key = device.id + '/' + requestId, hash = createHash('sha256').update(JSON.stringify([method,params])).digest('hex');
+    const prior = mutations.get(key);
+    if (prior) {
+      if (hash !== prior.hash) throw new Error('Conflicting remote request ID');
+      return prior.result;
+    }
+    for (const [k,entry] of mutations) if (entry.expires <= Date.now()) mutations.delete(k);
+    if (mutations.size >= 1024) throw new Error('Too many recent remote changes. Try again later.');
+    const entry = { hash, expires: Infinity, result: undefined };
+    entry.result = Promise.resolve().then(() => { signal?.throwIfAborted(); return mutate(method,params); }).finally(() => { entry.expires = Date.now() + 300000; });
+    mutations.set(key,entry);
+    return entry.result;
+  }
+  return { dispatch, notify, close() { closed = true; for (const row of waiters) row.wake(); mutations.clear(); } };
+}

@@ -1,7 +1,7 @@
 import { displayText, isActive, statusLabel } from './ui-helpers.mjs';
 
 export function toolActivityLabel(event) {
-  const args = event.args || {}, detail = args.command ?? args.cmd ?? args.path ?? args.url ?? args.task;
+  const args = event.args || {}, detail = args.command ?? args.cmd ?? args.path ?? args.url ?? args.task ?? event.summary;
   return { name: event.name || 'Tool', detail: typeof detail === 'string' ? detail : '', status: statusLabel(event.status) };
 }
 export function modelProgress(run, stream) {
@@ -31,7 +31,8 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
     if (cached.signature !== signature) {
       cached.signature = signature; const tool = cached.node, label = toolActivityLabel(event);
       const title = el('summary'); title.append(el('strong', '', label.name), el('span', 'activity-tool-status', label.status)); if (label.detail) title.append(el('span', 'activity-tool-detail', label.detail));
-      tool.replaceChildren(title, el('div', 'activity-detail-label', 'Input'), el('pre', 'result-content', displayText(event.args)));
+      tool.replaceChildren(title);
+      if (event.args !== undefined) tool.append(el('div', 'activity-detail-label', 'Input'), el('pre', 'result-content', displayText(event.args)));
       if (event.result !== undefined) { tool.append(el('div', 'activity-detail-label', 'Output')); appendResult(tool, event.result, event.image); }
       if (event.error) tool.append(el('p', 'error-text', event.error));
     }

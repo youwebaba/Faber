@@ -6,11 +6,15 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.1 (application version 2.1.0), including
+This contract describes Faber a2.2 (application version 2.2.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
 assets, and earlier chronological evidence remains separate.
+
+## Remote desktop sessions
+
+The desktop owns pairing, encrypted device credentials, revocation and the outbound relay. The core exposes a scoped workspace dispatcher for a paired user. Agent tools and external API clients have no pairing or grant-management methods. See [Remote sessions](REMOTE.md).
 
 ## Implementation ownership
 
