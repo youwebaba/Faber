@@ -9,7 +9,7 @@ import {verifyNativeRuntime} from '../native/integrity.mjs';
 import {readGGUFMetadata} from '../local-models/details.mjs';
 
 export async function runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir}) {
-  const bootstrap = globalThis.__FABER_BOOTSTRAP__; assert.equal(bootstrap.packaged,true);
+  const bootstrap = globalThis.__FABER_BOOTSTRAP__; assert.equal(bootstrap.packaged,true); assert.equal(bootstrap.safeMode,false);
   assert.ok(!sourceDir.includes('app.asar')); assert.notEqual(sourceDir,dataDir);
   for(const name of ['native.ps1','voice.ps1','preload.cjs'])assert.ok((await fs.stat(path.join(sourceDir,'desktop',name))).isFile());
   const native=await verifyNativeRuntime(sourceDir);

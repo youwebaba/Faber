@@ -12,6 +12,15 @@ async function fixture(t,options={}){
   await fs.writeFile(path.join(sourceDir,'test','value.test.mjs'),"import {value} from '../core/value.mjs';import assert from 'node:assert/strict';assert.equal(value,2);");
   return {sourceDir,dataDir,manager:createUpgrades({sourceDir,dataDir,confirm:async()=>true,...options})};
 }
+test('staged verification includes the read-only scripts imported by installed tests',async t=>{
+  const {sourceDir,manager}=await fixture(t);
+  await fs.mkdir(path.join(sourceDir,'scripts'));
+  await fs.writeFile(path.join(sourceDir,'scripts','privacy-check.mjs'),'export const ready=true;');
+  await fs.writeFile(path.join(sourceDir,'test','scripts.test.mjs'),"import {ready} from '../scripts/privacy-check.mjs';import assert from 'node:assert/strict';assert.equal(ready,true);");
+  const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);
+  assert.equal((await manager.verify(stage.id)).verified,true);
+  await assert.rejects(manager.stage([{path:'scripts/privacy-check.mjs',content:'export const ready=false;'}]));
+});
 test('upgrade runs real staged tests, applies explicitly, then rolls back preserving data',async t=>{
   const {sourceDir,dataDir,manager}=await fixture(t);await fs.mkdir(dataDir);await fs.writeFile(path.join(dataDir,'state.json'),'preserved');
   const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);
