@@ -59,7 +59,7 @@ const chatGPTMethods=new Set(['chatgpt.status','chatgpt.signIn','chatgpt.cancel'
 const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.start','gateway.stop','gateway.rotateToken']);
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods]);
-let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
+let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
@@ -106,7 +106,14 @@ async function shutdown(){
   for(const error of failures)console.error('Shutdown failed:',error);return failures.length===0;
 }
 async function startupFailure(error){if(startupFailed)return;startupFailed=true;clearTimeout(bootTimer);console.error(error);await shutdown();if(bootstrap?.onFailure)await bootstrap.onFailure(error);else app.exit(1);}
-app.on('before-quit',event=>{if(quitting)return;event.preventDefault();quitting=true;shutdown().then(clean=>bootstrap?.onShutdown?.(clean)).finally(()=>app.quit());});
+app.on('before-quit',event=>{
+  if(shutdownComplete)return;
+  // Closing the main window and the last browser window can both request quit during cleanup.
+  event.preventDefault();
+  if(quitting)return;
+  quitting=true;
+  void shutdown().then(clean=>bootstrap?.onShutdown?.(clean)).catch(error=>console.error('Shutdown failed:',error)).finally(()=>{shutdownComplete=true;app.quit();});
+});
 void app.whenReady().then(async()=>{
 const reloadSmoke=smokeUIReload?await import('../test/desktop-ui-reload-smoke.mjs'):null;
 if(reloadSmoke)reloadFixture=await reloadSmoke.createUIReloadSmoke(dataDir,sourceDir);
@@ -226,7 +233,7 @@ if(browserStartupError)runtime.emit({type:'error',error:browserStartupError});
 if(chatGPTStartupError)runtime.emit({type:'error',error:chatGPTStartupError});
 if(extensionStartupError)runtime.emit({type:'error',error:`Extensions could not load: ${extensionStartupError}`});
 if(smokeInstalled){try{console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
-if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
+if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));window.close();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(smoke){
   try{
     const fixture=await fs.mkdtemp(path.join(path.dirname(dataDir),'Faber-smoke-workspace-'));await fs.writeFile(path.join(fixture,'hello.txt'),'Faber isolated smoke fixture\n');

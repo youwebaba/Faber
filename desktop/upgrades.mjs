@@ -8,7 +8,7 @@ import {validUpgradePath,atomicWrite,writeRecoveryRecord,readRecoveryRecord,rest
 import {buildNative} from '../native/build.mjs';
 import {parseNativeManifest,verifyNativeRuntime} from '../native/integrity.mjs';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
-const sourceFolders=['core','desktop','renderer','tools','extensions','model-hub','local-models','bundled-addons','test','native'];
+const sourceFolders=['core','desktop','renderer','tools','extensions','model-hub','local-models','bundled-addons','test','native','scripts'];
 const nativeManifest='native/runtime.json';
 async function readOrNull(file){try{return await fs.readFile(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function publishNativeBinary(root,{manifest,binaryBytes}){
@@ -67,7 +67,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
   }
   async function coreInventory(){
     const names=new Set((await sourceInventory()).filter(file=>!/^native\/(vendor|target)\//.test(file)));
-    for(const folder of ['build','scripts','docs'])try{for(const file of await inventory(path.join(sourceDir,folder)))names.add(`${folder}/${file}`);}catch(error){if(error.code!=='ENOENT')throw error;}
+    for(const folder of ['build','docs'])try{for(const file of await inventory(path.join(sourceDir,folder)))names.add(`${folder}/${file}`);}catch(error){if(error.code!=='ENOENT')throw error;}
     for(const entry of await fs.readdir(sourceDir,{withFileTypes:true}))if(entry.isFile()&&(/\.md$/i.test(entry.name)||['Start-Faber.cmd','Start-Faber.ps1'].includes(entry.name)))names.add(entry.name);
     return [...names].sort();
   }
