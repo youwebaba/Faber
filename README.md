@@ -1,4 +1,4 @@
-# Faber Alpha 2.0
+# Faber a2.1
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -6,15 +6,18 @@ Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
 
-**Alpha 2.0** is the visible prerelease name. Its internal package/app version is
-`2.0.2-alpha.1`, with Windows build `2.0.2.0`. Download the current installer from
-[GitHub Releases](https://github.com/youwebaba/Faber/releases). See the
-[verification record](VERIFICATION.md) for source/application checks and release
-history; checksums and publication records accompany the release assets.
+**a2.1 fixes a ChatGPT streaming bug** that could erase a completed reply or drop
+a requested tool call when the final event contained an empty output list.
+Faber now recovers completed items from the stream and runs each validated tool
+call once. If only partial text arrived, it stays visible with an error.
+
+Download the [a2.1 Windows installer and checksum](https://github.com/youwebaba/Faber/releases/tag/a2.1).
+Each version has its own full release, patch notes and installer. Earlier
+versions are available in the [release history](https://github.com/youwebaba/Faber/releases).
 
 ## Rust migration
 
-Alpha 2.0 retains the Rust metadata worker introduced in RMb2.0.1. GGUF parsing
+Faber retains the Rust metadata worker introduced in RMb2.0.1. GGUF parsing
 runs in a compiled subprocess using a read-only file handle validated by the host.
 The interface, agent orchestration, providers, local inference and addon APIs
 continue in JavaScript. This is a hybrid metadata migration, not a replacement
@@ -142,9 +145,9 @@ through Tools & extensions.
 
 </details>
 
-## Alpha 2.0 desktop prerelease
+## Windows installer
 
-The `Faber-Setup-Alpha-2.0-x64.exe` installer installs **Faber.exe** and shortcuts
+The `Faber-Setup-a2.1-x64.exe` installer installs **Faber.exe** and shortcuts
 without a terminal window.
 It includes Electron and a local model runner with CPU, CUDA and Vulkan backends;
 model weights are downloaded separately. Existing b1 profile data

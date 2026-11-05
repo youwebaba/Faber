@@ -70,7 +70,7 @@ export function createPreferences({ workspaceControls, request, refresh, getStat
       const mount = category === 'profiles' ? workspaceControls.mountProfiles : workspaceControls.mountGateway;
       void mount(pane).catch(error => { if (pane.isConnected) pane.append(el('p', 'error-text', error.message)); });
     } else {
-      pane.append(wordmark('about-wordmark'), el('h3', '', 'Faber Alpha 2.0'), el('p', 'hint', 'Your workspace. Your assistant.'), button('Report a bug', showBugReport), button('Open quick start', showQuickStart), button('Tools & extensions', () => showTools('extensions')), button('Restart app', () => request('app.restart')));
+      pane.append(wordmark('about-wordmark'), el('h3', '', 'Faber a2.1'), el('p', 'hint', 'Your workspace. Your assistant.'), button('Report a bug', showBugReport), button('Open quick start', showQuickStart), button('Tools & extensions', () => showTools('extensions')), button('Restart app', () => request('app.restart')));
     }
     const reload = button('Refresh interface', () => refreshInterface(true)); reload.id = 'reload-ui';
     body.append(el('p', 'hint settings-footer-note', 'Refresh interface keeps loaded models and composer drafts. Backend changes require Restart app.'), actions(reload, button('Done', closeModal)));

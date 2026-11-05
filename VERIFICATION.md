@@ -5,6 +5,19 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.1
+
+A synthetic ChatGPT subscription session reproduced the empty-answer error in
+the Alpha 2.0 parser. In a2.1 the same two-turn session executed the permitted
+tool once, replayed the completed output items, recorded both usage entries
+and saved the final reply. The fixture did not contact a model provider.
+
+The source suite passed 539 tests with one optional skip. The desktop smoke
+test opened a2.1 using an isolated profile. The workbench regression exercised a
+fresh a2.1 workbench beside a customized Alpha 2.0 workbench and reopened a2.1
+after a local edit. The installer checksum and packaged checks accompany the
+[a2.1 release](https://github.com/youwebaba/Faber/releases/tag/a2.1).
+
 ## Alpha 2.0 — release validation
 
 Release name: **Alpha 2.0**. Internal package/app version: `2.0.2-alpha.1`;

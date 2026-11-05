@@ -38,11 +38,12 @@ export function responsesBody({ provider, messages, tools }) {
 }
 
 export async function* responseEvents(frames, provider, signal) {
-  let text = '', arrivalText = '', legacy = false, completed = false, lastProgress = '', summaryKey = '', summary = '';
-  const items = new Map();
+  let text = '', arrivalText = '', legacy = false, completed = false, lastProgress = '', summaryKey = '', summary = '', lastVisibleText = '', completedBytes = 0, incompleteSnapshot = false;
+  const items = new Map(), completedItems = new Map(), completedIds = new Set();
   function* display(nextText) {
     signal?.throwIfAborted();
     if (nextText.length > 1000000) throw new Error('Model response exceeds limit');
+    if (nextText.trim()) lastVisibleText = nextText;
     if (nextText === text) return;
     const event = nextText.startsWith(text) ? { type: 'delta', text: nextText.slice(text.length) } : { type: 'text', text: nextText };
     text = nextText; yield event;
@@ -60,6 +61,17 @@ export async function* responseEvents(frames, provider, signal) {
     if (frame.type === 'response.output_item.added') {
       const phase = frame.item?.type === 'reasoning' ? 'thinking' : frame.item?.type === 'message' ? 'responding' : frame.item?.type === 'function_call' ? 'preparing_tools' : undefined;
       if (phase) yield* progress(phase);
+    }
+    if (frame.type === 'response.output_item.done') {
+      if (frame.item?.status !== 'completed' && !(frame.item?.type === 'reasoning' && frame.item.status === undefined)) { incompleteSnapshot = true; continue; }
+      const item = frame.item, index = frame.output_index, previous = completedItems.get(index);
+      if (!Number.isSafeInteger(index) || index < 0 || typeof item.id !== 'string' || !item.id ||
+          (items.get(index)?.id && items.get(index).id !== item.id) ||
+          (previous && (previous.id !== item.id || previous.type !== item.type)) ||
+          (!previous && completedIds.has(item.id))) throw new Error('Provider returned an invalid completed output item identity');
+      completedBytes += JSON.stringify(item).length - (previous ? JSON.stringify(previous).length : 0);
+      if (completedBytes > 8_000_000) throw new Error('Responses output exceeds the supported size');
+      completedItems.set(index, structuredClone(item)); completedIds.add(item.id);
     }
     if (frame.type === 'response.function_call_arguments.delta' || frame.type === 'response.function_call_arguments.done') yield* progress('preparing_tools');
     if (frame.type === 'response.reasoning_text.delta') yield* progress('thinking');
@@ -103,10 +115,13 @@ export async function* responseEvents(frames, provider, signal) {
     if (frame.type !== 'response.completed') continue;
     const response = frame.response;
     if (response?.status !== 'completed' || !Array.isArray(response.output)) throw new Error('Responses completion was missing its complete output');
-    if (JSON.stringify(response.output).length > 8_000_000) throw new Error('Responses output exceeds the supported size');
+    if (!response.output.length && incompleteSnapshot) throw new Error('Responses completion included an incomplete output item snapshot');
+    // A nonempty terminal list stays authoritative; an empty list uses completed snapshots.
+    const output = response.output.length ? response.output : [...completedItems].sort(([a], [b]) => a - b).map(([, item]) => item);
+    if (JSON.stringify(output).length > 8_000_000) throw new Error('Responses output exceeds the supported size');
     const calls = [], ids = new Set();
     let finalText = '';
-    for (const item of response.output) {
+    for (const item of output) {
       if (!item || !['message', 'reasoning', 'function_call'].includes(item.type)) throw new Error('Provider returned an unsupported Responses output item');
       if (item.type === 'function_call') {
         if (provider.authKind === 'chatgpt' && item.namespace !== 'faber') throw new Error('ChatGPT returned a function outside the Faber namespace');
@@ -127,11 +142,16 @@ export async function* responseEvents(frames, provider, signal) {
       }
     }
     if (calls.length > 32) throw new Error('Too many tool calls in one response');
+    if (!calls.length && !finalText.trim() && lastVisibleText) {
+      yield* display(lastVisibleText);
+      signal?.throwIfAborted();
+      throw new Error(`Responses completion omitted completed visible output (terminal items: ${response.output.length}; completed snapshots: ${completedItems.size})`);
+    }
     signal?.throwIfAborted();
     // Completed output is authoritative; indexed parts may interleave or be revised at completion.
     yield* display(finalText);
     signal?.throwIfAborted();
-    yield { type: 'provider_output', data: { kind: 'openai-responses', providerId: provider.id, baseUrl: provider.baseUrl, model: provider.model, items: structuredClone(response.output) } };
+    yield { type: 'provider_output', data: { kind: 'openai-responses', providerId: provider.id, baseUrl: provider.baseUrl, model: provider.model, items: structuredClone(output) } };
     for (const call of calls) { signal?.throwIfAborted(); yield call; }
     signal?.throwIfAborted();
     completed = true; break;

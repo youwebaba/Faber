@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Alpha 2.0 (internal version 2.0.2-alpha.1), including
+This contract describes Faber a2.1 (application version 2.1.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -429,7 +429,8 @@ Transient progress events carry chatId/runId/modelCallId, phase, summary, sequen
 streamSequence, lastAssistantId and metrics. Delta events with replace:true carry
 the entire canonical text, not an appended chunk. Snapshots retain cumulative
 text and progress so renderer reload cannot duplicate either. Completed Responses
-items remain exact for continuation; malformed/incomplete output never dispatches
-tools. A context rejection may trigger bounded compaction retries; a run with
+items remain exact for continuation. When a completed response has an empty
+output list, Faber uses validated completed item events from that stream.
+Malformed or incomplete fallback batches fail before any tool executes. A context rejection may trigger bounded compaction retries; a run with
 contextOverflow:true exposes manual recovery. This does not restore finite user
 turn limits or trim the saved transcript.

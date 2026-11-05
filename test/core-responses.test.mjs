@@ -295,3 +295,97 @@ test('all provider protocols reject explicitly truncated compaction responses', 
     await assert.rejects(collect(async () => frames, { provider: { ...configuration, kind, compactionTokens: 2048 } }), /token limit|max_output_tokens/);
   });
 });
+
+test('runtime keeps completed output item snapshots omitted by an empty terminal output', async t => {
+  const answer = message('FABER_LUNA_OK');
+  const { runtime, chat } = await fixture(t, async () => response([
+    textDelta(0, 0, answer.id, 'FABER_LUNA_OK'),
+    { type: 'response.output_item.done', output_index: 0, item: answer },
+    { ...completed([]), response: { ...completed([]).response, usage: { input_tokens: 5128, output_tokens: 9, output_tokens_details: { reasoning_tokens: 0 } } } },
+  ]));
+  const { runId } = await runtime.request('chat.send', { chatId: chat.id, text: 'Synthetic exact-answer diagnostic' });
+  const state = await finish(runtime, runId), run = state.runs.find(item => item.id === runId), saved = state.chats.find(item => item.id === chat.id).messages.at(-1);
+  assert.equal(run.status, 'completed', run.error); assert.equal(saved.content, 'FABER_LUNA_OK');
+  assert.deepEqual(saved.providerOutput.items, [answer]); assert.equal(run.toolEvents.length, 0);
+  assert.deepEqual(run.modelCalls[0].usage, { inputTokens: 5128, outputTokens: 9, reasoningTokens: 0 });
+});
+
+test('empty terminal output replays completed snapshots in output order and dispatches each completed tool once', async () => {
+  const first = { ...message('Checking.\n'), id: 'msg_first' }, last = { ...message('Cannot continue.'), id: 'msg_last', content: [{ type: 'refusal', refusal: 'Cannot continue.' }] };
+  const output = [reasoning, first, call('done_only', 'project_list', {}), last];
+  const events = await collect(async () => response([
+    ...[3, 1, 2, 0, 2].map(output_index => ({ type: 'response.output_item.done', output_index, item: output[output_index] })), completed([]),
+  ]));
+  assert.equal(visibleText(events), 'Checking.\nCannot continue.');
+  assert.deepEqual(events.find(event => event.type === 'provider_output').data.items, output);
+  assert.equal(events.filter(event => event.type === 'tool').length, 1);
+  assert.ok(events.findIndex(event => event.type === 'tool') > events.findIndex(event => event.type === 'provider_output'));
+});
+
+test('nonempty terminal lists keep revisions without reviving stale completed tools', async t => {
+  for (const text of ['Revised final.', '']) await t.test(text || 'explicit empty fails without erasing partial', async () => {
+    const output = [message(text)], events = [];
+    const frames = [
+      textDelta(0, 0, 'msg_fixture', 'Old draft.'),
+      { type: 'response.output_item.done', output_index: 0, item: message('Old draft.') },
+      { type: 'response.output_item.done', output_index: 1, item: call('stale', 'project_list', {}) },
+      { type: 'response.output_item.done', output_index: 2, item: { ...call('unfinished', 'project_list', {}), status: 'in_progress' } },
+      completed(output),
+    ];
+    const read = async () => { for await (const event of responseEvents(frames, configuration)) events.push(event); };
+    if (text) await read(); else await assert.rejects(read(), /terminal items: 1; completed snapshots: 2/);
+    assert.equal(visibleText(events), text || 'Old draft.'); assert.equal(events.some(event => event.type === 'tool'), false);
+    if (text) assert.deepEqual(events.find(event => event.type === 'provider_output').data.items, output);
+    else assert.equal(events.some(event => event.type === 'provider_output'), false);
+  });
+});
+
+test('blank completed responses preserve streamed partial text as failed with bounded output counts', async t => {
+  for (const [name, output, correction] of [['empty terminal', []], ['explicit empty message', [message('')]], ['reasoning only', [reasoning]], ['empty done correction', [], true]]) await t.test(name, async t => {
+    const { runtime, chat } = await fixture(t, async () => response([
+      textDelta(0, 0, 'msg_fixture', 'Partial answer.'),
+      ...(correction ? [{ type: 'response.output_text.done', output_index: 0, content_index: 0, item_id: 'msg_fixture', text: '' }] : []), completed(output),
+    ]));
+    const { runId } = await runtime.request('chat.send', { chatId: chat.id, text: 'Synthetic partial diagnostic' });
+    const state = await finish(runtime, runId), run = state.runs.find(item => item.id === runId), saved = state.chats.find(item => item.id === chat.id).messages.at(-1);
+    assert.equal(run.status, 'failed'); assert.match(run.error, new RegExp(`omitted completed visible output \\(terminal items: ${output.length}; completed snapshots: 0\\)`));
+    assert.equal(saved.content, 'Partial answer.'); assert.equal(saved.status, 'failed'); assert.equal(saved.providerOutput, undefined);
+    assert.equal(run.toolEvents.length, 0);
+  });
+});
+
+test('completed snapshot fallback rejects invalid identities, malformed content and foreign tool namespaces before release', async t => {
+  const provider = { ...configuration, authKind: 'chatgpt' }, valid = { ...call('valid', 'project_list', {}), namespace: 'faber' };
+  const done = (item, output_index = 0) => ({ type: 'response.output_item.done', output_index, item });
+  for (const [name, frames] of [
+    ['unfinished snapshot', [textDelta(0, 0, 'msg_fixture', 'Partial'), done({ ...message('wrong'), status: 'in_progress' }), completed([])]],
+    ['missing completed status', [textDelta(0, 0, 'msg_fixture', 'Partial'), done({ ...message('wrong'), status: undefined }), completed([])]],
+    ['mixed completed and unfinished tools', [done(valid), done({ ...call('unfinished', 'project_list', {}), namespace: 'faber', status: 'in_progress' }, 1), completed([])]],
+    ['mixed completed and missing-status tools', [done(valid), done({ ...call('unfinished', 'project_list', {}), namespace: 'faber', status: undefined }, 1), completed([])]],
+    ['mixed completed message and unfinished tool', [done(message('Answer')), done({ ...valid, status: 'in_progress' }, 1), completed([])]],
+    ['malformed content', [done({ ...message(''), content: [{ type: 'output_text', text: 7 }] }), completed([])]],
+    ['changed index identity', [textDelta(0, 0, 'different', 'Partial'), done(message('wrong')), completed([])]],
+    ['duplicate snapshot ID', [done(message('one')), done(message('two'), 1), completed([])]],
+    ['foreign namespace', [done({ ...valid, namespace: 'other' }), completed([])]],
+    ['malformed arguments', [done({ ...valid, arguments: '{bad}' }), completed([])]],
+    ['incomplete terminal', [done(valid), { type: 'response.incomplete', response: { incomplete_details: { reason: 'max_output_tokens' } } }]],
+    ['missing terminal', [done(valid)]],
+  ]) await t.test(name, async () => {
+    const events = [];
+    await assert.rejects(async () => { for await (const event of responseEvents(frames, provider)) events.push(event); });
+    assert.equal(events.some(event => event.type === 'tool' || event.type === 'provider_output'), false);
+  });
+});
+
+test('cancellation during completed snapshot fallback prevents tool release', async t => {
+  for (const stopAt of ['text', 'provider_output']) await t.test(stopAt, async () => {
+    const controller = new AbortController(), events = [];
+    const frames = [textDelta(0, 0, 'msg_fixture', 'Draft'), { type: 'response.output_item.done', output_index: 0, item: message('Final') }, { type: 'response.output_item.done', output_index: 1, item: call('cancel_fallback', 'project_list', {}) }, completed([])];
+    await assert.rejects(async () => {
+      for await (const event of responseEvents(frames, configuration, controller.signal)) {
+        events.push(event); if (event.type === stopAt) controller.abort(new Error('Fixture canceled'));
+      }
+    }, /Fixture canceled/);
+    assert.equal(events.some(event => event.type === 'tool'), false);
+  });
+});

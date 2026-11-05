@@ -11,6 +11,9 @@ relative paths or explicit user inputs. Preserve required third-party credits,
 canonical project links and functional user data. Check release artifacts for
 these categories before publication.
 Write public posts in the maintainer's voice; describe the product directly in docs.
+Publish each version as a separate full GitHub release with a new tag, the full
+Windows installer, its SHA-256 checksum and patch notes. Keep previous tags and
+assets available for rollback and for backporting individual fixes.
 
 Read `ADDONS.md` before authoring a removable feature. b1 includes only local
 addon management; no online addon sharing, publishing, catalog or OTA updates.

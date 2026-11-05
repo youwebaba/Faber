@@ -157,3 +157,32 @@ test('Alpha privacy refresh updates exact stock, preserves edits and links, and 
   const writes=[];t.mock.method(fs,'writeFile',async(...args)=>{writes.push(args[0]);throw Error('Unexpected repeat write');});
   await refreshAlphaPrivacy(bundledSource,sourceDir,stock);assert.deepEqual(writes,[]);
 });
+
+test('a2.1 seeds the repaired parser separately and preserves edits in both versions', async t => {
+  const {pathToFileURL} = await import('node:url');
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-a21-workbench-'));
+  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const bundledSource=path.join(root,'bundle'),workbenchRoot=path.join(root,'workbench');
+  await fs.mkdir(path.join(bundledSource,'core'),{recursive:true});
+  await fs.writeFile(path.join(bundledSource,'core/responses.mjs'),'approved Alpha 2.0 custom parser');
+  await fs.writeFile(path.join(bundledSource,'core/custom-feature.mjs'),'approved Alpha 2.0 feature');
+  const previous=await prepareWorkbench({bundledSource,workbenchRoot,version:'2.0.2-alpha.1'});
+  const previousMarker=await fs.readFile(path.join(previous,'.faber-workbench.json'));
+  for(const file of ['responses.mjs','images.mjs','usage.mjs'])await fs.copyFile(new URL('../core/'+file,import.meta.url),path.join(bundledSource,'core',file));
+  await fs.unlink(path.join(bundledSource,'core/custom-feature.mjs'));
+  const options={bundledSource,workbenchRoot,version:'2.1.0'},current=await prepareWorkbench(options);
+  assert.notEqual(current,previous);
+  assert.deepEqual(await fs.readFile(path.join(current,'core/responses.mjs')),await fs.readFile(path.join(bundledSource,'core/responses.mjs')));
+  await assert.rejects(fs.stat(path.join(current,'core/custom-feature.mjs')),{code:'ENOENT'});
+  const {responseEvents}=await import(pathToFileURL(path.join(current,'core/responses.mjs')).href);
+  const answer={type:'message',id:'fixture',role:'assistant',status:'completed',content:[{type:'output_text',text:'repaired answer'}]};
+  const frames=[{type:'response.output_item.done',output_index:0,item:answer},{type:'response.completed',response:{status:'completed',output:[]}}];
+  const events=[];for await(const event of responseEvents(frames,{id:'fixture',kind:'openai-responses',baseUrl:'https://example.invalid/v1',model:'fixture'}))events.push(event);
+  assert.equal(events.filter(event=>event.type==='delta').map(event=>event.text).join(''),'repaired answer');
+  await fs.writeFile(path.join(current,'core/responses.mjs'),'approved a2.1 custom parser');
+  assert.equal(await prepareWorkbench(options),current);
+  assert.equal(await fs.readFile(path.join(current,'core/responses.mjs'),'utf8'),'approved a2.1 custom parser');
+  assert.equal(await fs.readFile(path.join(previous,'core/responses.mjs'),'utf8'),'approved Alpha 2.0 custom parser');
+  assert.equal(await fs.readFile(path.join(previous,'core/custom-feature.mjs'),'utf8'),'approved Alpha 2.0 feature');
+  assert.deepEqual(await fs.readFile(path.join(previous,'.faber-workbench.json')),previousMarker);
+});
