@@ -21,9 +21,11 @@ const object = (properties, required = Object.keys(properties)) => ({ type: 'obj
 const string = { type: 'string', minLength: 1, maxLength: 200000 };
 const idSchema = { type: 'string', minLength: 1, maxLength: 200 };
 const projectGrantsSchema = { type: 'array', maxItems: 1000, items: idSchema };
+const grantsSchema = { type: 'array', items: { enum: permissions.filter(permission => permission !== 'read') }, maxItems: 5 };
 const defaults = { theme: 'dark', maxDepth: 4, maxAgents: 12, runTimeoutMs: 600000, uiScale: 1, onboardingComplete: false };
 const runTimeoutSchema = { anyOf: [{ const: 0 }, { type: 'integer', minimum: 1000, maximum: 2147483647 }] };
-const settingsSchema = object({ theme: { enum: ['dark', 'light', 'system'] }, maxDepth: { type: 'integer', minimum: 0, maximum: 8 }, maxAgents: { type: 'integer', minimum: 1, maximum: 32 }, runTimeoutMs: runTimeoutSchema, uiScale: { type: 'number', minimum: 0.75, maximum: 1.5 }, onboardingComplete: { type: 'boolean' } }, []);
+const agentSettingsSchema = object({ theme: { enum: ['dark', 'light', 'system'] }, maxDepth: { type: 'integer', minimum: 0, maximum: 8 }, maxAgents: { type: 'integer', minimum: 1, maximum: 32 }, runTimeoutMs: runTimeoutSchema, uiScale: { type: 'number', minimum: 0.75, maximum: 1.5 }, onboardingComplete: { type: 'boolean' } }, []);
+const settingsSchema = object({ ...agentSettingsSchema.properties, defaultGrants: grantsSchema }, []);
 const presetSchema = object({ id: idSchema, name: { type: 'string', minLength: 1, maxLength: 100 }, text: promptTextSchema, builtin: { type: 'boolean' } }, ['id','name','text']);
 
 function repairInterruptedTools(chat) {
@@ -58,10 +60,16 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const store = await openStore(dataDir, { version: 1, projects: [], chats: [], runs: [], providers: [{ id: 'local-ollama', name: 'Local Ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434', model: 'qwen3.5:9b', hasKey: false }], approvals: [], extensions: [], settings: defaults });
   const state = store.state;
   if (state.version !== 1 || ['projects', 'chats', 'runs', 'providers', 'approvals', 'extensions'].some(key => !Array.isArray(state[key]))) throw new Error('Unsupported or malformed harness state; original file preserved');
-  state.settings = { ...defaults, ...state.settings };
+  state.settings = { ...structuredClone(defaults), ...state.settings };
   // Retire saved harness context/turn caps, including values from older releases.
   for (const key of ['contextChars', 'contextMessages', 'maxTurns']) delete state.settings[key];
   validate(state.settings, settingsSchema);
+  // Keep new defaults outside the strict settings object so older releases can reopen this profile.
+  if (!Object.hasOwn(state, 'defaultChatGrants')) state.defaultChatGrants = state.settings.defaultGrants ?? [];
+  validate(state.defaultChatGrants, grantsSchema);
+  if (new Set(state.defaultChatGrants).size !== state.defaultChatGrants.length) throw new Error('Duplicate default permissions');
+  if (state.settings.defaultGrants && JSON.stringify(state.settings.defaultGrants) !== JSON.stringify(state.defaultChatGrants)) throw new Error('Conflicting default permissions; original file preserved');
+  delete state.settings.defaultGrants;
   state.promptPresets ??= defaultPromptPresets();
   validate(state.promptPresets, { type: 'array', maxItems: 100, items: presetSchema });
   if (new Set(state.promptPresets.map(preset => preset.id)).size !== state.promptPresets.length) throw new Error('Duplicate prompt preset IDs');
@@ -91,7 +99,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   let closed = false;
   const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, modelDisplayName:host.modelDisplayName });
   function emit(event) { remoteWorkspace.notify(event); if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
-  function snapshot() { return structuredClone({ ...state, tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
+  function settingsSnapshot() { return structuredClone({ ...state.settings, defaultGrants: state.defaultChatGrants }); }
+  function snapshot() { const { defaultChatGrants, ...publicState } = state; return structuredClone({ ...publicState, settings: settingsSnapshot(), tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
   function clearStream(runId) { if (streams.delete(runId)) streamSequence++; }
   async function changed() { stateRevision++; await store.save(state); emit({ type: 'state', state: snapshot() }); }
   function find(collection, id) { const item = state[collection].find(entry => entry.id === id); if (!item) throw new Error(`Unknown ${collection}: ${id}`); return item; }
@@ -546,7 +555,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const parent = parentChatId ? find('chats', parentChatId) : null;
     if(parent&&chatLocks.has(parent.id))throw new Error('Parent chat is being changed');
     const sameProject = parent?.projectId === projectId;
-    const chat = { id: randomUUID(), projectId, title, providerId: parent?.providerId || state.providers[0].id, model: parent?.model || '', grants: sameProject ? [...parent.grants] : [], projectGrants: sameProject ? [...parent.projectGrants] : [], voice: { enabled: false, phrase: 'Hey Faber', speakReplies: true }, messages: [], createdAt: now(), updatedAt: now(), archived: false, ...(parentChatId ? { parentChatId } : {}), ...(externalSessionId ? { externalSessionId } : {}) };
+    const grants = parent ? (sameProject ? [...parent.grants] : []) : externalSessionId ? [] : [...state.defaultChatGrants];
+    const chat = { id: randomUUID(), projectId, title, providerId: parent?.providerId || state.providers[0].id, model: parent?.model || '', grants, projectGrants: sameProject ? [...parent.projectGrants] : [], voice: { enabled: false, phrase: 'Hey Faber', speakReplies: true }, messages: [], createdAt: now(), updatedAt: now(), archived: false, ...(parentChatId ? { parentChatId } : {}), ...(externalSessionId ? { externalSessionId } : {}) };
     chat.contextTokens=parent?.contextTokens??null;chat.thinking=parent?(parent.thinking??null):(find('providers',chat.providerId).kind==='ollama'?false:null);
     const preset = state.promptPresets.find(item => item.id === 'general');
     chat.systemPrompt = parent?.systemPrompt ?? preset?.text ?? generalPrompt;
@@ -567,7 +577,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const schemas = {
     'state.get': object({}), 'project.create': object({ name: string, path: string }, ['name']), 'project.update': object({ id: idSchema, name: string }, ['id']),
     'chat.create': object({ projectId: idSchema, title: string }, ['projectId']),
-    'chat.update': object({ id: idSchema, title: string, providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema,reasoningEffort:reasoningEffortSchema,systemPrompt:promptTextSchema,systemPromptPresetId:promptIdSchema, projectGrants: projectGrantsSchema, grants: { type: 'array', items: { enum: permissions.filter(permission => permission !== 'read') }, maxItems: 5 }, voice: object({ enabled: { type: 'boolean' }, phrase: string, speakReplies: { type: 'boolean' } }, []) }, ['id']),
+    'chat.update': object({ id: idSchema, title: string, providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema,reasoningEffort:reasoningEffortSchema,systemPrompt:promptTextSchema,systemPromptPresetId:promptIdSchema, projectGrants: projectGrantsSchema, grants: grantsSchema, voice: object({ enabled: { type: 'boolean' }, phrase: string, speakReplies: { type: 'boolean' } }, []) }, ['id']),
     'chat.send': object({ chatId: idSchema, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId', 'text']), 'chat.stop': object({ chatId: idSchema }), 'chat.archive': object({ chatId: idSchema }),
     'chat.compact':object({chatId:idSchema}),'chat.controls':object({chatId:idSchema}),'chat.forceStop':object({chatId:idSchema}),'chat.delete':object({chatId:idSchema}),'chat.move':object({chatId:idSchema,projectId:idSchema}),
     'project.archive':object({projectId:idSchema}),'project.delete':object({projectId:idSchema}),
@@ -755,9 +765,12 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         const result = await live.get(runId).done; if (result.error) throw new Error(result.error); return result.result;
       }
       case 'settings.update': {
-        Object.assign(state.settings, params);
+        if (params.defaultGrants && new Set(params.defaultGrants).size !== params.defaultGrants.length) throw new Error('Duplicate default permissions');
+        const { defaultGrants, ...settings } = structuredClone(params);
+        if (defaultGrants) state.defaultChatGrants = defaultGrants;
+        Object.assign(state.settings, settings);
         if (Object.hasOwn(params, 'runTimeoutMs')) for (const [id, execution] of live) scheduleRunTimer(find('runs', id), execution);
-        await changed(); return structuredClone(state.settings);
+        await changed(); return settingsSnapshot();
       }
       case 'extensions.reload': if (!host.reloadExtensions) throw new Error('Extension loading unavailable'); return host.reloadExtensions();
       case 'voice.start': case 'voice.stop': case 'voice.speak':
@@ -905,8 +918,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       await approveProject(find('runs', ctx.runId), { name: args.name, path: resolve(args.path) }, `Create project ${args.name} at ${resolve(args.path)}`);
       return request('project.create', args);
     }),
-    builtin('harness_inspect', 'Inspect harness source, providers, settings and tool names/permissions. Full tool schemas are already supplied to the model. Never returns credentials.', object({}), () => ({ sourceDir, version: 1, settings: structuredClone(state.settings), providers: structuredClone(state.providers), tools: [...registry.values()].map(({ name, permission }) => ({ name, permission })), extensions: structuredClone(state.extensions) })),
-    builtin('settings_update', 'Adjust the theme or bounded execution settings. Does not grant permissions.', settingsSchema, args => request('settings.update', args)),
+    builtin('harness_inspect', 'Inspect harness source, providers, settings and tool names/permissions. Full tool schemas are already supplied to the model. Never returns credentials.', object({}), () => ({ sourceDir, version: 1, settings: settingsSnapshot(), providers: structuredClone(state.providers), tools: [...registry.values()].map(({ name, permission }) => ({ name, permission })), extensions: structuredClone(state.extensions) })),
+    builtin('settings_update', 'Adjust the theme or bounded execution settings. Does not grant permissions or change defaults for future chats.', agentSettingsSchema, args => request('settings.update', args)),
     builtin('chat_configure', 'Configure this chat model/provider, supported context capacity and thinking, or voice preferences for future runs. Context settings are provider parameters, never history trimming. Cannot grant permissions or save credentials.', object({ providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema, voice: schemas['chat.update'].properties.voice }, []), async (args, ctx) => {
       if (args.providerId) {
         const provider = find('providers', args.providerId), hostname = new URL(provider.baseUrl).hostname;

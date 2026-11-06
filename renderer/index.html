@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Faber a2.2</title>
+  <title>Faber a2.3</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="models.css">
   <link rel="stylesheet" href="connections.css">
@@ -20,14 +20,14 @@
 <body>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
-      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label">a2.2</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
+      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label">a2.3</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
       <button id="new-chat" class="nav-button new-chat" data-icon="compose">New chat <kbd>Ctrl N</kbd></button>
       <button id="open-tools" class="nav-button" data-icon="tools">Tools & extensions</button>
       <button id="open-models" class="nav-button" data-icon="models">Models</button>
       <button id="open-addons" class="nav-button" data-icon="addons">Addons</button>
       <button id="open-connections" class="nav-button" data-icon="connections">Connections</button>
       <div class="section-heading"><span>Projects</span><button id="add-project" class="icon-button" title="Add project" aria-label="Add project" data-icon="plus"></button></div>
-      <nav id="project-list" class="project-list" aria-label="Project navigation"></nav>
+      <nav id="project-list" class="project-list" aria-label="Local and paired device projects and chats"><div id="local-projects"></div></nav>
       <div class="sidebar-bottom"><button id="profile-switcher" class="nav-button" disabled>Profile: loading…</button><button id="open-settings" class="nav-button" data-icon="settings">Settings</button><div class="app-footnote">Your workspace. Your assistant.</div></div>
     </aside>
     <main class="workspace">

@@ -1,8 +1,8 @@
 {
   "name": "faber",
   "productName": "Faber",
-  "description": "Faber a2.2 desktop AI workspace",
-  "version": "2.2.0",
+  "description": "Faber a2.3 desktop AI workspace",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -35,7 +35,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "2.2.0.0",
+    "buildVersion": "2.3.0.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -90,7 +90,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a2.2-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a2.3-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

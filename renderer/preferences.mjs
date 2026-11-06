@@ -17,7 +17,7 @@ export function runTimeoutChoice(mode, minutes) {
 }
 
 export function createPreferences({ workspaceControls, remoteConnections, request, refresh, getState, getChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors, showOpenAI }) {
-  const categories = [['ui', 'UI'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['profiles', 'Profiles'], ['external', 'External access'], ['about', 'About & support']];
+  const categories = [['ui', 'UI'], ['permissions', 'Permissions'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['profiles', 'Profiles'], ['external', 'External access'], ['about', 'About & support']];
   function createPromptChoice() {
     const chat = getChat(), presets = getState().promptPresets || [];
     const choice = selectField('System prompt for this chat', [...(chat ? [{ value: '__current__', label: `Keep current · ${presets.find(item => item.id === chat.systemPromptPresetId)?.name || 'Custom'}` }] : []), ...presets.map(item => ({ value: item.id, label: item.name }))], chat ? '__current__' : 'general');
@@ -55,6 +55,19 @@ export function createPreferences({ workspaceControls, remoteConnections, reques
         } finally { timeoutMode.input.disabled = false; updateTimeout(); }
       }, 'button primary'); saveTimeout.id = 'settings-save-run-timeout';
       runControls.append(timeoutMode.wrapper, timeoutMinutes.wrapper, el('p', 'hint', 'Applies to running and future tasks. Duration is measured from each task’s original start. A shorter limit can stop work that has already exceeded it. Stop and Force stop remain available. Individual tool and network timeouts are separate.'), saveTimeout); pane.append(runControls);
+    } else if (category === 'permissions') {
+      pane.append(el('h3', '', 'Permissions for future chats'), el('p', 'hint', 'Choose permanent permission defaults for new chats you create in this profile. Existing chats keep their permissions. You can still edit permissions for each chat in Chat settings.'), el('p', 'hint', 'Enabled actions can run without asking for approval. These grants give real access under your user account; shell commands and executable addons are not sandboxed. Other projects still require separate approval. Agent-created chats keep bounded parent permissions; external tool sessions do not receive these defaults.'));
+      const permissions = [['files', 'Files', 'Create, edit and delete workspace files.'], ['shell', 'Shell', 'Run commands with your Windows account’s authority.'], ['computer', 'Computer', 'Control desktop apps and capture the screen.'], ['network', 'Network', 'Access network services.'], ['upgrade', 'Upgrades', 'Stage and activate application changes.']];
+      const checks = permissions.map(([permission, name, description]) => {
+        const check = field(name, '', 'checkbox', description); check.input.id = `settings-default-${permission}`; check.input.checked = check.input.defaultChecked = settings.defaultGrants?.includes(permission) || false; check.wrapper.classList.add('permission-default-row'); pane.append(check.wrapper); return { permission, ...check };
+      });
+      const savePermissions = button('Save future chat permissions', async () => {
+        savePermissions.disabled = true; for (const check of checks) check.input.disabled = true;
+        try {
+          await request('settings.update', { defaultGrants: checks.filter(check => check.input.checked).map(check => check.permission) }); await refresh();
+          for (const check of checks) check.input.defaultChecked = check.input.checked; body.dataset.settingsClean = 'true'; notify('Permission defaults saved for future chats. Existing chats are unchanged.');
+        } finally { savePermissions.disabled = false; for (const check of checks) check.input.disabled = false; }
+      }, 'button primary'); savePermissions.id = 'settings-save-permissions'; pane.append(savePermissions);
     } else if (category === 'prompts') renderPrompts(pane, presetId);
     else if (category === 'connections') {
       remoteConnections?.mount(pane);
