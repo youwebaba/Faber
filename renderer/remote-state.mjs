@@ -1,4 +1,5 @@
 import { orderedChatFamilies } from './chat-navigation.mjs';
+import { mediaReferences } from './content-media.mjs';
 
 const record = value => value && typeof value === 'object' && !Array.isArray(value);
 const text = (value, fallback = '') => typeof value === 'string' ? value : fallback;
@@ -9,7 +10,7 @@ const imageRefs = value => list(value).filter(item => typeof item.id === 'string
 const runs = value => list(value).filter(item => id(item.id) && id(item.chatId)).map(item => ({
   ...pick(item, ['id', 'chatId', 'startedAt', 'requestMessageId', 'sourceMessageId', 'modelCallId', 'contextOverflow']), parentRunId: id(item.parentRunId) ? item.parentRunId : null, status: text(item.status), error: text(item.error),
   modelCalls: list(item.modelCalls).map(call => ({ ...pick(call, ['id', 'modelCallId', 'sourceMessageId', 'requestMessageId', 'metrics', 'usage']), status: text(call.status), phase: text(call.phase), progressSummary: text(call.progressSummary) })),
-  toolEvents: list(item.toolEvents).filter(event => id(event.id)).map(event => ({ ...pick(event, ['id', 'toolCallId', 'modelCallId', 'sourceMessageId', 'startedAt', 'args', 'result', 'image']), imageRefs: imageRefs(event.imageRefs), name: text(event.name, 'Tool'), status: text(event.status), summary: text(event.summary), error: text(event.error) })),
+  toolEvents: list(item.toolEvents).filter(event => id(event.id)).map(event => ({ ...pick(event, ['id', 'toolCallId', 'modelCallId', 'sourceMessageId', 'startedAt', 'args', 'result', 'image']), imageRefs: imageRefs(event.imageRefs), mediaRefs: mediaReferences(event.mediaRefs), name: text(event.name, 'Tool'), status: text(event.status), summary: text(event.summary), error: text(event.error) })),
 }));
 const approvals = value => list(value).filter(item => id(item.id) && id(item.chatId) && id(item.runId)).map(item => ({
   ...pick(item, ['id', 'chatId', 'runId']), permission: text(item.permission, 'tool'), summary: text(item.summary), projectName: text(item.projectName), rememberable: false,
@@ -28,7 +29,7 @@ export function remoteWorkspace(value) {
     parentChatId: id(item.parentChatId) ? item.parentChatId : null, archived: item.archived === true, readOnly: item.readOnly === true,
   }));
   return { projects, chats, runs: runs(value.runs), approvals: approvals(value.approvals), streams: streams(value.streams),
-    capabilities: { imageReferences: value.capabilities?.imageReferences === true },
+    capabilities: { imageReferences: value.capabilities?.imageReferences === true, mediaReferences: value.capabilities?.mediaReferences === true },
     ...pick(value, ['streamSequence', 'stateRevision', 'revision', 'nextOffset']) };
 }
 
@@ -37,7 +38,7 @@ export function remoteChat(value, chatId) {
   const source = value.chat;
   const messages = list(source.messages).filter(item => id(item.id) && ['user', 'assistant', 'tool', 'system'].includes(item.role)).map(item => ({
     ...pick(item, ['id', 'role', 'createdAt', 'runId', 'sourceMessageId', 'modelCallId', 'status', 'toolName', 'toolCallId', 'image', 'fromChatId', 'steering']),
-    imageRefs: imageRefs(item.imageRefs),
+    imageRefs: imageRefs(item.imageRefs), mediaRefs: mediaReferences(item.mediaRefs),
     images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string') : [], toolCalls: list(item.toolCalls).map(call => ({ ...pick(call, ['id', 'name', 'args']), ...(record(call.function) ? { function: pick(call.function, ['name', 'arguments']) } : {}) })),
     content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content ?? ''),
   }));

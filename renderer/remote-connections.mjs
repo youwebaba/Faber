@@ -1,10 +1,10 @@
 import { lastSeenLabel } from './remote-state.mjs';
 import { createRemoteWorkspace } from './remote-workspace.mjs';
 
-export function createRemoteConnections({ request, subscribe, el, field, closeModal, showConnections, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
+export function createRemoteConnections({ request, subscribe, el, field, closeModal, showConnections, contentMenu, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
   let status, panel, tab = 'host', timer, pending = false, loading, invitation, error = '', pairDraft = '', relayDraft = '', nameDraft = '';
   const hosts = () => (status?.devices || []).filter(device => device.role === 'host');
-  const workspace = createRemoteWorkspace({ request, subscribe, el, getDevices: hosts, showConnections, suspendLocal, onChange: () => { schedule(); onChange(); }, document });
+  const workspace = createRemoteWorkspace({ request, subscribe, el, getDevices: hosts, showConnections, contentMenu, suspendLocal, onChange: () => { schedule(); onChange(); }, document });
   const button = (label, callback, className = 'button') => { const node = el('button', className, label); node.type = 'button'; node.addEventListener('click', async () => { if (pending) return; pending = true; node.disabled = true; try { error = ''; await callback(); } catch (cause) { error = cause.message || String(cause); } finally { pending = false; if (panel?.isConnected) update(); onChange(); } }); return node; };
   const time = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
   function accept(value) {

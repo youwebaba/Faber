@@ -146,7 +146,7 @@ export async function createRemoteService({ dataDir, operatorDir, host, dispatch
   pairingTimer = setInterval(()=>{void finishPair(); publish();},2500); pairingTimer.unref?.();
   if (config.allowConnections && !safeMode) void startHosting();
   return {
-    async request(method,params = {}) {
+    async request(method,params = {},{signal} = {}) {
       if (closed || !Object.hasOwn(schema,method)) throw new Error('Remote connections unavailable');
       validate(params,schema[method]);
       if (method === 'remote.status') { probeHosts(); return status(); }
@@ -158,7 +158,8 @@ export async function createRemoteService({ dataDir, operatorDir, host, dispatch
         if (selected && envelope.params.waitMs && prior?.chatId === envelope.params.chatId && prior.since === envelope.params.since) return prior.result;
         const poll = selected && envelope.params.waitMs ? {chatId:envelope.params.chatId,since:envelope.params.since,controller:new AbortController()} : null;
         if (poll) { prior?.controller.abort(); polls.set(deviceId,poll); }
-        const result = controller.request(deviceId,'workspace.rpc',envelope,{signal:poll?.controller.signal});
+        const signals = [lifetime.signal,poll?.controller.signal,signal].filter(Boolean);
+        const result = controller.request(deviceId,'workspace.rpc',envelope,{signal:AbortSignal.any(signals)});
         if (poll) poll.result = result;
         try { const value = await result; lastSeen.set(deviceId,Date.now()); return value; }
         finally { if (poll && polls.get(deviceId) === poll) polls.delete(deviceId); }

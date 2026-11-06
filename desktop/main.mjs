@@ -1,4 +1,4 @@
-import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,WebContentsView,powerMonitor,powerSaveBlocker} from 'electron';
+import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,WebContentsView,powerMonitor,powerSaveBlocker,clipboard,nativeImage} from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -25,6 +25,8 @@ import {createGateway} from './gateway.mjs';
 import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
 import {imageTools} from '../tools/images.mjs';
+import {mediaTools} from '../tools/media.mjs';
+import {createChatMedia,mediaMethods} from './chat-media.mjs';
 import {createBrowserManager,browserMethods} from './browser.mjs';
 
 const bootstrap=globalThis.__FABER_BOOTSTRAP__;
@@ -38,10 +40,11 @@ const smokeB12=process.argv.includes('--smoke-b12');
 const smokeB201=process.argv.includes('--smoke-b201');
 const smokeThinking=process.argv.includes('--smoke-thinking');
 const smokeBrowser=process.argv.includes('--smoke-browser');
+const smokeMedia=process.argv.includes('--smoke-media');
 const smokeInstalled=process.argv.includes('--smoke-installed');
 const smokeFaber=process.argv.includes('--smoke-faber');
 const smokePackage=process.argv.includes('--smoke-package');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser;
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia;
 const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):getProfileDirectory(process.env.LOCALAPPDATA??app.getPath('appData')));
 const profiles=bootstrap?.profiles||createProfiles(smoke?path.join(dataDir,'profile-registry'):process.env.LOCALAPPDATA??app.getPath('appData'),smoke?{defaultDirectory:dataDir}:{});
 const recoveryStatus={safeMode:bootstrap?.safeMode===true,reason:bootstrap?.recoveryReason||''};
@@ -50,7 +53,7 @@ app.setPath('userData',dataDir);
 app.setPath('sessionData',dataDir);
 if(!bootstrap?.hasLock&&!app.requestSingleInstanceLock()){app.quit();process.exit(0);}
 app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.show();window.focus();}});
-if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
+if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
 const modelMethods=new Set(['models.state','models.search','models.inspect','models.download','models.cancel','models.settings.save','models.chooseDirectory','models.openDirectory','models.openPage']);
 const localMethods=new Set(['localModels.list','localModels.start','localModels.stop','localModels.details','localModels.hardware','localModels.configure','localModels.delete']);
 const addonMethods=new Set(['addons.list','addons.import','addons.enable','addons.disable','addons.uninstall','addons.reset','addons.rollback','addons.openDirectory']);
@@ -58,8 +61,8 @@ const uiMethods=new Set(['app.reloadUI','app.uiState','app.uiStateAck']);
 const chatGPTMethods=new Set(['chatgpt.status','chatgpt.signIn','chatgpt.cancel','chatgpt.signOut','chatgpt.select','chatgpt.models','chatgpt.usage']);
 const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.start','gateway.stop','gateway.rotateToken']);
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
-const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods]);
-let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
+const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
+let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
@@ -95,7 +98,7 @@ const host={
 };
 app.on('window-all-closed',()=>app.quit());
 async function shutdown(){
-  clearTimeout(bootTimer);voice?.close();const failures=[];
+  clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
   const results=await Promise.allSettled([browser?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
@@ -117,19 +120,25 @@ app.on('before-quit',event=>{
 void app.whenReady().then(async()=>{
 const reloadSmoke=smokeUIReload?await import('../test/desktop-ui-reload-smoke.mjs'):null;
 if(reloadSmoke)reloadFixture=await reloadSmoke.createUIReloadSmoke(dataDir,sourceDir);
-session.defaultSession.setPermissionRequestHandler((_webContents,_permission,callback)=>callback(false));
-session.defaultSession.setPermissionCheckHandler(()=>false);
+const allowAppFullscreen=(contents,permission,details)=>permission==='fullscreen'&&contents===window?.webContents&&details?.isMainFrame===true&&details.requestingUrl==='faber://app/index.html';
+session.defaultSession.setPermissionRequestHandler((contents,permission,callback,details)=>callback(allowAppFullscreen(contents,permission,details)));
+session.defaultSession.setPermissionCheckHandler((contents,permission,_origin,details)=>allowAppFullscreen(contents,permission,details));
 session.defaultSession.on('will-download',event=>event.preventDefault());
 protocol.handle('faber',async request=>{
   try{
-    const url=new URL(request.url);if(url.hostname!=='app'||request.method!=='GET')return new Response('Forbidden',{status:403});
+    const url=new URL(request.url);if(url.pathname.startsWith('/media/'))return media?media.protocol(request):new Response('Unavailable',{status:404});
+    if(url.hostname!=='app'||request.method!=='GET')return new Response('Forbidden',{status:403});
     const relative=decodeURIComponent(url.pathname).replace(/^\//,'')||'index.html';
     const target=await containedPath(path.join(reloadFixture?.sourceDir||sourceDir,'renderer'),relative);
     const mime={'.html':'text/html','.mjs':'text/javascript','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png'}[path.extname(target)]??'application/octet-stream';
-    return new Response(await fs.readFile(target),{headers:{'Content-Type':mime,'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",'X-Content-Type-Options':'nosniff'}});
+    return new Response(await fs.readFile(target),{headers:{'Content-Type':mime,'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",'X-Content-Type-Options':'nosniff'}});
   }catch{return new Response('Not found',{status:404});}
 });
 runtime=await createRuntime({dataDir,sourceDir,host});
+media=createChatMedia({readMedia:runtime.readMedia,readImage:params=>runtime.remoteRequest('chat.image',params),remoteRequest:(deviceId,method,params,signal)=>{if(!remote)throw new Error('Remote connections unavailable');return remote.request('remote.request',{deviceId,method,params},{signal});},protectedPaths:[dataDir,...profiles.privatePaths],
+  chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':'video'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
+  copyText:text=>clipboard.writeText(text),copyImage:data=>{const value=nativeImage.createFromDataURL(data);if(value.isEmpty())throw new Error('This image could not be copied');clipboard.writeImage(value);}
+});
 browserChats=(await runtime.request('state.get')).chats;
 browser=createBrowserManager({dataDir,createView:options=>new WebContentsView(options),createSession:(partition,options)=>session.fromPartition(partition,options),emit:event=>runtime.emit(event),getChat:id=>browserChats.find(chat=>chat.id===id),
   readSessionCookies:key=>host.getSecret('browser-session-'+key),writeSessionCookies:(key,value)=>host.setSecret('browser-session-'+key,value),
@@ -161,7 +170,7 @@ upgrades=createUpgrades({sourceDir:reloadFixture?.sourceDir||featureFixture?.upg
 // Recognition errors can leave a live session; only an explicit off event clears the reload barrier.
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
-runtime.registerTools([...fileTools(),...imageTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
+runtime.registerTools([...fileTools(),...imageTools(),...mediaTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
@@ -175,7 +184,7 @@ Menu.setApplicationMenu(Menu.buildFromTemplate([{role:'fileMenu'},{label:'Edit',
 window.on('blur',()=>{browserViewRequest++;browser.hideView({keepMonitoring:true});});
 for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();});
 window.on('closed',()=>app.quit());
-window.webContents.on('did-start-navigation',()=>{browserViewRequest++;browser.hideView();});
+window.webContents.on('did-start-navigation',()=>{browserViewRequest++;browser.hideView();media.cancel();});
 window.on('focus',()=>{emit({type:'browserViewHidden'});void browser.request('browser.state').then(state=>emit({type:'browser',state})).catch(()=>{});});
 window.webContents.on('blur',()=>{browserChromeFocus=null;});
 window.webContents.on('before-input-event',(event,input)=>{if(!browserChromeFocus||input.type!=='keyDown'||(!input.control&&!input.meta)||input.alt)return;const key=input.key.length===1?input.key.toLowerCase():input.key;const action={l:'address',t:'newTab',w:'closeTab',f:'find',Tab:input.shift?'previousTab':'nextTab','+':'zoomIn','=':'zoomIn','-':'zoomOut','0':'zoomReset'}[key];if(action){event.preventDefault();emit({type:'browserShortcut',...browserChromeFocus,action});}});
@@ -188,6 +197,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   if(!methods.has(method))throw new Error('Invalid bridge request');
   validateRequestPayload(method,params);
   if((switchingProfile||quitting)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
+  if(mediaMethods.includes(method))return media.request(method,params);
   if(method==='app.uiReady'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!uiReady){uiReady=true;clearTimeout(bootTimer);bootstrap?.onReady?.();}return {ready:true,...recoveryStatus};}
   if(method==='app.recoveryStatus'){validate(params,{type:'object',properties:{},additionalProperties:false});return {...recoveryStatus};}
   if(method==='app.restartNormal'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!await confirm('Restart Faber normally? Addons enabled in this profile may run.'))return {restarting:false};app.relaunch({args:process.argv.slice(1).filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true};}
@@ -201,7 +211,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
     switchingProfile=true;
     try{
       const check=async()=>assertProfileSwitchAllowed({draftsCleared:params.draftsCleared,runs:(await runtime.request('state.get')).runs,downloads:(await modelHub.request('models.state')).downloads,voiceBusy:voiceBusy||voiceOperations>0,uiPending:uiReload.pending,updating:(await upgrades.activationStatus()).busy,gatewayActive:(await gateway.request('gateway.status')).activeRequests});
-      await check();await gateway.request('gateway.stop');await check();profiles.select(params.id);
+      await check();await gateway.request('gateway.stop');await check();media.cancel();profiles.select(params.id);
       app.relaunch({args:process.argv.slice(1).filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true,currentId:params.id};
     }catch(error){switchingProfile=false;throw error;}
   }
@@ -253,7 +263,7 @@ if(smoke){
     if(!result.bridge||!result.projects||!result.chats||result.nodeExposed)throw new Error('Smoke bridge check failed');
     await new Promise(resolve=>setTimeout(resolve,500));
     const screenshot=path.join(dataDir,'smoke.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-    const flows=smokeBrowser?await(await import('../test/desktop-browser-smoke.mjs')).runBrowserSmoke({window,runtime,browser,chat,dataDir,sourceDir}):smokeThinking?await(await import('../test/desktop-thinking-smoke.mjs')).runThinkingSmoke({window,runtime,chat,dataDir}):smokeB201?await(await import('../test/desktop-b201-smoke.mjs')).runB201Smoke({window,runtime,chat,dataDir}):smokeB12?await(await import('../test/desktop-b12-smoke.mjs')).runB12Smoke({window,runtime,chat,dataDir,localModels,fixture:localFixture}):smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir,host}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
+    const flows=smokeMedia?await(await import('../test/desktop-media-smoke.mjs')).runMediaSmoke({window,runtime,dataDir,sourceDir,media,remote,host,chat}):smokeBrowser?await(await import('../test/desktop-browser-smoke.mjs')).runBrowserSmoke({window,runtime,browser,chat,dataDir,sourceDir}):smokeThinking?await(await import('../test/desktop-thinking-smoke.mjs')).runThinkingSmoke({window,runtime,chat,dataDir}):smokeB201?await(await import('../test/desktop-b201-smoke.mjs')).runB201Smoke({window,runtime,chat,dataDir}):smokeB12?await(await import('../test/desktop-b12-smoke.mjs')).runB12Smoke({window,runtime,chat,dataDir,localModels,fixture:localFixture}):smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir,host}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
     console.log(JSON.stringify({ok:true,dataDir,screenshot,...result,...flows}));
     app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}

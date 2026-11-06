@@ -1,6 +1,6 @@
-# Installing Faber a2.3
+# Installing Faber a2.4
 
-Run `Faber-Setup-a2.3-x64.exe`. This is a per-user Windows x64 installation with
+Run `Faber-Setup-a2.4-x64.exe`. This is a per-user Windows x64 installation with
 Desktop/Start menu shortcuts and a normal `Faber.exe`; no terminal needs to stay
 open. Electron and the local model runtime are included. Node.js, npm and Ollama
 are not required to use the installed app's managed GGUF path. The compiled Rust
@@ -22,27 +22,27 @@ it after browser sessions are idle. WSL2 must already be available; local chat a
 model controls do not require WSL. The addon can be disabled or uninstalled in Addons. Online addon
 sharing and over-the-air updates are not included.
 
-The a2.3 installer is unsigned. Windows may display an
+The a2.4 installer is unsigned. Windows may display an
 unknown-publisher warning.
 Only use the artifact from the trusted project source; signing is not configured.
 
-## a2.3 release identity and workbench
+## a2.4 release identity and workbench
 
-The interface/release name is **a2.3**. The package/app version is `2.3.0` and
-the Windows build version is `2.3.0.0`, ordered above a2.2
-(`2.2.0` / `2.2.0.0`) and the earlier releases.
+The interface/release name is **a2.4**. The package/app version is `2.4.0` and
+the Windows build version is `2.4.0.0`, ordered above a2.3
+(`2.3.0` / `2.3.0.0`) and the earlier releases.
 Download the current installer from
 [GitHub Releases](https://github.com/youwebaba/Faber/releases). Source/application
 checks and release history are recorded in
 [VERIFICATION.md](VERIFICATION.md); installer checksums and publication records
 accompany the release assets.
 
-a2.3 seeds its own stock workbench at
-`%LOCALAPPDATA%\FaberWorkbench\2.3.0`, including remote images, shared sidebar
-navigation and new-chat permission defaults. Existing
+a2.4 seeds its own stock workbench at
+`%LOCALAPPDATA%\FaberWorkbench\2.4.0`, including local/remote audio and video
+playback, fullscreen video and chat-content copy/save actions. Existing
 workbenches and custom core features remain untouched. Profiles,
 credentials, addons and configured model folders are retained; custom core
-changes are not automatically merged into a2.3. Reinstalling a2.3 preserves
+changes are not automatically merged into a2.4. Reinstalling a2.4 preserves
 its own workbench and any changes made there. Do not delete retained workbenches
 to update. Preparing this release does not itself install it.
 
@@ -50,7 +50,7 @@ Previous full releases remain available for rollback. Close Faber
 before running a previous installer to select its retained workbench.
 Rollback shares existing profile data; retain a profile backup before upgrading.
 
-For full remote-image support, install a2.3 on both PCs. The separate `Faber-Relay-a2.3.zip`
+For remote audio/video support, install a2.4 on both PCs. The separate `Faber-Relay-a2.4.zip`
 operator kit contains only the relay source, locked dependency metadata, operator
 launcher and instructions; Node.js 24+ is required on the relay PC. Extract it,
 run `relay\Start-FaberRelay.ps1`, then pair through Settings. The desktop installer
@@ -74,6 +74,7 @@ local Faber profiles; linked ChatGPT accounts remain provider connections.
 | Profile `boot-state.json` (Alpha 2.0) | Startup/readiness/clean-shutdown journal |
 | Profile `upgrades\<id>\backup` (Alpha 2.0) | Core snapshots; records in `core-backup.json` / `last-core-backup.json` |
 | Profile `chatgpt-credentials.bin` | Host-encrypted ChatGPT account sessions; never include in a bug report |
+| Profile `chat-media` (a2.4) | Private audio/video attachments published to chats |
 | Profile `addons\<id>` | Installed addon source visible in File Explorer |
 | Profile `addon-data\<id>` | Private per-addon data retained by uninstall |
 | Profile `addon-manager` | Approved code hashes and one prior addon version |
@@ -222,7 +223,7 @@ source, minimal Linux root filesystem and certificate bundle identified in
 After deliberately editing a bundled addon's source, review the change and run
 `npm run prepare:addons` to update its shipped approval digest before packaging.
 
-Output is `release\Faber-Setup-a2.3-x64.exe`; the unpacked executable is
+Output is `release\Faber-Setup-a2.4-x64.exe`; the unpacked executable is
 `release\win-unpacked\Faber.exe`. Installer revision, appId and versioned workbench
 semantics are tested separately from deterministic unit fixtures. The optional
 live GPU proof requires an existing model and explicit command-line flags; it is

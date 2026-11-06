@@ -5,6 +5,42 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.4
+
+The final source suite passed **602 tests, zero failures and one optional
+native-input skip (603 total)**. The base Electron smoke passed with an isolated
+profile, the a2.4 label and 88 registered tools. No model-provider requests or
+subscription credits were used.
+
+The dedicated Electron media smoke generated PCM WAV and VP8 WebM fixtures.
+Actual players reached `canplay`, advanced time while playing, sought to a new
+position and retained their nodes through chat refreshes. Video entered and
+exited fullscreen through the real app handlers. Local and remote playback,
+keyboard/right-click menus, offline cleanup and child ownership were checked.
+The remote fixture used a local WebSocket relay with pinned TLS between the
+controller and host. It did not contact a user's paired machine.
+
+Local and remote image/audio/video Save As results matched the original bytes.
+The native chooser was replaced with an isolated test destination; no physical
+dialog input was automated. Electron decoded copied images to matching pixels,
+with clipboard writers intercepted so the user's clipboard remained unchanged.
+Cancellation preserved the existing destination and revocation blocked access.
+
+A separate real-relay fixture saved **68,157,484 bytes** with an exact SHA-256
+match across 262 bounded media reads. Existing relay rate/session limits were
+unchanged; fresh request sessions supported a total transfer above the 64 MiB
+per-session cap. Cleanup left zero rooms, sockets or sessions. The standalone
+relay suite passed 12 tests with one optional hosted check skipped.
+
+Core checks cover source ownership, protected paths, range validation, canceled
+publication, orphan cleanup and chat/project deletion. An actual a2.4 → a2.3 →
+a2.4 runtime round trip preserved the chat attachment and profile edits.
+
+Playback fixtures cover WAV and VP8 WebM. Other accepted containers and codec
+combinations were not individually exercised. Real two-PC/WAN acceptance is
+pending at the user's request. Installer hashes, packaged acceptance, privacy
+and source parity are recorded with the a2.4 release evidence.
+
 ## a2.3
 
 The final source suite passed **584 tests, zero failures and one optional

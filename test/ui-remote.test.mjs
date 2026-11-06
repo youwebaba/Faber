@@ -40,11 +40,16 @@ class Element {
   replaceChildren(...nodes) { for (const node of this.children) node.parentElement = null; this.children = []; this._text = ''; this.append(...nodes); }
   insertBefore(node, before) { node.remove(); node.parentElement = this; const at = this.children.indexOf(before); if (at < 0) this.children.push(node); else this.children.splice(at, 0, node); }
   remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(node => node !== this); this.parentElement = null; }
+  replaceWith(node) { const parent = this.parentElement; if (parent) { parent.insertBefore(node, this); this.remove(); } }
   get childNodes() { return this.children; } get firstChild() { return this.children[0]; } get lastChild() { return this.children.at(-1); }
   get nextSibling() { return this.parentElement?.children[this.parentElement.children.indexOf(this) + 1] || null; }
   get textContent() { return this._text + this.children.map(node => node.textContent).join(''); } set textContent(value) { this.children = []; this._text = String(value); }
   set innerHTML(_value) { throw new Error('Untrusted remote text reached HTML'); }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name]; }
+  removeAttribute(name) { delete this.attributes[name]; if (name === 'src') delete this.src; }
+  pause() { this.paused = true; this.pauseCalls = (this.pauseCalls || 0) + 1; }
+  load() { this.loadCalls = (this.loadCalls || 0) + 1; }
   addEventListener(name, callback) { this.events[name] = callback; }
   contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   querySelectorAll(selector) { return this.children.flatMap(node => [node, ...node.querySelectorAll('*')]).filter(node => selector === '*' || selector.startsWith('#') ? selector === '*' || node.id === selector.slice(1) : selector.startsWith('.') ? node.classList.contains(selector.slice(1)) : node.tagName === selector.toUpperCase()); }
@@ -54,7 +59,7 @@ class Element {
 }
 const flush = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve => setImmediate(resolve)); };
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF9sAAAAASUVORK5CYII=';
-function fixture({ imageReferences = false, sendGate, imageGate, imageFailure } = {}) {
+function fixture({ imageReferences = false, mediaReferences = false, contentMenu, sendGate, imageGate, imageFailure } = {}) {
   const document = { activeElement: null, createElement(tag) { return new Element(tag, this); }, createTextNode(text) { const node = this.createElement('text'); node.textContent = text; return node; }, querySelector(selector) { return this.body.querySelector(selector); } };
   document.body = document.createElement('body'); const local = document.createElement('div'); local.className = 'shell'; const sidebar = document.createElement('aside'); sidebar.id = 'sidebar'; const navigation = document.createElement('nav'); navigation.id = 'project-list'; sidebar.append(navigation); const workspacePane = document.createElement('main'); workspacePane.className = 'workspace'; const localPrompt = document.createElement('textarea'); localPrompt.id = 'prompt'; localPrompt.value = 'Keep my local draft'; workspacePane.append(localPrompt); local.append(sidebar, workspacePane); document.body.append(local);
   const el = (tag, cls, text) => { const node = document.createElement(tag); node.className = cls || ''; if (text !== undefined) node.textContent = text; return node; };
@@ -62,14 +67,15 @@ function fixture({ imageReferences = false, sendGate, imageGate, imageFailure } 
   const projects = [{ id: 'p', name: '<img onerror=x>', archived: false }, { id: 'old', name: 'Archived project', archived: true }];
   const chats = [{ id: 'c', projectId: 'p', title: 'Parent' }, { id: 'child', projectId: 'p', title: 'Agent', parentChatId: 'c' }, { id: 'archived', projectId: 'old', title: 'Old chat', archived: true }];
   const messages = [{ id: 'm', role: 'assistant', content: '**Remote response** <script>literal</script>' }];
-  const request = async (method, params) => { calls.push({ method, params }); assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return { projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory', ...(imageReferences ? { capabilities: { imageReferences: true } } : {}) };
-    if (params.method === 'chat.read') return params.params.since ? { unchanged: true, revision: 'chat' } : { chat: { ...chats.find(chat => chat.id === params.params.chatId), messages }, runs: [], approvals: [], streams: [], before: null, revision: 'chat' };
+  const runs = [];
+  const request = async (method, params) => { calls.push({ method, params }); if (method === 'media.release') return { released: true }; assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return { projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory', ...(imageReferences || mediaReferences ? { capabilities: { imageReferences, mediaReferences } } : {}) };
+    if (params.method === 'chat.read') return params.params.since ? { unchanged: true, revision: 'chat' } : { chat: { ...chats.find(chat => chat.id === params.params.chatId), messages }, runs, approvals: [], streams: [], before: null, revision: 'chat' };
     if (params.method === 'chat.image') { if (imageGate) await imageGate; if (imageFailure?.value) throw new Error('Synthetic image read failed'); return { imageId: params.params.imageId, image }; }
     if (params.method === 'chat.send') { if (sendGate) await sendGate; messages.push({ id: 'sent', role: 'user', content: params.params.text }); return { runId: 'r' }; } return {};
   };
-  const workspace = createRemoteWorkspace({ request, subscribe: callback => { listener = callback; }, el, document, getDevices: () => devices, showConnections() {} });
+  const workspace = createRemoteWorkspace({ request, subscribe: callback => { listener = callback; }, el, document, contentMenu, getDevices: () => devices, showConnections() {} });
   workspace.updateDevices();
-  return { workspace, document, local, sidebar, localPrompt, calls, devices, chats, messages, emit: event => listener(event), get: id => document.querySelector(`#${id}`), row: (deviceId, chatId) => navigation.querySelectorAll('button').find(node => node.dataset.remoteDeviceId === deviceId && node.dataset.remoteChatId === chatId) };
+  return { workspace, document, local, sidebar, localPrompt, calls, devices, chats, messages, runs, emit: event => listener(event), get: id => document.querySelector(`#${id}`), row: (deviceId, chatId) => navigation.querySelectorAll('button').find(node => node.dataset.remoteDeviceId === deviceId && node.dataset.remoteChatId === chatId) };
 }
 
 test('remote workspace paginates, preserves local drafts, isolates events and never sends offline actions locally', async () => {
@@ -86,7 +92,7 @@ test('remote workspace paginates, preserves local drafts, isolates events and ne
     f.workspace.close(); assert.equal(f.local.hidden, false); assert.notEqual(f.local.inert, true); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.row('host', 'c'));
     f.workspace.open('host'); await flush(); assert.equal(prompt.value, 'Keep remote draft'); assert.equal(prompt.disabled, true); assert.ok(f.workspace.refreshReason());
     const beforeClear = f.calls.length; await f.get('remote-clear-draft').events.click(); assert.equal(prompt.value, ''); assert.equal(f.workspace.hasDrafts(), false); assert.equal(f.calls.length, beforeClear); assert.equal(f.localPrompt.value, 'Keep my local draft');
-    assert.ok(f.calls.every(call => call.method === 'remote.request'));
+    assert.ok(f.calls.every(call => ['remote.request', 'media.release'].includes(call.method)));
     assert.ok(f.calls.filter(call => call.params.method === 'chat.read').every(call => !Object.hasOwn(call.params.params, 'imageMode')));
   } finally { f.workspace.dispose(); globalThis.document = previousDocument; }
 });
@@ -95,6 +101,25 @@ test('host-managed read-only chats keep viewing available and disable mutations 
   const previousDocument = globalThis.document, f = fixture(); globalThis.document = f.document; f.chats[0].readOnly = true;
   try { f.workspace.open('host'); await flush(); await f.get('remote-projects').querySelectorAll('button').find(node => node.dataset.remoteChatId === 'c').events.click(); await flush(); assert.ok(f.get('remote-transcript').textContent.includes('Remote response')); assert.equal(f.get('remote-prompt').disabled, true); assert.equal(f.get('remote-send').disabled, true); assert.equal(f.get('remote-choose-model').disabled, true); assert.equal(f.get('remote-new-chat').disabled, false); }
   finally { f.workspace.dispose(); globalThis.document = previousDocument; }
+});
+
+test('negotiated host media keeps native players stable, binds child ownership, and releases sources offline', async () => {
+  const previousDocument = globalThis.document, contexts = [], f = fixture({ mediaReferences: true, contentMenu: { bind: (_node, context) => contexts.push(context), close() {} } }); globalThis.document = f.document;
+  const audio = { id: '11111111-1111-4111-8111-111111111111', kind: 'audio', mimeType: 'audio/wav', bytes: 16044, name: 'sample.wav' }, video = { ...audio, id: '22222222-2222-4222-8222-222222222222', kind: 'video', mimeType: 'video/webm', name: 'sample.webm' };
+  f.messages[0].mediaRefs = [audio];
+  f.runs.push({ id: 'parent-run', chatId: 'c', status: 'completed', toolEvents: [] }, { id: 'child-run', chatId: 'child', parentRunId: 'parent-run', status: 'completed', toolEvents: [{ id: 'child-media', name: 'media_show', status: 'completed', mediaRefs: [video] }] });
+  try {
+    f.workspace.open('host'); await flush(); await f.row('host', 'c').events.click(); await flush();
+    assert.ok(f.calls.filter(call => call.params.method === 'chat.read').every(call => call.params.params.mediaMode === 'references' && !Object.hasOwn(call.params.params, 'imageMode')));
+    const transcript = f.get('remote-transcript'), player = transcript.querySelector('audio'), child = transcript.querySelector('video'); assert.ok(player, f.get('remote-notice').textContent); assert.ok(child);
+    assert.equal(player.src, `faber://app/media/c/${audio.id}?deviceId=host`); assert.equal(child.src, `faber://app/media/child/${video.id}?deviceId=host`); assert.ok(contexts.some(context => context.chatId === 'child' && context.deviceId === 'host' && context.mediaId === video.id));
+    player.currentTime = 0.4; player.paused = false; player.volume = 0.25;
+    f.emit({ type: 'remoteWorkspace', deviceId: 'host', event: { type: 'delta', streamSequence: 1, sequence: 1, runId: 'parent-run', chatId: 'c', text: 'Fixture update' } });
+    assert.equal(transcript.querySelector('audio'), player); assert.equal(player.currentTime, 0.4); assert.equal(player.paused, false); assert.equal(player.volume, 0.25);
+    f.devices[0].online = false; f.workspace.updateDevices(); assert.equal(player.paused, true); assert.equal(player.src, undefined); assert.ok(transcript.textContent.includes('Connect to the host to play this media.'));
+    assert.ok(f.calls.some(call => call.method === 'media.release' && call.params.chatId === 'child' && call.params.deviceId === 'host'));
+    assert.ok(f.calls.some(call => call.method === 'media.release' && call.params.chatId === 'c' && call.params.deviceId === 'host'));
+  } finally { f.workspace.dispose(); globalThis.document = previousDocument; }
 });
 
 test('every paired host stays in main navigation with qualified routes, offline rows, accessible details and separate drafts', async () => {
@@ -131,7 +156,7 @@ test('remote image-only drafts stay with their originating host when the file pi
     assert.equal(f.get('remote-image-drafts').hidden, true); await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-image-drafts').querySelector('img')?.src, image); assert.equal(f.get('remote-send').disabled, false);
     f.get('remote-composer').events.submit({ preventDefault() {} }); await flush(); await f.row('other', 'c').events.click(); await flush(); const prompt = f.get('remote-prompt'); prompt.value = 'A newer draft on the second host'; prompt.events.input(); gate.resolve(); await flush();
     const sent = f.calls.find(call => call.params.method === 'chat.send'); assert.equal(sent.params.deviceId, 'host'); assert.deepEqual(sent.params.params, { chatId: 'c', text: '', images: [image] }); assert.equal(prompt.value, 'A newer draft on the second host');
-    await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-image-drafts').hidden, true); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.calls.every(call => call.method === 'remote.request'));
+    await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-image-drafts').hidden, true); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.calls.every(call => ['remote.request', 'media.release'].includes(call.method)));
   } finally { gate.resolve(); f.workspace.dispose(); globalThis.document = previousDocument; globalThis.FileReader = previousReader; }
 });
 

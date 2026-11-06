@@ -6,8 +6,9 @@ import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createRunActivity } from './run-activity.mjs';
 import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
+import { createMediaOutputs, resultMedia } from './content-media.mjs';
 
-export function createRemoteWorkspace({ request, subscribe, el, getDevices, showConnections, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
+export function createRemoteWorkspace({ request, subscribe, el, getDevices, showConnections, contentMenu, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
   const button = (label, callback, className = 'button') => { const node = el('button', className, label); node.type = 'button'; node.addEventListener('click', async () => { node.disabled = true; try { await callback(); } catch (error) { setError(error); } finally { node.disabled = false; renderStatus(); renderApprovals(); } }); return node; };
   const root = el('section', 'remote-workspace'); root.id = 'remote-workspace'; root.hidden = true; root.setAttribute('aria-label', 'Remote workspace');
   const header = el('header', 'remote-header'), hostLabel = el('strong'), hostSelect = el('select'); hostSelect.id = 'remote-host'; hostSelect.setAttribute('aria-label', 'Workspace device');
@@ -55,8 +56,10 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const saveDraft = () => { if (deviceId) drafts.set(key(), prompt.value); };
   const rememberDetail = () => { details.delete(key()); details.set(key(), selectedDetail); while (details.size > 8) details.delete(details.keys().next().value); };
   const hasDrafts = () => [...drafts.values()].some(value => value.length > 0) || prompt.value.length > 0 || Boolean(pickerKey) || attachments.hasPending() || attachments.snapshot().some(entry => entry.attachments.length);
+  const mediaOutputs = createMediaOutputs({ request, contentMenu, document });
+  function bindContent(node, context) { const owner = { ...context, deviceId }; mediaOutputs.track(owner); contentMenu?.bind(node, owner); }
   const appendResult = (parent, value, image) => { parent.append(el('pre', 'result-content', displayText(value))); const images = renderOutputImages([image, value?.image], { document }); if (images.childNodes.length) parent.append(images); };
-  const activity = createRunActivity({ el, button, appendResult, selectChat: id => selectChat(id), resolveApproval });
+  const activity = createRunActivity({ el, button, appendResult, bindContent, selectChat: id => selectChat(id), resolveApproval });
   function resolveApproval(id, allow) { const approval = state.approvals.find(item => item.id === id); if (!approval) throw new Error('This host approval is no longer pending.'); return mutate('approval.resolve', { id, chatId: approval.chatId, allow }); }
 
   async function rpc(method, params = {}, target = deviceId) {
@@ -75,12 +78,13 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     }
   }
   function unloadImage(entry) { if (!entry.node.querySelector('img')) return; const height = entry.node.getBoundingClientRect().height; if (height > 0) entry.node.style.minHeight = `${height}px`; entry.node.textContent = 'Host image'; }
-  function showImage(entry, image) { entry.node.replaceChildren(renderOutputImages([image], { document })); const node = entry.node.querySelector('img'); if (node?.complete) entry.node.style.minHeight = ''; else node?.addEventListener('load', () => { entry.node.style.minHeight = ''; }); }
+  function showImage(entry, image) { entry.node.replaceChildren(renderOutputImages([image], { document })); bindContent(entry.node, { chatId: entry.chatId, imageId: entry.ref.id }); const node = entry.node.querySelector('img'); if (node?.complete) entry.node.style.minHeight = ''; else node?.addEventListener('load', () => { entry.node.style.minHeight = ''; }); }
   function referencedImages(refs, chatId = selectedChatId) {
     const group = el('div', 'message-images');
     for (const ref of refs || []) {
       const cacheKey = JSON.stringify([deviceId, chatId, ref.id]); let entry = imageNodes.get(cacheKey);
       if (!entry) { entry = { node: el('div', 'remote-image-output'), ref, chatId, deviceId, cacheKey, visible: !imageObserver }; entry.node.dataset.imageId = ref.id; entry.node.dataset.imageKey = cacheKey; imageNodes.set(cacheKey, entry); entry.node.textContent = online ? 'Host image' : 'Connect to the host to load this image.'; if (imageCache.get(cacheKey)?.error || imageCache.get(cacheKey)?.evicted) entry.node.append(button('Load host image', () => { imageCache.delete(cacheKey); queueImage(entry); }, 'text-button')); imageObserver?.observe(entry.node); }
+      bindContent(entry.node, { chatId, imageId: ref.id });
       if (entry.visible && !imageCache.has(cacheKey)) queueImage(entry);
       else if (entry.visible && imageCache.get(cacheKey)?.image && !entry.node.querySelector('img')) showImage(entry, imageCache.get(cacheKey).image);
       group.append(entry.node);
@@ -99,7 +103,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
       imageReads++; void fetchImage(job).finally(() => { imageReads--; drainImages(); });
     }
   }
-  function resetImages() { imageObserver?.disconnect(); imageNodes.clear(); imageQueue.length = 0; for (const [key, value] of imageCache) if (value.loading || value.queued) imageCache.delete(key); transcriptIdentity = undefined; }
+  function resetMedia() { mediaOutputs.clear(selectedChatId && deviceId ? { chatId: selectedChatId, deviceId } : undefined); transcriptIdentity = undefined; }
+  function resetImages() { resetMedia(); imageObserver?.disconnect(); imageNodes.clear(); imageQueue.length = 0; for (const [key, value] of imageCache) if (value.loading || value.queued) imageCache.delete(key); }
   async function fetchImage({ entry, token, generation }) {
     const cacheKey = entry.cacheKey;
     imageCache.set(cacheKey, { loading: true }); entry.node.textContent = 'Loading host image…';
@@ -167,12 +172,15 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     const content = el('div', 'message-content'); content.append(renderRichContent(message.content, { document, onOpenLink: url => request('app.openLink', { url }).catch(setError) })); node.append(content);
     const images = renderOutputImages([message.image, ...(message.images || [])], { document }); if (images.childNodes.length) node.append(images);
     if (message.imageRefs?.length) node.append(referencedImages(message.imageRefs));
+    node.append(...mediaOutputs.get(message.mediaRefs?.length ? message.mediaRefs : message.role === 'tool' ? resultMedia(message.content) : [], { chatId: selectedChatId, deviceId }));
+    bindContent(node, { chatId: selectedChatId, text: displayText(message.content) });
     cached = { message, node }; messageNodes.set(message.id, cached); return node;
   }
   function renderTranscript() {
+    mediaOutputs.setAvailable(online);
     for (const [cacheKey, entry] of imageNodes) if (online && entry.visible && entry.deviceId === deviceId && !imageCache.has(cacheKey)) queueImage(entry);
     const identity = `${deviceId}:${selectedChatId || ''}`;
-    if (transcriptIdentity !== identity) { transcriptIdentity = identity; transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); activity.reset(); }
+    if (transcriptIdentity !== identity) { mediaOutputs.clear(); transcriptIdentity = identity; transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); activity.reset(); }
     preserveTranscriptViewport(transcript, () => {
       const nodes = [];
       if (selectedDetail?.id === selectedChatId) {
@@ -180,19 +188,23 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
         for (const row of timeline) {
           if (row.kind === 'activity') {
             nodes.push(activity.get(state, { ...row.activity, approvals: [] }, streams));
-            for (const branch of [{ run: row.activity.run, events: row.activity.events }, ...row.activity.childRuns.map(run => ({ run, events: run.toolEvents || [] }))]) for (const event of branch.events) if (event.imageRefs?.length) nodes.push(referencedImages(event.imageRefs, branch.run.chatId));
+            for (const branch of [{ run: row.activity.run, events: row.activity.events }, ...row.activity.childRuns.map(run => ({ run, events: run.toolEvents || [] }))]) for (const event of branch.events) {
+              if (event.imageRefs?.length) nodes.push(referencedImages(event.imageRefs, branch.run.chatId));
+              nodes.push(...mediaOutputs.get(event.mediaRefs?.length ? event.mediaRefs : resultMedia(event.result), { chatId: branch.run.chatId, deviceId }));
+            }
             continue;
           }
           if (row.kind === 'message') { nodes.push(messageNode(row.message)); continue; }
           let cached = streamNodes.get(row.key);
           if (!cached) { const node = el('article', 'message assistant streaming'); node.dataset.runId = row.run.id; node.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); cached = { node }; streamNodes.set(row.key, cached); }
-          if (cached.text !== row.text) { cached.text = row.text; cached.node.lastChild.replaceChildren(renderRichContent(row.text, { document, onOpenLink: url => request('app.openLink', { url }).catch(setError) }), el('span', 'stream-cursor')); } nodes.push(cached.node);
+          if (cached.text !== row.text) { cached.text = row.text; cached.node.lastChild.replaceChildren(renderRichContent(row.text, { document, onOpenLink: url => request('app.openLink', { url }).catch(setError) }), el('span', 'stream-cursor')); bindContent(cached.node, { chatId: selectedChatId, text: row.text }); } nodes.push(cached.node);
         }
         for (const message of pendingUserMessages(selectedDetail)) nodes.push(messageNode({ ...message, imageRefs: selectedDetail.inbox?.find(item => item.id === message.id)?.imageRefs }));
         const run = latestRun(state, selectedChatId); if (run && !isActive(run) && ['failed', 'interrupted', 'canceled'].includes(run.status)) nodes.push(el('p', 'run-note', run.error || `Run ${statusLabel(run.status).toLowerCase()}.`));
       }
       if (!nodes.length) { const welcome = el('div', 'welcome'); welcome.append(el('h1', '', selectedChatId ? selectedDetail ? 'Start a conversation.' : 'Loading chat…' : 'Your host workspace'), el('p', '', selectedChatId ? 'Messages and tool activity appear here.' : 'Choose a project and chat, or start a new chat on this host.')); nodes.push(welcome); }
       reconcileTranscript(transcript, nodes);
+      mediaOutputs.prune();
     });
   }
   function renderApprovals() {
@@ -219,9 +231,11 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   }
   providerSelect.addEventListener('change', renderModelChoices); modelSelect.addEventListener('change', renderStatus);
   function acceptStreams(value) { if (Number.isSafeInteger(value.streamSequence)) streamVersion = mergeRuntimeStreams(streams, value, streamVersion); else if (Array.isArray(value.streams)) { streams.clear(); for (const stream of value.streams) streams.set(stream.runId, stream); } }
+  function referenceModes() { const capabilities = directories.get(deviceId)?.capabilities; return { ...(capabilities?.imageReferences ? { imageMode: 'references' } : {}), ...(capabilities?.mediaReferences ? { mediaMode: 'references' } : {}) }; }
+  function disconnect(error) { online = connecting = false; resetMedia(); mediaOutputs.setAvailable(false); setError(error); renderStatus(); renderTranscript(); }
   async function readChat(token = session, wait = false) {
     const chatId = selectedChatId, sequence = ++readSequence; if (!chatId || !online) return;
-    const response = await rpc('chat.read', { chatId, limit: 30, ...(directories.get(deviceId)?.capabilities?.imageReferences ? { imageMode: 'references' } : {}), ...(wait && chatRevision ? { since: chatRevision, waitMs: 12000 } : {}) });
+    const response = await rpc('chat.read', { chatId, limit: 30, ...referenceModes(), ...(wait && chatRevision ? { since: chatRevision, waitMs: 12000 } : {}) });
     if (token !== session || chatId !== selectedChatId || sequence !== readSequence) return;
     if (response?.unchanged === true) return;
     if (response?.liveOnly === true) { if (selectedDetail?.id !== chatId) throw new Error('Reload this host chat before accepting live updates.'); const live = remoteLive(response, chatId); chatRevision = live.revision; acceptStreams(live); renderTranscript(); return; }
@@ -235,7 +249,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (!olderToken || loadingOlder || !online) return;
     const token = session, chatId = selectedChatId, before = olderToken; loadingOlder = true; renderStatus();
     try {
-      const value = remoteChat(await rpc('chat.read', { chatId, before, limit: 50, ...(directories.get(deviceId)?.capabilities?.imageReferences ? { imageMode: 'references' } : {}) }), chatId);
+      const value = remoteChat(await rpc('chat.read', { chatId, before, limit: 50, ...referenceModes() }), chatId);
       if (token !== session || chatId !== selectedChatId || before !== olderToken) return;
       const ids = new Set(selectedDetail.messages.map(message => message.id)); selectedDetail = { ...selectedDetail, messages: [...value.chat.messages.filter(message => !ids.has(message.id)), ...selectedDetail.messages] };
       olderToken = value.before; rememberDetail(); state.chats = state.chats.map(chat => chat.id === chatId ? { ...chat, messages: selectedDetail.messages } : chat); renderTranscript();
@@ -246,7 +260,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (!getDevices().some(device => device.id === id && (device.online || force))) return directories.get(id);
     const task = (async () => {
       const cached = directories.get(id), response = await request('remote.request', { deviceId: id, method: 'workspace.list', params: { limit: 200, ...(cached?.revision ? { since: cached.revision } : {}) } });
-      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true } } : {}), error: '' }; directories.set(id, value); return value; }
+      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true, mediaReferences: response.capabilities.mediaReferences === true } } : {}), error: '' }; directories.set(id, value); return value; }
       const value = remoteWorkspace(response), projects = new Map(value.projects.map(project => [project.id, project])), chats = new Map(value.chats.map(chat => [chat.id, chat])); let offset = value.nextOffset;
       const offsets = new Set();
       while (offset !== null && offset !== undefined) {
@@ -283,13 +297,13 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (root.hidden || polling) return;
     const token = session;
     const task = reload(token, false); polling = task;
-    try { await task; if (token === session) { lastError = ''; renderStatus(); } } catch (error) { if (token === session) { online = connecting = false; setError(error); renderStatus(); } }
+    try { await task; if (token === session) { lastError = ''; renderStatus(); } } catch (error) { if (token === session) disconnect(error); }
     finally { if (polling === task) polling = undefined; if (!root.hidden && token === session) timer = setTimeout(poll, 8000); }
   }
   async function pollChat(token = session, generation = chatGeneration) {
     if (root.hidden || token !== session || generation !== chatGeneration || !online || !selectedChatId) return;
     try { await readChat(token, true); }
-    catch (error) { if (token === session && generation === chatGeneration) { online = connecting = false; setError(error); renderStatus(); } }
+    catch (error) { if (token === session && generation === chatGeneration) disconnect(error); }
     finally { if (!root.hidden && token === session && generation === chatGeneration && online) chatTimer = setTimeout(() => pollChat(token, generation), 300); }
   }
   async function selectChat(chatId, projectId = selectedProjectId) {
@@ -339,7 +353,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   function close() { if (root.hidden) return; saveDraft(); clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; ++readSequence; resetImages(); pending = false; selections.set(deviceId, { selectedChatId, selectedProjectId }); root.hidden = true; document.body.classList.remove('remote-open'); renderNavigation(); returnFocus?.focus(); returnFocus = undefined; onChange(); }
   function updateDevices() {
     void syncDirectories(); renderNavigation(); if (root.hidden) return; if (!currentDevice()) { close(); return; } if (connecting) return;
-    const wasOnline = online; online = currentDevice()?.online === true; if (wasOnline && !online) { clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; pending = false; } renderStatus(); renderApprovals(); if (!wasOnline && online) { clearTimeout(timer); clearTimeout(chatTimer); void poll(); void pollChat(); }
+    const wasOnline = online; online = currentDevice()?.online === true; if (wasOnline && !online) { clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; pending = false; resetMedia(); renderTranscript(); } renderStatus(); renderApprovals(); if (!wasOnline && online) { clearTimeout(timer); clearTimeout(chatTimer); void poll(); void pollChat(); }
   }
   subscribe?.(envelope => {
     const event = remoteEvent(envelope, deviceId); if (!event || root.hidden || !online) return;

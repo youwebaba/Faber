@@ -1,6 +1,6 @@
 # Remote sessions
 
-Install Faber a2.3 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
+Install Faber a2.4 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
 
 ## Pair the laptop
 
@@ -26,9 +26,17 @@ arbitrary host files or automatically fetch image URLs. Both PCs should run
 a2.3 for this image flow. Older hosts remain viewable with their existing image
 behavior.
 
+## Audio and video in a2.4
+
+Remote chats can play published audio and video with controls, seeking and
+fullscreen video. Right-click displayed content to copy text or images and save
+media on the controlling PC. Both PCs need a2.4 for this media flow. Playback
+and saving use bounded transfers through the paired connection; the host must
+remain connected. See [Chat media](MEDIA.md) for formats and limits.
+
 ## Run the proof-of-concept relay on a Windows PC
 
-Download the relay kit from the [a2.3 release](https://github.com/youwebaba/Faber/releases/tag/a2.3) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
+Download the relay kit from the [a2.4 release](https://github.com/youwebaba/Faber/releases/tag/a2.4) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
 
 ```powershell
 .\Start-FaberRelay.ps1

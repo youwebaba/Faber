@@ -1,19 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validate } from './registry.mjs';
 import { imageBytesLimit, validateChatImages } from './images.mjs';
+import { mediaChunkLimit, mediaIdSchema, sourceMediaRefs } from './media.mjs';
 
 const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const chatRef = object({ chatId: id });
-const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true };
+const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true };
 const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
   'workspace.ping': object({}), 'workspace.models': object({}),
   'chat.selectModel': object({ chatId:id, providerId:id, model:{type:'string',minLength:1,maxLength:300} }),
   'workspace.list': object({ since: id, offset: bounded(0, 10000000), limit: bounded(1, 500) }, []),
-  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000), imageMode }, ['chatId']),
+  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000), imageMode, mediaMode: imageMode }, ['chatId']),
   'chat.image': object({ chatId: id, imageId: { type: 'string', minLength: 1, maxLength: 2048 } }),
+  'chat.media': object({ chatId: id, mediaId: mediaIdSchema, offset: bounded(0, 536870912), length: bounded(0, mediaChunkLimit) }),
   'chat.send': object({ chatId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','text']),
   'chat.create': object({ projectId: id, title: { type: 'string', maxLength: 200 } }, ['projectId']),
   'chat.stop': chatRef, 'chat.forceStop': chatRef, 'chat.compact': chatRef,
@@ -74,24 +76,28 @@ function imageRefs(chatId, kind, source, images) {
   return images.map((image,index) => ({ id: imageId(chatId,kind,source.id,index,image), mimeType: image.slice(5,image.indexOf(';')),
     bytes: (image.length - image.indexOf(',') - 1) / 4 * 3 - (image.endsWith('==') ? 2 : image.endsWith('=') ? 1 : 0) }));
 }
-function visibleMessage(message, chatId, references) {
+function visibleMessage(message, chatId, references, mediaReferences) {
   const images = sourceImages(message,'m',references);
-  if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && images.length)) || (!message.content && !images.length && !message.toolCalls?.length)) return null;
+  const mediaRefs = mediaReferences ? sourceMediaRefs(message) : [];
+  if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && (images.length || mediaRefs.length))) || (!message.content && !images.length && !mediaRefs.length && !message.toolCalls?.length)) return null;
   let text = message.role === 'tool' ? '' : String(message.content ?? '');
   if (references && message.role === 'assistant' && text.length <= 200000) text = text.replace(inlineImage, (raw,image) => images.includes(image) ? '[Image output below]' : raw);
   const row = { ...pick(message, ['id','role','createdAt','status','runId','sourceMessageId','modelCallId','toolName','toolCallId','fromChatId','steering']),
     content: text.length > 500000 ? text.slice(0,500000) + '\n[Open on the host to read the rest of this message.]' : text };
   if (message.toolCalls?.length) row.toolCalls = message.toolCalls.slice(0,64).map(call=>pick(call,['id','name']));
   if (images.length) Object.assign(row,references ? {imageRefs:imageRefs(chatId,'m',message,images)} : {images});
+  if (mediaRefs.length) row.mediaRefs = mediaRefs;
   return row;
 }
-function runRow(run, references, budget) {
+function runRow(run, references, budget, mediaReferences) {
   return { ...pick(run, ['id','chatId','status','startedAt','endedAt','requestMessageId','parentRunId','contextOverflow']), error: String(run.error ?? '').slice(0,2000),
     modelCalls: (run.modelCalls || []).slice(-64).map(call=>pick(call,['id','status','phase','progressSummary'])),
     toolEvents: run.toolEvents.slice(-64).map(event => {
       const row = { ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
         summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) };
       const images = sourceImages(event,'e');
+      const mediaRefs = mediaReferences ? sourceMediaRefs(event) : [];
+      if (mediaRefs.length) row.mediaRefs = mediaRefs;
       if (images.length && references) row.imageRefs = imageRefs(run.chatId,'e',event,images);
       else if (images[0]?.length <= budget.remaining) { row.image = images[0]; budget.remaining -= images[0].length; }
       return row;
@@ -99,7 +105,7 @@ function runRow(run, references, budget) {
 }
 
 // Only the desktop device transport receives this dispatcher. Never expose the general runtime RPC here.
-export function createRemoteWorkspace({ current, request, modelDisplayName }) {
+export function createRemoteWorkspace({ current, request, readMedia, modelDisplayName }) {
   const epoch = randomUUID(), waiters = new Set(), mutations = new Map();
   let closed = false;
   function revision(view, family) {
@@ -152,7 +158,7 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
     return {imageId:requestedId,image};
   }
   async function transcript(args, signal) {
-    const {chatId, since, before, limit = 30, waitMs = 0, imageMode} = args, references = imageMode === 'references';
+    const {chatId, since, before, limit = 30, waitMs = 0, imageMode, mediaMode} = args, references = imageMode === 'references', mediaReferences = mediaMode === 'references';
     let view = current(), family = chatFamily(view.state.chats,chatId), token = revision(view,family);
     findChat(view.state,chatId);
     if (!before && since === token && waitMs) { await wait(family,waitMs,signal); view = current(); family = chatFamily(view.state.chats,chatId); token = revision(view,family); }
@@ -166,7 +172,7 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
     const messages = []; let bytes = 0;
     while (cursor > 0 && messages.length < limit) {
       const message = source[cursor-1];
-      const row = visibleMessage(message,chatId,references);
+      const row = visibleMessage(message,chatId,references,mediaReferences);
       if (!row) { cursor--; continue; }
       const size = Buffer.byteLength(JSON.stringify(row));
       if (messages.length && bytes + size > transcriptBytesLimit) break;
@@ -181,7 +187,7 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
       return row;
     });
     return { chat: { ...chatRow(chat,state.providers,modelDisplayName), messages, inbox }, before: cursor ? messages[0]?.id ?? null : null, revision: token,
-      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(run => runRow(run,references,budget)),
+      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(run => runRow(run,references,budget,mediaReferences)),
       streams: live,
       approvals: state.approvals.filter(row => family.has(row.chatId)).map(row => pick(row,['id','kind','chatId','runId','permission','toolName','summary'])) };
   }
@@ -213,6 +219,7 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
     if (method === 'workspace.list') return directory(current(),params);
     if (method === 'chat.read') return transcript(params,signal);
     if (method === 'chat.image') return readImage(params);
+    if (method === 'chat.media') { if (!readMedia) throw new Error('Chat media is unavailable'); return readMedia(params,signal); }
     if (!device?.id || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('A device request ID is required');
     const key = device.id + '/' + requestId, hash = createHash('sha256').update(JSON.stringify([method,params])).digest('hex');
     const prior = mutations.get(key);
