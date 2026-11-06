@@ -16,7 +16,8 @@ A paired laptop can direct the host's agents using their existing project and to
 Paired-host chats stay in the main sidebar beside local projects. Their blue
 globe identifies them as remote. Hover or focus a chat to see its project and
 device. Switching between local and remote chats keeps their drafts separate.
-Known chats remain listed when a host goes offline.
+Known chats remain listed when a host goes offline during the current app session.
+After restarting Faber, the host must reconnect to load its chat list.
 
 Images that the host displays from attachments or image tools can appear in the
 remote chat, including child-agent image results. Images load through the paired

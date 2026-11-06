@@ -232,7 +232,17 @@ applyZoom((await runtime.request('state.get')).settings.uiScale);
 if(browserStartupError)runtime.emit({type:'error',error:browserStartupError});
 if(chatGPTStartupError)runtime.emit({type:'error',error:chatGPTStartupError});
 if(extensionStartupError)runtime.emit({type:'error',error:`Extensions could not load: ${extensionStartupError}`});
-if(smokeInstalled){try{console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
+if(smokeInstalled){
+  try{
+    const deadline=Date.now()+10000;
+    while(!uiReady){
+      if(startupFailed||quitting)throw new Error('Installed smoke startup was interrupted.');
+      if(Date.now()>=deadline)throw new Error('Installed smoke interface did not become ready within ten seconds.');
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir})));app.quit();
+  }catch(error){console.error(error);await shutdown();app.exit(1);}return;
+}
 if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));window.close();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(smoke){
   try{
