@@ -19,6 +19,13 @@ desktop/tools and UI modules, with the acceptance evidence below.
 | Upgrade tools and features | versioned extension manifest | Add a tool and registered UI action, reject incompatible/broken versions, preserve active version. |
 | Upgrade harness and UI when asked | staged source updater | Constrained paths, source review, validation before apply, stale-source detection, backups/rollback and deliberate restart. |
 | AI adds feature button | declarative UI action registry plus source updates | Real sample action appears and invokes its registered tool; arbitrary layout changes can be staged as renderer source. |
+| Remote chat images (a2.3) | scoped remote dispatcher, paired transport, renderer | User and tool images appear on the controller. Image references stay bound to the requested chat, transfers are bounded, and repeated polls do not resend image bytes. |
+| Shared local/remote sidebar (a2.3) | remote directory cache and main navigation | All directory pages and multiple hosts remain reachable beside local chats. Device-qualified selection, blue globe details, offline state and separate drafts survive switching. |
+| Account button sizing and state (a2.3) | ChatGPT renderer controls | Continue matches account-action dimensions while disconnected and is absent after connection. Add another account remains available. |
+| Compact local model selection (a2.3) | local model picker | Long download paths and revision hashes do not expand the dropdown across the window. Stable model IDs and complete details remain available. |
+| Native project folder picker (a2.3) | project forms and host chooseDirectory | New project and move-to-new-project omit manual paths and invoke the native folder selector. Cancel makes no project or move. |
+| Project/chat indentation (a2.3) | local and remote sidebar | Chats indent beneath projects and child agents remain beneath their parent. |
+| New-chat permission defaults (a2.3) | settings schema, chat creation, preferences | Defaults persist and affect only future user-created chats. Existing chats, child inheritance and external session authority are preserved. Model tools cannot alter permission defaults. |
 
 This first implementation is a developer application. Focused checks establish
 specific behavior, not general autonomous reliability, a security certification,

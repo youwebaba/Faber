@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isLocalOllama, localChoices, localSelection } from '../renderer/local-picker.mjs';
+import { isLocalOllama, localChoices, localSelection, localModelLabel } from '../renderer/local-picker.mjs';
 
 const provider = { id: 'ollama', kind: 'ollama', baseUrl: 'http://127.0.0.1:11434' };
 const download = { id: 'folder-model', label: 'Model Q4_K_M', available: true, format: 'gguf', sizeBytes: 1024, files: ['Model.gguf'] };
@@ -12,8 +12,21 @@ test('local controls apply to loopback Ollama; remote and API connections keep t
 test('download and installed choices stay distinct; incomplete files are disabled with their reason', () => {
   const choices = localChoices({ models: [download, { ...download, id: 'partial', available: false, reason: 'Missing shard 2' }], installed: [{ id: 'folder-model', label: 'Existing Ollama model' }], ollama: { online: true } }, provider);
   assert.equal(choices[0].group, 'Downloads'); assert.equal(choices[2].group, 'Installed in Ollama');
-  assert.notEqual(choices[0].value, choices[2].value); assert.equal(choices[1].disabled, true); assert.match(choices[1].label, /Missing shard 2/);
+  assert.notEqual(choices[0].value, choices[2].value); assert.equal(choices[1].disabled, true); assert.match(choices[1].label, /Unavailable/); assert.equal(choices[1].reason, 'Missing shard 2');
   assert.equal(localSelection({}, choices[1], provider).canStart, false);
+});
+
+test('local picker labels omit repository folders and revision hashes while preserving model, quantization, size and IDs', () => {
+  const revision = '0123456789abcdef0123456789abcdef01234567';
+  const relativePath = `publisher/model/${revision}/weights/Qwen3-8B-Q4_K_M.gguf`;
+  const item = { ...download, label: relativePath, relativePath };
+  const [choice] = localChoices({ models: [item] });
+  assert.equal(choice.label, 'Qwen3-8B-Q4_K_M · 1 KiB'); assert.equal(choice.value, `download:${item.id}`); assert.equal(choice.relativePath, relativePath);
+  assert.equal(localModelLabel({ label: `publisher\\model\\${revision}\\Qwen3-8B-Q4_K_M (2/2 shards)` }), 'Qwen3-8B-Q4_K_M');
+  assert.equal(localModelLabel({ relativePath: `${relativePath.slice(0, -5)}-00001-of-00002.gguf` }), 'Qwen3-8B-Q4_K_M');
+  const long = localModelLabel({ label: `model-${'very-long-name-'.repeat(20)}Q4_K_M.gguf` }); assert.ok(long.length <= 48); assert.match(long, /Q4_K_M$/);
+  const installed = localChoices({ installed: [{ id: 'publisher/model:Q8_0', label: 'publisher/model:Q8_0' }] }, provider)[0];
+  assert.equal(installed.label, 'model:Q8_0'); assert.equal(installed.id, 'publisher/model:Q8_0');
 });
 test('offline configured model is not claimed installed and can still be explicitly started or used', () => {
   const [choice] = localChoices({ ollama: { online: false } }, provider, 'existing:latest');

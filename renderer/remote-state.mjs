@@ -5,10 +5,11 @@ const text = (value, fallback = '') => typeof value === 'string' ? value : fallb
 const id = value => typeof value === 'string' && value.length > 0 && value.length <= 300 && !/[\u0000-\u001f\u007f]/.test(value);
 const list = value => Array.isArray(value) ? value.filter(record) : [];
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOwn(value, key)).map(key => [key, value[key]]));
+const imageRefs = value => list(value).filter(item => typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 2048 && !/[\u0000-\u001f\u007f]/.test(item.id) && ['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType) && Number.isSafeInteger(item.bytes) && item.bytes > 0 && item.bytes <= 8 * 1024 * 1024).map(item => pick(item, ['id', 'mimeType', 'bytes']));
 const runs = value => list(value).filter(item => id(item.id) && id(item.chatId)).map(item => ({
   ...pick(item, ['id', 'chatId', 'startedAt', 'requestMessageId', 'sourceMessageId', 'modelCallId', 'contextOverflow']), parentRunId: id(item.parentRunId) ? item.parentRunId : null, status: text(item.status), error: text(item.error),
   modelCalls: list(item.modelCalls).map(call => ({ ...pick(call, ['id', 'modelCallId', 'sourceMessageId', 'requestMessageId', 'metrics', 'usage']), status: text(call.status), phase: text(call.phase), progressSummary: text(call.progressSummary) })),
-  toolEvents: list(item.toolEvents).filter(event => id(event.id)).map(event => ({ ...pick(event, ['id', 'toolCallId', 'modelCallId', 'sourceMessageId', 'startedAt', 'args', 'result', 'image']), name: text(event.name, 'Tool'), status: text(event.status), summary: text(event.summary), error: text(event.error) })),
+  toolEvents: list(item.toolEvents).filter(event => id(event.id)).map(event => ({ ...pick(event, ['id', 'toolCallId', 'modelCallId', 'sourceMessageId', 'startedAt', 'args', 'result', 'image']), imageRefs: imageRefs(event.imageRefs), name: text(event.name, 'Tool'), status: text(event.status), summary: text(event.summary), error: text(event.error) })),
 }));
 const approvals = value => list(value).filter(item => id(item.id) && id(item.chatId) && id(item.runId)).map(item => ({
   ...pick(item, ['id', 'chatId', 'runId']), permission: text(item.permission, 'tool'), summary: text(item.summary), projectName: text(item.projectName), rememberable: false,
@@ -27,6 +28,7 @@ export function remoteWorkspace(value) {
     parentChatId: id(item.parentChatId) ? item.parentChatId : null, archived: item.archived === true, readOnly: item.readOnly === true,
   }));
   return { projects, chats, runs: runs(value.runs), approvals: approvals(value.approvals), streams: streams(value.streams),
+    capabilities: { imageReferences: value.capabilities?.imageReferences === true },
     ...pick(value, ['streamSequence', 'stateRevision', 'revision', 'nextOffset']) };
 }
 
@@ -35,11 +37,12 @@ export function remoteChat(value, chatId) {
   const source = value.chat;
   const messages = list(source.messages).filter(item => id(item.id) && ['user', 'assistant', 'tool', 'system'].includes(item.role)).map(item => ({
     ...pick(item, ['id', 'role', 'createdAt', 'runId', 'sourceMessageId', 'modelCallId', 'status', 'toolName', 'toolCallId', 'image', 'fromChatId', 'steering']),
+    imageRefs: imageRefs(item.imageRefs),
     images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string') : [], toolCalls: list(item.toolCalls).map(call => ({ ...pick(call, ['id', 'name', 'args']), ...(record(call.function) ? { function: pick(call.function, ['name', 'arguments']) } : {}) })),
     content: typeof item.content === 'string' ? item.content : JSON.stringify(item.content ?? ''),
   }));
   return { chat: { id: chatId, projectId: source.projectId, title: text(source.title, 'Chat'), parentChatId: id(source.parentChatId) ? source.parentChatId : null,
-    archived: source.archived === true, readOnly: source.readOnly === true, messages, inbox: list(source.inbox).filter(item => id(item.id) && item.source === 'user' && typeof item.text === 'string').map(item => ({ ...pick(item, ['id', 'source', 'text', 'createdAt', 'runId']), images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string') : [] })),
+    archived: source.archived === true, readOnly: source.readOnly === true, messages, inbox: list(source.inbox).filter(item => id(item.id) && item.source === 'user' && typeof item.text === 'string').map(item => ({ ...pick(item, ['id', 'source', 'text', 'createdAt', 'runId']), imageRefs: imageRefs(item.imageRefs), images: Array.isArray(item.images) ? item.images.filter(image => typeof image === 'string') : [] })),
     model: text(source.model), modelName: text(source.modelName), providerId: text(source.providerId), providerName: text(source.providerName), status: text(source.status), ...pick(source, ['createdAt']) },
     runs: runs(value.runs), approvals: approvals(value.approvals), streams: streams(value.streams), ...pick(value, ['streamSequence', 'stateRevision', 'revision', 'before']) };
 }

@@ -21,7 +21,7 @@ const $ = selector => document.querySelector(selector);
 const bridge = window.faber;
 let state = { projects: [], chats: [], runs: [], providers: [], tools: [], extensions: [], approvals: [], settings: {} };
 let selectedChatId = readLocal('faber.chat');
-let selectedProjectId = readLocal('faber.project');
+let selectedProjectId = readLocal('faber.project'), navigationVersion = 0;
 let voice = { status: 'off' };
 let sending = false;
 let initialState = true;
@@ -121,6 +121,8 @@ function acceptState(next) {
 function applyTheme(theme) { document.documentElement.dataset.theme = theme === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : theme; }
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => applyTheme(state.settings?.theme || 'system'));
 function selectChat(chatId, projectId = selectedProjectId) {
+  navigationVersion++;
+  remoteConnections.workspace.close();
   navigationMenu.close();
   modelsBrowser.close();
   drafts.set(draftKey(), $('#prompt').value);
@@ -162,7 +164,9 @@ function renderComposerControls() {
   chatControls.setContext(state, metrics, isActive(run));
 }
 function renderNavigation() {
-  const nav = $('#project-list'); nav.replaceChildren();
+  const nav = $('#local-projects'), remoteOpen = remoteConnections.workspace.isOpen();
+  const focused = nav.contains(document.activeElement) ? { chat: document.activeElement.dataset.chatId, project: document.activeElement.dataset.projectId } : null;
+  nav.replaceChildren();
   if (!state.projects.some(project => !project.archived)) nav.append(el('p', 'subtle-empty', 'Add a folder to start your first project.'));
   for (const project of state.projects.filter(project => !project.archived)) {
     const group = el('div', 'project-group');
@@ -171,17 +175,18 @@ function renderNavigation() {
     navigationMenu.bind(heading, 'project', project.id);
     const chats = orderedChatFamilies(state, project.id);
     for (const { chat, depth } of chats) {
-      const link = button('', () => selectChat(chat.id), `chat-nav${chat.id === selectedChatId ? ' selected' : ''}${depth ? ' child' : ''}`);
-      link.style.paddingLeft = `${12 + Math.min(depth, 8) * 15}px`;
+      const link = button('', () => selectChat(chat.id), `chat-nav${!remoteOpen && chat.id === selectedChatId ? ' selected' : ''}${depth ? ' child' : ''}`);
+      link.style.paddingLeft = `${48 + Math.min(depth, 8) * 15}px`;
       link.append(el('span', 'chat-name', `${depth ? '↳ ' : ''}${chat.title}`)); link.title = chat.title;
       navigationMenu.bind(link, 'chat', chat.id);
-      if (chat.id === selectedChatId) link.setAttribute('aria-current', 'page');
+      if (!remoteOpen && chat.id === selectedChatId) link.setAttribute('aria-current', 'page');
       if (isActive(latestRun(state, chat.id))) { const dot = el('span', 'status-dot'); dot.setAttribute('aria-label', 'Running'); link.append(dot); }
       group.append(link);
     }
     if (!chats.length) group.append(button('Start a chat', async () => { selectChat(null, project.id); await newChat(); }, 'chat-nav'));
     nav.append(group);
   }
+  if (focused) [...nav.querySelectorAll('button')].find(node => focused.chat ? node.dataset.chatId === focused.chat : node.dataset.projectId === focused.project)?.focus({ preventScroll: true });
 }
 function renderTranscript() {
   const transcript = $('#transcript');
@@ -347,7 +352,7 @@ function renderVoice() {
 }
 async function newChat() {
   if (!currentProject()) { showProjectForm(); return; }
-  const chat = await request('chat.create', { projectId: currentProject().id }); await refresh(); selectChat(chat.id); return chat;
+  const version = navigationVersion, chat = await request('chat.create', { projectId: currentProject().id }); await refresh(); if (version === navigationVersion && !remoteConnections.workspace.isOpen()) selectChat(chat.id); return chat;
 }
 async function sendText(text, withImages = false) {
   const sourceDraftKey = draftKey(); const attachments = withImages ? [...imageDrafts.get(sourceDraftKey)] : [];
@@ -408,19 +413,25 @@ function showMoveChat(chat, restoreFocus) {
   const choices = state.projects.filter(project => !project.archived && project.id !== chat.projectId).map(project => ({ value: project.id, label: project.name }));
   choices.push({ value: '__new__', label: 'Create a new project…' });
   const project = selectField('Destination project', choices); project.input.id = 'move-project';
-  const details = el('div', 'form-grid'); const name = field('New project name'), path = field('Folder path', '', 'text', 'Leave blank to choose a folder. Existing files will not be moved.'); name.input.id = 'move-project-name'; path.input.id = 'move-project-path'; details.append(name.wrapper, path.wrapper);
+  const details = el('div', 'form-grid'), name = field('New project name'); name.input.id = 'move-project-name'; details.append(name.wrapper, el('p', 'hint', 'Choose the project folder in the Windows folder picker when you move this chat. Existing files will not be moved.'));
   const update = () => { details.hidden = project.input.value !== '__new__'; }; project.input.addEventListener('change', update); update(); body.append(project.wrapper, details);
   const move = button('Move chat', async () => {
     if (!state.chats.some(item => item.id === targetId)) throw new Error('This chat is no longer available.');
     let projectId = project.input.value;
-    if (projectId === '__new__') { const created = await request('project.create', { name: name.input.value.trim() || 'Untitled project', ...(path.input.value.trim() ? { path: path.input.value.trim() } : {}) }); if (!created) return; projectId = created.id; }
+    if (projectId === '__new__') { const created = await chooseProject(name.input.value); if (!created) return; projectId = created.id; }
     await request('chat.move', { chatId: targetId, projectId }); await refresh(); if (selectedChatId === targetId) selectedProjectId = projectId; closeModal(); notify('Chat moved to the selected project.');
   }, 'button primary'); move.id = 'confirm-move-chat'; body.append(actions(button('Cancel', closeModal), move)); project.input.focus();
 }
 function showProjectForm() {
   const body = modal('Add a project'); body.append(el('p', 'hint', 'Select a folder for this project. Your chat history stays in Faber’s private local data folder.'));
-  const name = field('Project name', '', 'text'); const path = field('Folder path', '', 'text', 'Leave blank to choose a folder in the system picker.'); const form = el('div', 'form-grid'); form.append(name.wrapper, path.wrapper); body.append(form);
-  body.append(actions(button('Cancel', closeModal), button('Add project', async () => { const project = await request('project.create', { name: name.input.value.trim() || 'Untitled project', ...(path.input.value.trim() ? { path: path.input.value.trim() } : {}) }); if (!project) return; await refresh(); selectChat(null, project.id); closeModal(); await newChat(); }, 'button primary'))); name.input.focus();
+  const name = field('Project name', '', 'text'); body.append(name.wrapper);
+  body.append(actions(button('Cancel', closeModal), button('Choose folder & add project', async () => { const project = await chooseProject(name.input.value); if (!project) return; await refresh(); selectChat(null, project.id); closeModal(); await newChat(); }, 'button primary'))); name.input.focus();
+}
+async function chooseProject(name) {
+  pendingPicker = true;
+  try { return await request('project.create', { name: name.trim() || 'Untitled project' }); }
+  catch (error) { if (/(?:^|: )No project directory selected$/.test(error.message)) return null; throw error; }
+  finally { pendingPicker = false; scheduleUIRefresh(); }
 }
 function showRename(kind, entity) {
   const body = modal(`Rename ${kind}`); const name = field('Name', kind === 'chat' ? entity.title : entity.name); body.append(name.wrapper);
@@ -597,6 +608,7 @@ async function initializeInterface() {
     document.documentElement.dataset.uiReady = 'true'; scheduleUIRefresh(); void refreshModelLabels();
     void browserPanel.load();
     void chatgptControls.load().catch(error => notify(`ChatGPT connection status: ${error.message}`, true));
+    void remoteConnections.load().catch(error => notify(`Remote connections: ${error.message}`, true));
   } catch (error) {
     bootstrapping = false; freezeInterface(false); document.documentElement.dataset.uiReady = 'error';
     notify(`Interface recovery could not finish: ${interfaceError(error)}. Any pending recovery snapshot remains in host memory.`, true);
@@ -611,14 +623,14 @@ const browserPanel = createBrowserPanel({ request, subscribe: bridge?.subscribe,
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings: () => showSettings('models') });
 const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings: () => showSettings('connections'), createPromptChoice: () => preferences.createPromptChoice(), mountOpenAI: body => chatgptControls.mount(body) });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
-const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, showConnections: () => showSettings('connections'), suspendLocal: () => { browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: scheduleUIRefresh });
+const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, showConnections: () => showSettings('connections'), suspendLocal: () => { browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: () => { renderNavigation(); scheduleUIRefresh(); } });
 const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => remoteConnections.hasDrafts() || hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
 const preferences = createPreferences({ workspaceControls, remoteConnections, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
 const chatgptControls = createChatGPTControls({ request, refresh, getChat: currentChat, getState: () => state, newChat, closeModal, el, button, field, selectField, actions, createPromptChoice: () => preferences.createPromptChoice(), notify });
 $('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
 $('#open-connections').addEventListener('click', () => showSettings('connections'));
 $('#open-models').addEventListener('click', () => act(() => modelsBrowser.open()));
-$('#new-chat').addEventListener('click', () => act(newChat));
+$('#new-chat').addEventListener('click', () => act(() => remoteConnections.workspace.isOpen() ? remoteConnections.workspace.newChat() : newChat()));
 $('#add-project').addEventListener('click', showProjectForm);
 $('#open-settings').addEventListener('click', () => showSettings());
 $('#report-notice').addEventListener('click', () => act(preferences.showBugReport));
@@ -662,7 +674,7 @@ $('#collapse-sidebar').addEventListener('click', () => { document.body.classList
 $('#show-sidebar').addEventListener('click', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); });
 function toggleActivity(force) { const rail = $('#activity-rail'); const open = force ?? (matchMedia('(max-width: 1000px)').matches ? !document.body.classList.contains('activity-open') : rail.hidden); rail.hidden = !open; document.body.classList.toggle('activity-open', open); $('#toggle-activity').setAttribute('aria-expanded', String(open)); }
 $('#toggle-activity').addEventListener('click', () => { if (document.body.classList.contains('browser-open')) { browserPanel.show(false); toggleActivity(true); } else toggleActivity(); }); $('#close-activity').addEventListener('click', () => toggleActivity(false));
-document.addEventListener('keydown', event => { if (remoteConnections.workspace.isOpen()) return; if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(newChat); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n' && !$('#modal').open) { event.preventDefault(); act(() => remoteConnections.workspace.isOpen() ? remoteConnections.workspace.newChat() : newChat()); } if (event.key === 'Escape') document.body.classList.remove('sidebar-open', 'activity-open'); });
 function handleBridgeEvent(event) {
     if (event.type === 'openSettings') { showSettings(); return; }
     if (event.type === 'chatgpt') { chatgptControls.accept(event); return; }

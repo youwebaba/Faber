@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.2 (application version 2.2.0), including
+This contract describes Faber a2.3 (application version 2.3.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -15,6 +15,14 @@ assets, and earlier chronological evidence remains separate.
 ## Remote desktop sessions
 
 The desktop owns pairing, encrypted device credentials, revocation and the outbound relay. The core exposes a scoped workspace dispatcher for a paired user. Agent tools and external API clients have no pairing or grant-management methods. See [Remote sessions](REMOTE.md).
+
+a2.3 advertises `imageReferences` in workspace capabilities. A controller may
+request `chat.read` with `imageMode:'references'` and fetch each displayed image
+through `chat.image {chatId,imageId}`. References identify validated, persisted
+chat/tool/inbox image data. They do not accept a file path, fetch a URL or execute
+a command. Image IDs bind their owning chat, source and current content.
+Legacy controllers may continue to use bounded inline image responses, and
+a2.3 controllers omit the new option for hosts without the capability.
 
 ## Implementation ownership
 
@@ -132,7 +140,10 @@ Requests and return values:
 - `project.update` `{id,name?}` → project.
 - `project.archive` / `project.delete` `{projectId}` → result; records only,
   never workspace files. Delete requires stopped chats.
-- `chat.create` `{projectId,title?}` → chat.
+- `chat.create` `{projectId,title?}` → chat. User-created root chats copy the
+  profile's current `settings.defaultGrants`. Existing chats/runs are unchanged
+  when defaults change. Child chats use bounded parent inheritance and external
+  sessions retain their separate authority policy.
 - `chat.update` `{id,title?,providerId?,model?,grants?,projectGrants?,voice?,contextTokens?,thinking?,reasoningEffort?,systemPrompt?,systemPromptPresetId?}`
   → chat. Context is a positive integer or null (default); thinking is boolean or
   null (provider default). Unsupported explicit values are rejected. Prompt text
@@ -170,7 +181,7 @@ Requests and return values:
   its target; remembering adds that project ID to the chat. `rememberable:false`
   rejects remembered approval, including external tool calls.
 - `tool.run` `{chatId,name,args}` → result, same policy as model invocation.
-- `settings.update` `{theme?,maxDepth?,maxAgents?,runTimeoutMs?,uiScale?,onboardingComplete?}` → settings.
+- `settings.update` `{theme?,maxDepth?,maxAgents?,runTimeoutMs?,uiScale?,onboardingComplete?,defaultGrants?}` → settings.
   Theme is `dark`, `light` or `system`; legacy context/turn settings are retired.
   UI scale is 0.75–1.5 and changes Electron's whole-page zoom; onboarding is boolean.
   `runTimeoutMs` is `0` (Off) or an integer from 1000 through 2147483647;
@@ -178,6 +189,12 @@ Requests and return values:
   monotonic start, including approval/compaction time. An elapsed shortened
   deadline stops work; Off removes the overall timer. Stop/forceStop and separate
   tool/network/gateway deadlines remain effective.
+  `defaultGrants` is a duplicate-free subset of `files,shell,computer,network,upgrade`,
+  defaulting to an empty array for existing and new profiles. Only user settings
+  requests can change it. The model's `settings_update` tool excludes this field.
+  It is stored separately as `defaultChatGrants` in the profile state and
+  projected into public settings so a2.2's strict settings schema remains usable
+  when reopening the same profile after a downgrade.
 - `promptPresets.save` `{id?,name,text}` → preset; `promptPresets.delete/reset`
   `{id}` → result. Save edits the library only. General cannot be deleted; deleting
   another preset retains existing chat text. Reset restores a built-in default.

@@ -7,20 +7,24 @@ export function isLocalOllama(provider) {
   if (provider?.kind !== 'ollama') return false;
   try { return /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(new URL(provider.baseUrl).hostname); } catch { return false; }
 }
+export function localModelLabel(item) {
+  const label = String(item.label || item.relativePath || item.id || 'Local model').replace(/\s+\(\d+\/\d+ shards\)$/, '').split(/[\\/]/).at(-1).replace(/\.(?:gguf|safetensors)$/i, '').replace(/-\d{5}-of-\d{5}$/i, '');
+  return label.length > 48 ? `${label.slice(0, 28)}…${label.slice(-19)}` : label;
+}
 export function localChoices(state, provider, configuredModel = '') {
-  const choices = (state?.models || []).map(item => ({ ...item, value: `download:${item.id}`, source: 'download', group: 'Downloads', disabled: !item.available, label: `${item.label}${Number.isFinite(item.sizeBytes) ? ` · ${formatBytes(item.sizeBytes)}` : ''}${!item.available ? ` — ${item.reason || 'Unavailable'}` : ''}` }));
+  const choices = (state?.models || []).map(item => ({ ...item, value: `download:${item.id}`, source: 'download', group: 'Downloads', disabled: !item.available, label: `${localModelLabel(item)}${Number.isFinite(item.sizeBytes) ? ` · ${formatBytes(item.sizeBytes)}` : ''}${!item.available ? ' — Unavailable' : ''}` }));
   const process = state?.process;
   if (process?.modelId && ['loading', 'ready', 'stopping'].includes(process.status)) {
     const running = choices.find(item => item.id === process.modelId);
     if (!running || running.disabled) {
-      const retained = running || { id: process.modelId, value: `download:${process.modelId}`, source: 'download', group: 'Running local model', label: modelDisplayName(process.providerId, process.model, state.modelLabels, 'Current local model') };
+      const retained = running || { id: process.modelId, value: `download:${process.modelId}`, source: 'download', group: 'Running local model', label: localModelLabel({ label: modelDisplayName(process.providerId, process.model, state.modelLabels, 'Current local model') }) };
       Object.assign(retained, { disabled: false, stopOnly: true, label: `${retained.label} — Stop only`, reason: 'The running model files are no longer available in this folder. Stop this process before choosing another model.' });
       if (!running) choices.push(retained);
     }
   }
   if (isLocalOllama(provider)) {
-    for (const item of state?.installed || []) choices.push({ ...item, value: `installed:${item.id}`, source: 'installed', group: 'Installed in Ollama', label: item.label || item.id });
-    if (configuredModel && !choices.some(item => item.source === 'installed' && item.id === configuredModel)) choices.push({ id: configuredModel, value: `configured:${configuredModel}`, source: 'installed', group: 'Configured model', label: `${configuredModel} — ${state?.ollama?.online ? 'not installed' : 'not checked'}`, disabled: state?.ollama?.online === true, reason: state?.ollama?.online ? 'This model is not installed in the selected Ollama server. No download will be started automatically.' : 'Ollama is offline or could not be checked. Start verifies that this model is already installed; it does not download it.' });
+    for (const item of state?.installed || []) choices.push({ ...item, value: `installed:${item.id}`, source: 'installed', group: 'Installed in Ollama', label: localModelLabel(item) });
+    if (configuredModel && !choices.some(item => item.source === 'installed' && item.id === configuredModel)) choices.push({ id: configuredModel, value: `configured:${configuredModel}`, source: 'installed', group: 'Configured model', label: `${localModelLabel({ id: configuredModel })} — ${state?.ollama?.online ? 'not installed' : 'not checked'}`, disabled: state?.ollama?.online === true, reason: state?.ollama?.online ? 'This model is not installed in the selected Ollama server. No download will be started automatically.' : 'Ollama is offline or could not be checked. Start verifies that this model is already installed; it does not download it.' });
   }
   return choices;
 }
@@ -78,14 +82,14 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
       const groups = new Map();
       for (const choice of choices) {
         if (!groups.has(choice.group)) { const group = el('optgroup'); group.label = choice.group; groups.set(choice.group, group); select.append(group); }
-        const option = el('option', '', choice.label); option.value = choice.value; option.disabled = Boolean(choice.disabled); groups.get(choice.group).append(option);
+        const option = el('option', '', choice.label); option.value = choice.value; option.title = choice.relativePath || choice.id; option.disabled = Boolean(choice.disabled); groups.get(choice.group).append(option);
       }
     }
     const current = preferredLocalChoice(state, choices, provider, configuredModel, previous);
     select.value = current?.value || ''; select.disabled = loadingList && !choices.length;
     directory.textContent = state.directory ? `Download folder: ${state.directory}` : 'Download folder is being checked…';
     const choice = selected(); const info = selection();
-    detail.textContent = choice?.source === 'download' ? `${choice.relativePath || choice.label}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
+    detail.textContent = choice ? `${choice.source === 'download' ? choice.relativePath || choice.label : choice.id}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
     const ownOperation = operation && operation.value === select.value;
     status.textContent = ownOperation ? operation.label : !loadingList && !choices.length ? 'No local model files were found. Download a GGUF in Models, then refresh this folder.' : info.note;
     if ((!choice || choice.source === 'download') && state.runtime?.available === false) status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;

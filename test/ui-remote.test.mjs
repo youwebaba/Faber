@@ -53,42 +53,107 @@ class Element {
   getBoundingClientRect() { return { top: 0, bottom: 10 }; }
 }
 const flush = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve => setImmediate(resolve)); };
-function fixture() {
+const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF9sAAAAASUVORK5CYII=';
+function fixture({ imageReferences = false, sendGate, imageGate, imageFailure } = {}) {
   const document = { activeElement: null, createElement(tag) { return new Element(tag, this); }, createTextNode(text) { const node = this.createElement('text'); node.textContent = text; return node; }, querySelector(selector) { return this.body.querySelector(selector); } };
-  document.body = document.createElement('body'); const local = document.createElement('main'); local.className = 'shell'; const localPrompt = document.createElement('textarea'); localPrompt.id = 'prompt'; localPrompt.value = 'Keep my local draft'; local.append(localPrompt); document.body.append(local);
+  document.body = document.createElement('body'); const local = document.createElement('div'); local.className = 'shell'; const sidebar = document.createElement('aside'); sidebar.id = 'sidebar'; const navigation = document.createElement('nav'); navigation.id = 'project-list'; sidebar.append(navigation); const workspacePane = document.createElement('main'); workspacePane.className = 'workspace'; const localPrompt = document.createElement('textarea'); localPrompt.id = 'prompt'; localPrompt.value = 'Keep my local draft'; workspacePane.append(localPrompt); local.append(sidebar, workspacePane); document.body.append(local);
   const el = (tag, cls, text) => { const node = document.createElement(tag); node.className = cls || ''; if (text !== undefined) node.textContent = text; return node; };
   const calls = [], devices = [{ id: 'host', name: '<literal host>', online: true }, { id: 'other', name: 'Other host', online: true }]; let listener;
   const projects = [{ id: 'p', name: '<img onerror=x>', archived: false }, { id: 'old', name: 'Archived project', archived: true }];
   const chats = [{ id: 'c', projectId: 'p', title: 'Parent' }, { id: 'child', projectId: 'p', title: 'Agent', parentChatId: 'c' }, { id: 'archived', projectId: 'old', title: 'Old chat', archived: true }];
   const messages = [{ id: 'm', role: 'assistant', content: '**Remote response** <script>literal</script>' }];
-  const request = async (method, params) => { calls.push({ method, params }); assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return { projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory' };
+  const request = async (method, params) => { calls.push({ method, params }); assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return { projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory', ...(imageReferences ? { capabilities: { imageReferences: true } } : {}) };
     if (params.method === 'chat.read') return params.params.since ? { unchanged: true, revision: 'chat' } : { chat: { ...chats.find(chat => chat.id === params.params.chatId), messages }, runs: [], approvals: [], streams: [], before: null, revision: 'chat' };
-    if (params.method === 'chat.send') { messages.push({ id: 'sent', role: 'user', content: params.params.text }); return { runId: 'r' }; } return {};
+    if (params.method === 'chat.image') { if (imageGate) await imageGate; if (imageFailure?.value) throw new Error('Synthetic image read failed'); return { imageId: params.params.imageId, image }; }
+    if (params.method === 'chat.send') { if (sendGate) await sendGate; messages.push({ id: 'sent', role: 'user', content: params.params.text }); return { runId: 'r' }; } return {};
   };
   const workspace = createRemoteWorkspace({ request, subscribe: callback => { listener = callback; }, el, document, getDevices: () => devices, showConnections() {} });
-  return { workspace, document, local, localPrompt, calls, devices, chats, emit: event => listener(event), get: id => document.querySelector(`#${id}`) };
+  workspace.updateDevices();
+  return { workspace, document, local, sidebar, localPrompt, calls, devices, chats, messages, emit: event => listener(event), get: id => document.querySelector(`#${id}`), row: (deviceId, chatId) => navigation.querySelectorAll('button').find(node => node.dataset.remoteDeviceId === deviceId && node.dataset.remoteChatId === chatId) };
 }
 
 test('remote workspace paginates, preserves local drafts, isolates events and never sends offline actions locally', async () => {
   const previousDocument = globalThis.document, f = fixture(); globalThis.document = f.document;
   try {
-    f.workspace.open('host'); await flush(); assert.equal(f.local.inert, true); assert.equal(f.get('remote-projects').querySelectorAll('button').length, 3); assert.equal(f.localPrompt.value, 'Keep my local draft');
+    f.workspace.open('host'); await flush(); assert.notEqual(f.local.inert, true); assert.equal(f.sidebar.hidden, false); assert.equal(f.get('remote-projects').querySelectorAll('button').filter(node => node.dataset.remoteChatId).length, 4); assert.equal(f.localPrompt.value, 'Keep my local draft');
     const chat = f.get('remote-projects').querySelectorAll('button').find(node => node.dataset.remoteChatId === 'c'); await chat.events.click(); await flush();
     const transcript = f.get('remote-transcript'); assert.ok(transcript.textContent.includes('Remote response')); assert.ok(transcript.textContent.includes('<script>literal</script>')); const node = transcript.querySelector('article');
     f.emit({ type: 'state', state: { chats: [] } }); f.emit({ type: 'remoteWorkspace', deviceId: 'other', event: { type: 'delta', text: 'Other host' } }); assert.equal(transcript.querySelector('article'), node);
     const prompt = f.get('remote-prompt'); prompt.value = 'Follow up remotely'; prompt.events.input(); f.get('remote-composer').events.submit({ preventDefault() {} }); await flush();
     const sent = f.calls.find(call => call.params.method === 'chat.send'); assert.equal(sent.params.deviceId, 'host'); assert.equal(sent.params.params.text, 'Follow up remotely'); assert.match(sent.params.requestId, /^[\da-f-]{36}$/i);
     prompt.value = 'Keep remote draft'; prompt.events.input(); f.devices[0].online = false; f.workspace.updateDevices(); assert.equal(prompt.disabled, true); assert.equal(f.get('remote-send').disabled, true);
-    const before = f.calls.length; f.get('remote-composer').events.submit({ preventDefault() {} }); await flush(); assert.equal(f.calls.length, before); assert.equal(prompt.value, 'Keep remote draft');
-    f.workspace.close(); assert.equal(f.local.hidden, false); assert.equal(f.local.inert, false); assert.equal(f.localPrompt.value, 'Keep my local draft');
+    const before = f.calls.filter(call => call.params.method === 'chat.send').length; f.get('remote-composer').events.submit({ preventDefault() {} }); await flush(); assert.equal(f.calls.filter(call => call.params.method === 'chat.send').length, before); assert.equal(prompt.value, 'Keep remote draft');
+    f.workspace.close(); assert.equal(f.local.hidden, false); assert.notEqual(f.local.inert, true); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.row('host', 'c'));
     f.workspace.open('host'); await flush(); assert.equal(prompt.value, 'Keep remote draft'); assert.equal(prompt.disabled, true); assert.ok(f.workspace.refreshReason());
     const beforeClear = f.calls.length; await f.get('remote-clear-draft').events.click(); assert.equal(prompt.value, ''); assert.equal(f.workspace.hasDrafts(), false); assert.equal(f.calls.length, beforeClear); assert.equal(f.localPrompt.value, 'Keep my local draft');
     assert.ok(f.calls.every(call => call.method === 'remote.request'));
-  } finally { f.workspace.close(); globalThis.document = previousDocument; }
+    assert.ok(f.calls.filter(call => call.params.method === 'chat.read').every(call => !Object.hasOwn(call.params.params, 'imageMode')));
+  } finally { f.workspace.dispose(); globalThis.document = previousDocument; }
 });
 
 test('host-managed read-only chats keep viewing available and disable mutations and model selection', async () => {
   const previousDocument = globalThis.document, f = fixture(); globalThis.document = f.document; f.chats[0].readOnly = true;
   try { f.workspace.open('host'); await flush(); await f.get('remote-projects').querySelectorAll('button').find(node => node.dataset.remoteChatId === 'c').events.click(); await flush(); assert.ok(f.get('remote-transcript').textContent.includes('Remote response')); assert.equal(f.get('remote-prompt').disabled, true); assert.equal(f.get('remote-send').disabled, true); assert.equal(f.get('remote-choose-model').disabled, true); assert.equal(f.get('remote-new-chat').disabled, false); }
-  finally { f.workspace.close(); globalThis.document = previousDocument; }
+  finally { f.workspace.dispose(); globalThis.document = previousDocument; }
+});
+
+test('every paired host stays in main navigation with qualified routes, offline rows, accessible details and separate drafts', async () => {
+  const previousDocument = globalThis.document, f = fixture(); globalThis.document = f.document;
+  try {
+    await flush(); assert.equal(f.workspace.isOpen(), false); assert.ok(f.sidebar.contains(f.row('host', 'c'))); assert.ok(f.row('other', 'c'));
+    const row = f.row('host', 'c'), child = f.row('host', 'child'); assert.notEqual(row.dataset.remoteKey, f.row('other', 'c').dataset.remoteKey); assert.equal(row.style.paddingLeft, '32px'); assert.equal(child.style.paddingLeft, '47px'); assert.ok(row.querySelector('.remote-globe')); assert.match(row.title, /Parent.*Project: <img onerror=x>.*Device: <literal host>/); assert.equal(row.attributes['aria-describedby'], row.querySelector('.remote-chat-tooltip').id);
+    await row.events.click(); await flush(); const prompt = f.get('remote-prompt'); prompt.value = 'First host draft'; prompt.events.input();
+    await f.row('other', 'c').events.click(); await flush(); assert.equal(prompt.value, ''); prompt.value = 'Second host draft'; prompt.events.input();
+    f.get('remote-composer').events.submit({ preventDefault() {} }); await flush(); const sent = f.calls.find(call => call.params.method === 'chat.send'); assert.equal(sent.params.deviceId, 'other'); assert.equal(sent.params.params.chatId, 'c');
+    await f.row('host', 'c').events.click(); await flush(); assert.equal(prompt.value, 'First host draft'); f.devices[0].online = false; f.workspace.updateDevices(); await flush(); assert.ok(f.row('host', 'c')); assert.match(f.row('host', 'c').title, /Offline/); assert.ok(f.row('other', 'c')); assert.equal(prompt.disabled, true);
+    f.devices.push({ id: 'empty-offline', name: 'Away PC', online: false }); f.workspace.updateDevices(); await flush(); assert.ok(f.get('remote-projects').textContent.includes('Away PC · offline')); assert.ok(f.get('remote-projects').textContent.includes('connect to load projects'));
+    f.workspace.close(); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.row('host', 'c')); assert.ok(f.row('other', 'c'));
+  } finally { f.workspace.dispose(); globalThis.document = previousDocument; }
+});
+
+test('negotiated remote image references hydrate once and legacy or malformed image references stay inert', async () => {
+  const previousDocument = globalThis.document, f = fixture({ imageReferences: true }); globalThis.document = f.document;
+  f.messages[0].imageRefs = [{ id: 'persisted-image', mimeType: 'image/png', bytes: 68 }];
+  try {
+    await flush(); await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-transcript').querySelector('img')?.src, image);
+    assert.equal(f.calls.filter(call => call.params.method === 'chat.image').length, 1); assert.ok(f.calls.filter(call => call.params.method === 'chat.read').every(call => call.params.params.imageMode === 'references'));
+    await f.row('host', 'child').events.click(); await flush(); await f.row('host', 'c').events.click(); await flush(); assert.equal(f.calls.filter(call => call.params.method === 'chat.image' && call.params.params.chatId === 'c').length, 1);
+    const malformed = remoteChat({ chat: { id: 'c', messages: [{ id: 'm', role: 'user', imageRefs: [{ id: 'bad', mimeType: 'image/svg+xml', bytes: 10 }, { id: 'huge', mimeType: 'image/png', bytes: 9000000 }] }] } }, 'c'); assert.deepEqual(malformed.chat.messages[0].imageRefs, []);
+  } finally { f.workspace.dispose(); globalThis.document = previousDocument; }
+});
+
+test('remote image-only drafts stay with their originating host when the file picker or send overlaps navigation', async () => {
+  const previousDocument = globalThis.document, previousReader = globalThis.FileReader, gate = Promise.withResolvers(), f = fixture({ sendGate: gate.promise }); globalThis.document = f.document;
+  globalThis.FileReader = class { readAsDataURL() { this.result = image; queueMicrotask(() => this.onload()); } };
+  try {
+    await flush(); await f.row('host', 'c').events.click(); await flush(); await f.get('remote-attach-images').events.click();
+    await f.row('other', 'c').events.click(); await flush(); f.get('remote-image-picker').events.change({ target: { files: [new File([Buffer.from(image.split(',')[1], 'base64')], 'fixture.png', { type: 'image/png' })], value: 'fixture' } }); await flush();
+    assert.equal(f.get('remote-image-drafts').hidden, true); await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-image-drafts').querySelector('img')?.src, image); assert.equal(f.get('remote-send').disabled, false);
+    f.get('remote-composer').events.submit({ preventDefault() {} }); await flush(); await f.row('other', 'c').events.click(); await flush(); const prompt = f.get('remote-prompt'); prompt.value = 'A newer draft on the second host'; prompt.events.input(); gate.resolve(); await flush();
+    const sent = f.calls.find(call => call.params.method === 'chat.send'); assert.equal(sent.params.deviceId, 'host'); assert.deepEqual(sent.params.params, { chatId: 'c', text: '', images: [image] }); assert.equal(prompt.value, 'A newer draft on the second host');
+    await f.row('host', 'c').events.click(); await flush(); assert.equal(f.get('remote-image-drafts').hidden, true); assert.equal(f.localPrompt.value, 'Keep my local draft'); assert.ok(f.calls.every(call => call.method === 'remote.request'));
+  } finally { gate.resolve(); f.workspace.dispose(); globalThis.document = previousDocument; globalThis.FileReader = previousReader; }
+});
+
+test('remote media starts at most two reads and discards completions after changing the selected host', async () => {
+  const previousDocument = globalThis.document, gate = Promise.withResolvers(), f = fixture({ imageReferences: true, imageGate: gate.promise }); globalThis.document = f.document;
+  f.messages[0].imageRefs = Array.from({ length: 12 }, (_, i) => ({ id: `image-${i}`, mimeType: 'image/png', bytes: 68 }));
+  try {
+    await flush(); await f.row('host', 'c').events.click(); await flush(); assert.equal(f.calls.filter(call => call.params.method === 'chat.image').length, 2);
+    const oldTranscript = f.get('remote-transcript').querySelector('article'); await f.row('other', 'c').events.click(); await flush(); gate.resolve(); await flush();
+    assert.equal(oldTranscript.querySelectorAll('img').length, 0); assert.ok(f.calls.filter(call => call.params.method === 'chat.image').every(call => ['host', 'other'].includes(call.params.deviceId)));
+    assert.ok(f.get('remote-transcript').querySelectorAll('img').length <= 8);
+  } finally { gate.resolve(); f.workspace.dispose(); globalThis.document = previousDocument; }
+});
+
+test('offscreen failed image reads keep the explicit retry control when visible again', async () => {
+  const previousDocument = globalThis.document, previousObserver = globalThis.IntersectionObserver, failure = { value: true }; let observer;
+  globalThis.IntersectionObserver = class { constructor(callback) { this.callback = callback; this.nodes = []; observer = this; } observe(node) { this.nodes.push(node); } disconnect() { this.nodes = []; } };
+  const f = fixture({ imageReferences: true, imageFailure: failure }); globalThis.document = f.document; f.messages[0].imageRefs = [{ id: 'retry-image', mimeType: 'image/png', bytes: 68 }];
+  try {
+    await flush(); await f.row('host', 'c').events.click(); await flush(); const target = observer.nodes.at(-1); observer.callback([{ target, isIntersecting: true }]); await flush(); assert.match(target.textContent, /Retry image/);
+    observer.callback([{ target, isIntersecting: false }]); observer.callback([{ target, isIntersecting: true }]); assert.match(target.textContent, /Retry image/); assert.equal(f.calls.filter(call => call.params.method === 'chat.image').length, 1);
+    failure.value = false; await target.querySelector('button').events.click(); await flush(); assert.equal(target.querySelector('img')?.src, image); assert.equal(f.calls.filter(call => call.params.method === 'chat.image').length, 2);
+    target.getBoundingClientRect = () => ({ height: 240 }); observer.callback([{ target, isIntersecting: false }]); assert.equal(target.style.minHeight, '240px'); observer.callback([{ target, isIntersecting: true }]); target.querySelector('img').events.load(); assert.equal(target.style.minHeight, ''); assert.equal(f.calls.filter(call => call.params.method === 'chat.image').length, 2);
+  } finally { f.workspace.dispose(); globalThis.document = previousDocument; globalThis.IntersectionObserver = previousObserver; }
 });

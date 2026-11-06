@@ -6,11 +6,14 @@ const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const chatRef = object({ chatId: id });
+const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true };
+const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
   'workspace.ping': object({}), 'workspace.models': object({}),
   'chat.selectModel': object({ chatId:id, providerId:id, model:{type:'string',minLength:1,maxLength:300} }),
   'workspace.list': object({ since: id, offset: bounded(0, 10000000), limit: bounded(1, 500) }, []),
-  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000) }, ['chatId']),
+  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000), imageMode }, ['chatId']),
+  'chat.image': object({ chatId: id, imageId: { type: 'string', minLength: 1, maxLength: 2048 } }),
   'chat.send': object({ chatId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','text']),
   'chat.create': object({ projectId: id, title: { type: 'string', maxLength: 200 } }, ['projectId']),
   'chat.stop': chatRef, 'chat.forceStop': chatRef, 'chat.compact': chatRef,
@@ -45,22 +48,54 @@ function chatFamily(chats, chatId) {
   for (const parent of family) for (const child of children.get(parent) || []) family.add(child);
   return family;
 }
-function visibleMessage(message) {
-  const text = message.role === 'tool' ? '' : String(message.content ?? '');
+const inlineImage = /!\[[^\]\r\n]*\]\(\s*<?(data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2})>?(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'))?\s*\)/g;
+function resultImages(result) {
+  try { const value = typeof result === 'string' ? JSON.parse(result) : result; return [value?.image, ...(Array.isArray(value?.images) ? value.images.slice(0,8) : [])]; }
+  catch { return []; }
+}
+function sourceImages(source, kind, includeInline = true) {
+  const inline = includeInline && kind === 'm' && source.role === 'assistant' && typeof source.content === 'string' && source.content.length <= 200000
+    ? [...source.content.matchAll(inlineImage)].map(match => match[1]) : [];
+  const candidates = kind === 'e' ? [source.image, ...resultImages(source.result)]
+    : [...(Array.isArray(source.images) ? source.images.slice(0,8) : []), source.image, ...(source.role === 'tool' && !source.image ? resultImages(source.content) : []), ...inline];
+  const images = []; let bytes = 0;
+  for (const image of candidates) {
+    if (!image || images.includes(image) || images.length === 8 || typeof image !== 'string' || bytes + image.length > imageBytesLimit) continue;
+    try { validateChatImages([image]); } catch { continue; }
+    images.push(image); bytes += image.length;
+  }
+  return images;
+}
+function imageId(chatId, kind, sourceId, index, image) {
+  const digest = createHash('sha256').update(JSON.stringify([chatId,kind,sourceId,index,image])).digest('hex');
+  return `${kind}.${Buffer.from(sourceId).toString('base64url')}.${index}.${digest}`;
+}
+function imageRefs(chatId, kind, source, images) {
+  return images.map((image,index) => ({ id: imageId(chatId,kind,source.id,index,image), mimeType: image.slice(5,image.indexOf(';')),
+    bytes: (image.length - image.indexOf(',') - 1) / 4 * 3 - (image.endsWith('==') ? 2 : image.endsWith('=') ? 1 : 0) }));
+}
+function visibleMessage(message, chatId, references) {
+  const images = sourceImages(message,'m',references);
+  if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && images.length)) || (!message.content && !images.length && !message.toolCalls?.length)) return null;
+  let text = message.role === 'tool' ? '' : String(message.content ?? '');
+  if (references && message.role === 'assistant' && text.length <= 200000) text = text.replace(inlineImage, (raw,image) => images.includes(image) ? '[Image output below]' : raw);
   const row = { ...pick(message, ['id','role','createdAt','status','runId','sourceMessageId','modelCallId','toolName','toolCallId','fromChatId','steering']),
     content: text.length > 500000 ? text.slice(0,500000) + '\n[Open on the host to read the rest of this message.]' : text };
   if (message.toolCalls?.length) row.toolCalls = message.toolCalls.slice(0,64).map(call=>pick(call,['id','name']));
-  const images = message.images ?? (message.image ? [message.image] : []);
-  if (images.length) {
-    try { validateChatImages(images); row.images = [...images]; } catch { row.imageCount = images.length; }
-  }
+  if (images.length) Object.assign(row,references ? {imageRefs:imageRefs(chatId,'m',message,images)} : {images});
   return row;
 }
-function runRow(run) {
+function runRow(run, references, budget) {
   return { ...pick(run, ['id','chatId','status','startedAt','endedAt','requestMessageId','parentRunId','contextOverflow']), error: String(run.error ?? '').slice(0,2000),
     modelCalls: (run.modelCalls || []).slice(-64).map(call=>pick(call,['id','status','phase','progressSummary'])),
-    toolEvents: run.toolEvents.slice(-64).map(event => ({ ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
-      summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) })) };
+    toolEvents: run.toolEvents.slice(-64).map(event => {
+      const row = { ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
+        summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) };
+      const images = sourceImages(event,'e');
+      if (images.length && references) row.imageRefs = imageRefs(run.chatId,'e',event,images);
+      else if (images[0]?.length <= budget.remaining) { row.image = images[0]; budget.remaining -= images[0].length; }
+      return row;
+    }) };
 }
 
 // Only the desktop device transport receives this dispatcher. Never expose the general runtime RPC here.
@@ -92,20 +127,32 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
   }
   function directory(view, {offset = 0, limit = 200, since}) {
     const token = revision(view), {projects,chats,providers} = view.state;
-    if (since === token && !offset) return { unchanged: true, revision: token };
+    if (since === token && !offset) return { unchanged: true, revision: token, capabilities };
     const end = offset + limit, total = projects.length + chats.length;
     return { projects: projects.slice(offset,end).map(p => pick(p,['id','name','archived','createdAt','updatedAt'])),
       chats: chats.slice(Math.max(0,offset-projects.length),Math.max(0,end-projects.length)).map(c => chatRow(c,providers,modelDisplayName)),
       runs: offset === 0 ? view.state.runs.filter(r=>['running','waiting_approval'].includes(r.status)).slice(-256).map(r=>pick(r,['id','chatId','parentRunId','status','startedAt'])) : [],
-      nextOffset: end < total ? end : null, revision: token };
+      nextOffset: end < total ? end : null, revision: token, capabilities };
   }
   function findChat(state, chatId) {
     const chat = state.chats.find(row => row.id === chatId);
     if (!chat) throw new Error('Chat no longer exists');
     return chat;
   }
+  function readImage({chatId,imageId:requestedId}) {
+    const {state} = current(), chat = findChat(state,chatId);
+    const match = /^([mie])\.([A-Za-z0-9_-]{1,1366})\.([0-7])\.([a-f0-9]{64})$/.exec(requestedId);
+    if (!match) throw new Error('Image no longer available for this chat');
+    const [,kind,encoded,index] = match, sourceId = Buffer.from(encoded,'base64url').toString();
+    if (Buffer.from(sourceId).toString('base64url') !== encoded) throw new Error('Image no longer available for this chat');
+    const source = kind === 'e' ? state.runs.filter(run => run.chatId === chatId).flatMap(run => run.toolEvents).find(event => event.id === sourceId)
+      : (kind === 'i' ? chat.inbox || [] : chat.messages).find(message => message.id === sourceId);
+    const image = source && sourceImages(source,kind)[Number(index)];
+    if (!image || imageId(chatId,kind,sourceId,Number(index),image) !== requestedId) throw new Error('Image no longer available for this chat');
+    return {imageId:requestedId,image};
+  }
   async function transcript(args, signal) {
-    const {chatId, since, before, limit = 30, waitMs = 0} = args;
+    const {chatId, since, before, limit = 30, waitMs = 0, imageMode} = args, references = imageMode === 'references';
     let view = current(), family = chatFamily(view.state.chats,chatId), token = revision(view,family);
     findChat(view.state,chatId);
     if (!before && since === token && waitMs) { await wait(family,waitMs,signal); view = current(); family = chatFamily(view.state.chats,chatId); token = revision(view,family); }
@@ -119,15 +166,22 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
     const messages = []; let bytes = 0;
     while (cursor > 0 && messages.length < limit) {
       const message = source[cursor-1];
-      if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && message.image)) || (!message.content && !message.images?.length && !message.image && !message.toolCalls?.length)) { cursor--; continue; }
-      const row = visibleMessage(message), size = Buffer.byteLength(JSON.stringify(row));
-      if (messages.length && bytes + size > 10 * 1024 * 1024) break;
+      const row = visibleMessage(message,chatId,references);
+      if (!row) { cursor--; continue; }
+      const size = Buffer.byteLength(JSON.stringify(row));
+      if (messages.length && bytes + size > transcriptBytesLimit) break;
       messages.push(row); bytes += size; cursor--;
     }
     messages.reverse();
-    const inbox = (chat.inbox || []).filter(item => item.source === 'user').slice(0,32).map(item => ({...pick(item,['id','source','createdAt','runId']),text:String(item.text || '').slice(0,8000)}));
+    const budget = {remaining:Math.max(0,transcriptBytesLimit-bytes)};
+    const inbox = (chat.inbox || []).filter(item => item.source === 'user').slice(0,32).map(item => {
+      const row = {...pick(item,['id','source','createdAt','runId']),text:String(item.text || '').slice(0,8000)}, images = sourceImages(item,'i');
+      if (images.length && references) row.imageRefs = imageRefs(chatId,'i',item,images);
+      else if (images.length && images.reduce((sum,image) => sum+image.length,0) <= budget.remaining) { row.images = images; budget.remaining -= images.reduce((sum,image) => sum+image.length,0); }
+      return row;
+    });
     return { chat: { ...chatRow(chat,state.providers,modelDisplayName), messages, inbox }, before: cursor ? messages[0]?.id ?? null : null, revision: token,
-      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(runRow),
+      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(run => runRow(run,references,budget)),
       streams: live,
       approvals: state.approvals.filter(row => family.has(row.chatId)).map(row => pick(row,['id','kind','chatId','runId','permission','toolName','summary'])) };
   }
@@ -154,10 +208,11 @@ export function createRemoteWorkspace({ current, request, modelDisplayName }) {
     const schema = methods.get(method);
     if (!schema) throw new Error('Unsupported remote workspace action');
     validate(params,schema);
-    if (method === 'workspace.ping') return { online: true };
+    if (method === 'workspace.ping') return { online: true, capabilities };
     if (method === 'workspace.models') return {providers:hostModels(current().state.providers,modelDisplayName)};
     if (method === 'workspace.list') return directory(current(),params);
     if (method === 'chat.read') return transcript(params,signal);
+    if (method === 'chat.image') return readImage(params);
     if (!device?.id || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('A device request ID is required');
     const key = device.id + '/' + requestId, hash = createHash('sha256').update(JSON.stringify([method,params])).digest('hex');
     const prior = mutations.get(key);

@@ -5,6 +5,39 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.3
+
+The final source suite passed **584 tests, zero failures and one optional
+native-input skip (585 total)**. The base Electron smoke passed with an isolated
+profile, the a2.3 label, attachment/reasoning controls and 87 registered tools.
+No live model or subscription requests were used.
+
+Remote-image tests exercised validated persisted user, tool and child-agent
+images, source ownership, bounded transfers, pinned TLS, anonymous rejection
+and revocation. The Electron remote fixture used two host directories and 207
+chats, including a child image reference produced by the real core dispatcher.
+It covered the shared sidebar, blue globe details, device-qualified drafts,
+local navigation, browser suspension/restoration, streaming, follow-ups and
+reconnection. These were synthetic hosts on one PC, not a new physical two-PC
+or WAN acceptance run.
+
+Preferences checks covered disconnected/connected account button state and
+dimensions, compact model labels and persistent permission defaults. Only
+future user-created root chats inherit those defaults; existing chats, children
+and external sessions keep their authority rules. An actual a2.2 runtime probe
+reopened an a2.3 profile and round-tripped it back to a2.3 with chats and defaults
+preserved. Settings store the new field outside a2.2's strict settings object.
+
+Both project forms exercised the real core with an omitted folder path and
+controlled native-chooser results. Cancel created no project and moved no chat.
+Physical dialog input was not automated. Screenshots of the sidebar, tooltip
+and preference controls were visually reviewed.
+
+The standalone relay suite passed 12 tests with one operator-opt-in hosted
+check skipped. Source and bundled-native privacy checks passed. Installer
+hashes, packaged acceptance and source parity belong to the a2.3 release
+evidence so the packaged source does not claim its own later build result.
+
 ## a2.2
 
 Two disposable desktop-service profiles exercised pairing over the public HTTPS/WebSocket route to the proof-of-concept relay. An in-memory model on the host handled a chat, queued a follow-up, performed an approved fixture tool action, and stopped on request. The controller reconnected after both services restarted. Revocation denied its next request. Both profiles ran on one Windows PC. This check used synthetic data and no inference provider credits.

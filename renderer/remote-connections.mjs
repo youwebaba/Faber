@@ -4,7 +4,7 @@ import { createRemoteWorkspace } from './remote-workspace.mjs';
 export function createRemoteConnections({ request, subscribe, el, field, closeModal, showConnections, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
   let status, panel, tab = 'host', timer, pending = false, loading, invitation, error = '', pairDraft = '', relayDraft = '', nameDraft = '';
   const hosts = () => (status?.devices || []).filter(device => device.role === 'host');
-  const workspace = createRemoteWorkspace({ request, subscribe, el, getDevices: hosts, showConnections, onChange: () => { schedule(); onChange(); }, document });
+  const workspace = createRemoteWorkspace({ request, subscribe, el, getDevices: hosts, showConnections, suspendLocal, onChange: () => { schedule(); onChange(); }, document });
   const button = (label, callback, className = 'button') => { const node = el('button', className, label); node.type = 'button'; node.addEventListener('click', async () => { if (pending) return; pending = true; node.disabled = true; try { error = ''; await callback(); } catch (cause) { error = cause.message || String(cause); } finally { pending = false; if (panel?.isConnected) update(); onChange(); } }); return node; };
   const time = value => Number.isFinite(Number(value)) ? new Date(Number(value)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
   function accept(value) {
@@ -12,11 +12,11 @@ export function createRemoteConnections({ request, subscribe, el, field, closeMo
     status = { ...value, devices: value.devices.filter(device => device && typeof device.id === 'string' && ['host', 'controller'].includes(device.role)).map(device => ({ ...device, name: typeof device.name === 'string' ? device.name : typeof device.deviceName === 'string' ? device.deviceName : 'Device', online: device.online === true })), pending: value.pending.filter(item => item && typeof item.id === 'string') };
     workspace.updateDevices(); if (panel?.isConnected) update();
   }
-  async function load() { if (loading) return loading; loading = request('remote.status', {}).then(accept); try { await loading; } finally { loading = undefined; } }
+  async function load() { if (loading) return loading; loading = request('remote.status', {}).then(accept); try { await loading; } finally { loading = undefined; schedule(); } }
   function schedule() {
     clearTimeout(timer);
-    if (!(panel?.isConnected && panel.closest('dialog')?.open) && !workspace.isOpen()) return;
-    timer = setTimeout(async () => { try { await load(); } catch (cause) { error = cause.message || String(cause); if (panel?.isConnected) update(); } schedule(); }, 5000);
+    if (!(panel?.isConnected && panel.closest('dialog')?.open) && !workspace.isOpen() && !hosts().length) return;
+    timer = setTimeout(async () => { try { await load(); } catch (cause) { error = cause.message || String(cause); if (panel?.isConnected) update(); } schedule(); }, 5000); timer.unref?.();
   }
   async function change(method, params) { const result = await request(`remote.${method}`, params); if (result?.config && Array.isArray(result.devices)) accept(result); else await load(); return result; }
   function row(name, description, controls, className = '') {
@@ -83,7 +83,7 @@ export function createRemoteConnections({ request, subscribe, el, field, closeMo
     const controllerList = panel.querySelector('#remote-controller-devices'), controllers = (status?.devices || []).filter(device => device.role === 'controller');
     updateRows(controllerList, JSON.stringify([pending, controllers]), node => { if (!controllers.length) node.append(el('p', 'remote-empty', 'No devices have access to this PC.')); for (const device of controllers) { const revoke = button('Revoke', () => change('revoke', { id: device.id }), 'button danger'); revoke.disabled = pending; node.append(row(device.name, `${device.online ? 'Connected' : 'Offline'} · ${lastSeenLabel(device.lastSeen ?? device.lastSeenAt)}`, controls(revoke))); } });
     const hostList = panel.querySelector('#remote-host-devices'); updateRows(hostList, JSON.stringify([pending, hosts()]), node => { if (!hosts().length) node.append(el('p', 'remote-empty', 'Paired computers will appear here.')); for (const device of hosts()) {
-      const open = button('Open workspace', () => { closeModal(); suspendLocal(); workspace.open(device.id); }); open.disabled = pending;
+      const open = button('Open workspace', () => { closeModal(); workspace.open(device.id); }); open.disabled = pending;
       const forget = button('Forget', () => change('forget', { id: device.id })); forget.disabled = pending; node.append(row(device.name, `${device.online ? 'Online' : 'Offline'} · ${lastSeenLabel(device.lastSeen ?? device.lastSeenAt)}`, controls(open, forget)));
     } });
     const pairing = panel.querySelector('#remote-pairing-status'); if (pairing) { pairing.textContent = typeof status?.pairingError === 'string' ? status.pairingError : status?.pairing ? `Waiting for approval on ${typeof status.pairing.hostName === 'string' ? status.pairing.hostName : 'the host PC'}${status.pairing.expiresAt ? ` · Expires at ${time(status.pairing.expiresAt)}` : ''}.` : ''; pairing.classList.toggle('error-text', Boolean(status?.pairingError)); }
@@ -92,5 +92,5 @@ export function createRemoteConnections({ request, subscribe, el, field, closeMo
   }
   function mount(container) { panel = el('div', 'remote-connections'); container.append(panel); build(); void load().catch(cause => { error = cause.message || String(cause); update(); }); schedule(); }
   subscribe?.(event => { if (event.type === 'remote') { try { accept(event.state); } catch (cause) { error = cause.message || String(cause); if (panel?.isConnected) update(); } } });
-  return { mount, workspace, hasDrafts: () => workspace.hasDrafts() || Boolean(pairDraft || relayDraft || nameDraft), refreshReason: () => workspace.refreshReason() || (pairDraft || relayDraft || nameDraft ? 'Save or clear the open device connection form before refreshing.' : '') };
+  return { mount, workspace, load, hasDrafts: () => workspace.hasDrafts() || Boolean(pairDraft || relayDraft || nameDraft), refreshReason: () => workspace.refreshReason() || (pairDraft || relayDraft || nameDraft ? 'Save or clear the open device connection form before refreshing.' : '') };
 }

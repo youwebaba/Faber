@@ -1,6 +1,6 @@
 # Remote sessions
 
-Install Faber a2.2 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop opens the home workspace in its own view, with its own drafts. Keep the home PC awake and Faber running in the profile you want to control.
+Install Faber a2.3 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
 
 ## Pair the laptop
 
@@ -11,9 +11,24 @@ Install Faber a2.2 on the home PC and the laptop. The home PC runs the model, to
 
 A paired laptop can direct the host's agents using their existing project and tool permissions. Revoking it from **Control this PC** closes its remote access. A run already started on the host can continue after disconnection. Stop the run in its chat when needed. Disabling hosting also closes current remote connections. Home and laptop can use unrelated networks.
 
+## Chats and images in a2.3
+
+Paired-host chats stay in the main sidebar beside local projects. Their blue
+globe identifies them as remote. Hover or focus a chat to see its project and
+device. Switching between local and remote chats keeps their drafts separate.
+Known chats remain listed when a host goes offline during the current app session.
+After restarting Faber, the host must reconnect to load its chat list.
+
+Images that the host displays from attachments or image tools can appear in the
+remote chat, including child-agent image results. Images load through the paired
+connection as needed, with bounded transfers. The controller does not open
+arbitrary host files or automatically fetch image URLs. Both PCs should run
+a2.3 for this image flow. Older hosts remain viewable with their existing image
+behavior.
+
 ## Run the proof-of-concept relay on a Windows PC
 
-Download the relay kit from the [a2.2 release](https://github.com/youwebaba/Faber/releases/tag/a2.2) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
+Download the relay kit from the [a2.3 release](https://github.com/youwebaba/Faber/releases/tag/a2.3) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
 
 ```powershell
 .\Start-FaberRelay.ps1

@@ -4,7 +4,7 @@ import http from 'node:http';
 import assert from 'node:assert/strict';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-export async function runB11Smoke({ window, runtime, chat, dataDir }) {
+export async function runB11Smoke({ window, runtime, chat, dataDir, host }) {
   const calls = [], errors = [], screenshots = {}, held = new Set(); let finishStream;
   const server = http.createServer(async (request, response) => {
     try {
@@ -28,8 +28,10 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     } catch (error) { errors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(JSON.stringify({ error: error.message })); }
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const originalRequest = runtime.request, pendingMutations = new Map();
+  const originalRequest = runtime.request, originalChooser = host.chooseDirectory, pendingMutations = new Map(), pickerRequests = []; let pickerFolder = null, pickerCalls = 0;
+  host.chooseDirectory = async () => { pickerCalls++; return pickerFolder; };
   runtime.request = async (method, params) => {
+    if (method === 'project.create' && !Object.hasOwn(params, 'path')) pickerRequests.push(params);
     const tracked = ['chat.archive', 'chat.move', 'chat.delete', 'chat.forceStop', 'project.archive', 'project.delete'].includes(method);
     if (tracked) pendingMutations.set(method, (pendingMutations.get(method) || 0) + 1);
     try { return await originalRequest.call(runtime, method, params); }
@@ -56,6 +58,9 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
   async function project(name) { const directory = path.join(dataDir, name); await fs.mkdir(directory); await fs.writeFile(path.join(directory, 'keep.txt'), 'Workspace file must remain'); return runtime.request('project.create', { name, path: directory }); }
   try {
     window.setSize(1100, 760);
+    const beforePicker = (await state()).projects.length; await click('#add-project'); await set('#modal-body input', 'Chosen in folder picker'); assert.equal(await js(`document.querySelectorAll('#modal-body input').length`), 1);
+    await click('#modal-body .button.primary'); await wait(async () => pickerCalls === 1 && await js(`!document.querySelector('#modal-body .button.primary').disabled`), 'new project picker canceled'); assert.equal((await state()).projects.length, beforePicker); assert.equal(await js(`document.querySelector('#modal').open`), true);
+    pickerFolder = path.join(dataDir, 'native-picker-project'); await fs.mkdir(pickerFolder); await click('#modal-body .button.primary'); await wait(async () => (await state()).projects.some(item => item.name === 'Chosen in folder picker'), 'native project folder accepted'); await wait(() => js(`!document.querySelector('#modal').open`), 'project picker modal closed'); await select(chat.id);
     const provider = await runtime.request('provider.save', { name: 'b1.1 local fixture', kind: 'ollama', baseUrl: `http://127.0.0.1:${server.address().port}`, model: 'b11-fixture' });
     await runtime.request('chat.update', { id: chat.id, providerId: provider.id, model: 'b11-fixture' });
     await wait(() => js(`!!document.querySelector('[data-chat-id="${chat.id}"]')`), 'initial chat'); await select(chat.id);
@@ -65,8 +70,8 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
       await capture(`b11-brand-${theme}`);
     }
     await wait(() => js(`!document.querySelector('#context-window').disabled && !document.querySelector('#thinking-control').disabled`), 'chat controls');
-    await click('#context-window'); await set('#context-token-input', '8192'); await click('#apply-context-window');
-    await wait(async () => (await state()).chats.find(item => item.id === chat.id).contextTokens === 8192, 'context saved');
+    await click('#context-window'); await set('#context-token-input', '16384'); await click('#apply-context-window');
+    await wait(async () => (await state()).chats.find(item => item.id === chat.id).contextTokens === 16384, 'context saved');
     await wait(() => js(`!document.querySelector('#modal').open && !document.querySelector('#thinking-control').disabled`), 'thinking ready after context dialog closes'); await click('#thinking-control');
     await wait(() => js(`document.querySelector('#thinking-popover').matches(':popover-open') && !document.querySelector('#thinking-level').disabled`), 'thinking slider ready');
     await set('#thinking-level', '2');
@@ -83,9 +88,9 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     await capture('b11-command-approval');
     await js(`[...document.querySelectorAll('.activity-pending-approval button')].find(e=>e.textContent==='Allow this run').click()`);
     await wait(() => typeof finishStream === 'function', 'held final stream');
-    await wait(() => js(`document.querySelector('#context-usage').textContent.includes('8192') || document.querySelector('#context-usage').textContent.includes('8,192')`), 'live context count');
+    await wait(() => js(`document.querySelector('#context-usage').textContent.includes('16384') || document.querySelector('#context-usage').textContent.includes('16,384')`), 'live context count');
     await wait(() => js(`!document.querySelector('#token-rate').textContent.startsWith('—')`), 'live TPS'); await capture('b11-live-context');
-    assert.equal(calls[0].options.num_ctx, 8192); assert.equal(calls[0].think, true);
+    assert.equal(calls[0].options.num_ctx, 16384); assert.equal(calls[0].think, true);
     finishStream();
     const completed = await wait(async () => (await state()).runs.find(item => item.id === approval.runId && item.status === 'completed'), 'completed run');
     assert.equal(completed.modelCalls.at(-1).metrics.tokensPerSecond, 6);
@@ -110,7 +115,8 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     await wait(() => !pendingMutations.has('chat.move'), 'existing move settled');
     assert.equal((await state()).chats.find(item => item.id === child.chatId).projectId, destination.id);
     await context('chat', chat.id); await click('#chat-context-menu [data-action="move"]'); await set('#move-project', '__new__'); await set('#move-project-name', 'Created by move');
-    const newFolder = path.join(dataDir, 'new-project-folder'); await fs.mkdir(newFolder); await set('#move-project-path', newFolder); await click('#confirm-move-chat');
+    const beforeMovePicker = (await state()).projects.length; pickerFolder = null; await click('#confirm-move-chat'); await wait(async () => pickerCalls === 3 && await js(`!document.querySelector('#confirm-move-chat').disabled`), 'move picker canceled'); assert.equal((await state()).projects.length, beforeMovePicker); assert.equal((await state()).chats.find(item => item.id === chat.id).projectId, destination.id); assert.equal(await js(`Boolean(document.querySelector('#move-project-path'))`), false);
+    const newFolder = path.join(dataDir, 'new-project-folder'); await fs.mkdir(newFolder); pickerFolder = newFolder; await click('#confirm-move-chat');
     const moved = await wait(async () => (await state()).projects.find(item => item.name === 'Created by move'), 'new destination project');
     await wait(async () => (await state()).chats.find(item => item.id === chat.id).projectId === moved.id, 'move new');
     await wait(() => !pendingMutations.has('chat.move'), 'new move settled');
@@ -155,7 +161,8 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     assert.equal(await js(`document.querySelector('#prompt').value`), 'Private draft survives b1.1 UI refresh'); assert.equal(await js(`document.querySelectorAll('#image-drafts .image-draft').length`), 1);
     assert.ok(!(await fs.readFile(path.join(dataDir, 'state.json'), 'utf8')).includes('Private draft survives'));
     await capture('b11-restored-draft'); assert.deepEqual(errors, []);
-    const report = { ok: true, realRenderer: true, loopbackProviderOnly: true, suppliedBrandingDarkAndLight: true, contextAndThinkingWire: true, liveAndReportedTPS: true, inlineActivityAndApproval: true, keyboardDisclosureAndFocusRestore: true, scopedForceStop: true, moveExistingAndNewProject: true, archiveChatAndProject: true, deletionCancelAndExactTargetConfirmation: true, workspaceFilesPreserved: true, draftReload: true, paidCalls: 0, screenshots };
+    assert.equal(pickerCalls, 4); assert.equal(pickerRequests.length, 4); assert.ok(pickerRequests.every(params => !Object.hasOwn(params, 'path')));
+    const report = { ok: true, realRenderer: true, loopbackProviderOnly: true, suppliedBrandingDarkAndLight: true, contextAndThinkingWire: true, liveAndReportedTPS: true, inlineActivityAndApproval: true, keyboardDisclosureAndFocusRestore: true, scopedForceStop: true, nativeProjectPicker: true, cancelPickerCreatesNothing: true, moveExistingAndNewProject: true, archiveChatAndProject: true, deletionCancelAndExactTargetConfirmation: true, workspaceFilesPreserved: true, draftReload: true, paidCalls: 0, screenshots };
     const reportPath = path.join(dataDir, 'b11-smoke-report.json'); await fs.writeFile(reportPath, JSON.stringify(report, null, 2)); return { ...report, reportPath };
   } finally {
     if (window.webContents.debugger.isAttached()) window.webContents.debugger.detach();
@@ -163,5 +170,6 @@ export async function runB11Smoke({ window, runtime, chat, dataDir }) {
     const snapshot = await state(); for (const item of snapshot.chats) if (snapshot.runs.some(run => run.chatId === item.id && ['running', 'waiting_approval'].includes(run.status))) await runtime.request('chat.forceStop', { chatId: item.id }).catch(() => {});
     await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
     runtime.request = originalRequest;
+    host.chooseDirectory = originalChooser;
   }
 }

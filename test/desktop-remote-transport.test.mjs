@@ -6,6 +6,7 @@ import tls from 'node:tls';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { createRemoteHost, createRemoteController, generateRemoteIdentity, parseRemoteInvitation, validateRemoteRoute } from '../desktop/remote-transport.mjs';
+import { createRemoteWorkspace } from '../core/remote-workspace.mjs';
 
 const windows = { skip: process.platform !== 'win32' };
 const route = { relayUrl: 'wss://fixture.trycloudflare.com', routeId: 'a'.repeat(43), hostName: 'Host fixture' };
@@ -119,6 +120,34 @@ test('revocation aborts only that device; stop and profile close abort every liv
   const c = second.request(secondConnection.id, 'state.get', {}).catch(error => error); await until(() => signals.length === 3);
   await f.remoteHost.dispose(); assert.equal(signals[2].signal.aborted, true); assert.ok(await c instanceof Error);
   assert.equal(f.remoteHost.status().running, false);
+});
+
+test('remote image fetches use paired TLS authority and revocation cancels an in-flight image',windows,async t=>{
+  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=';
+  const state = {projects:[{id:'p',name:'Project',path:'private host path'}],providers:[],runs:[],approvals:[],
+    chats:[{id:'c',projectId:'p',messages:[{id:'m',role:'assistant',content:'Created this image',images:[image]}]}]};
+  const workspace = createRemoteWorkspace({current:()=>({state,stateRevision:1,streams:new Map()}),request:async()=>{throw new Error('No mutations in image reads');}});
+  t.after(()=>workspace.close());
+  let dispatches = 0, delayImage = false, imageSignal;
+  const f = await fixture(t,{dispatch:async(method,envelope,authority)=>{
+    dispatches++; assert.equal(method,'workspace.rpc');
+    if (delayImage && envelope.method === 'chat.image') {
+      imageSignal = authority.signal;
+      await new Promise(resolve=>authority.signal.addEventListener('abort',resolve,{once:true}));
+    }
+    return workspace.dispatch(envelope.method,envelope.params,authority);
+  }}), connection = await f.pair();
+  const rpc = (method,params)=>f.remoteController.request(connection.id,'workspace.rpc',{method,params});
+  const page = await rpc('chat.read',{chatId:'c',imageMode:'references'}), imageId = page.chat.messages[0].imageRefs[0].id;
+  assert.equal(JSON.stringify(page).includes(image),false); assert.equal(JSON.stringify(page).includes('private host path'),false);
+  const envelope = {method:'workspace.rpc',params:{method:'chat.image',params:{chatId:'c',imageId}}};
+  const before = dispatches; assert.equal((await f.raw('/request',envelope)).status,401); assert.equal(dispatches,before);
+  assert.deepEqual(await rpc('chat.image',{chatId:'c',imageId}),{imageId,image});
+  delayImage = true;
+  const pending = rpc('chat.image',{chatId:'c',imageId}).catch(error=>error);
+  await until(()=>imageSignal); await f.remoteHost.revokeDevice(connection.deviceId);
+  assert.equal(imageSignal.aborted,true); assert.ok(await pending instanceof Error);
+  const revoked = dispatches; await assert.rejects(rpc('chat.image',{chatId:'c',imageId}),/not authorized/); assert.equal(dispatches,revoked);
 });
 
 test('controller supports two independent saved hosts and never exposes either bearer', windows, async t => {
