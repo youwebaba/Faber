@@ -26,6 +26,9 @@ desktop/tools and UI modules, with the acceptance evidence below.
 | Native project folder picker (a2.3) | project forms and host chooseDirectory | New project and move-to-new-project omit manual paths and invoke the native folder selector. Cancel makes no project or move. |
 | Project/chat indentation (a2.3) | local and remote sidebar | Chats indent beneath projects and child agents remain beneath their parent. |
 | New-chat permission defaults (a2.3) | settings schema, chat creation, preferences | Defaults persist and affect only future user-created chats. Existing chats, child inheritance and external session authority are preserved. Model tools cannot alter permission defaults. |
+| Audio/video playback and fullscreen (a2.4) | media tool/store, desktop protocol, chat players | Actual media plays and seeks with native controls; video enters fullscreen; refreshes retain player state and chat switches stop playback. |
+| Remote audio/video (a2.4) | scoped media references and paired transport | Real encrypted requests deliver bounded chunks, support seeking and reject unowned/revoked references. Model history carries descriptors only. |
+| Chat content context menu (a2.4) | shared renderer menu, user-only desktop bridge | Mouse and keyboard actions copy text or decoded images and save local/remote image/audio/video bytes exactly. Cancel preserves existing files; agents cannot choose save paths or write clipboard. |
 
 This first implementation is a developer application. Focused checks establish
 specific behavior, not general autonomous reliability, a security certification,

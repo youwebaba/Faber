@@ -13,7 +13,7 @@ export function chatApprovals(state, chatId) {
 export function safeImage(value) { return typeof value === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(value) ? value : null; }
 export function displayText(value) { return typeof value === 'string' ? value : value === undefined ? '' : JSON.stringify(value, null, 2); }
 export function sameMessage(a, b) {
-  return Boolean(a && b && ['id', 'role', 'content', 'createdAt', 'status', 'toolName', 'image', 'fromChatId'].every(key => a[key] === b[key]) && JSON.stringify(a.toolCalls) === JSON.stringify(b.toolCalls) && JSON.stringify(a.images) === JSON.stringify(b.images));
+  return Boolean(a && b && ['id', 'role', 'content', 'createdAt', 'status', 'toolName', 'image', 'fromChatId'].every(key => a[key] === b[key]) && JSON.stringify(a.toolCalls) === JSON.stringify(b.toolCalls) && JSON.stringify(a.images) === JSON.stringify(b.images) && JSON.stringify(a.mediaRefs) === JSON.stringify(b.mediaRefs));
 }
 export function parseArguments(value) {
   const parsed = JSON.parse(value || '{}');

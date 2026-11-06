@@ -1,4 +1,4 @@
-# Faber a2.3
+# Faber a2.4
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -6,7 +6,14 @@ Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
 
-**a2.3 brings remote chats into the main sidebar and transfers chat images.**
+**a2.4 plays audio and video directly in chat, including remote chats.**
+Use the playback controls to pause, seek or adjust volume, and open videos in
+fullscreen. Right-click chat content to copy text or images and save displayed
+images, audio or video with the Windows Save As dialog. An agent can publish a
+saved project recording or generated clip with `media_show`.
+See [Chat media](MEDIA.md) for formats and limits.
+
+**a2.3 brought remote chats into the main sidebar and added image transfer.**
 Local projects stay visible while you work on another PC. A blue globe identifies
 remote chats, with project and device details on hover or keyboard focus.
 The paired host supplies its displayed images through the encrypted connection.
@@ -26,7 +33,7 @@ a requested tool call when the final event contained an empty output list.
 Faber now recovers completed items from the stream and runs each validated tool
 call once. If only partial text arrived, it stays visible with an error.
 
-Download the [a2.3 Windows installer, relay kit and checksums](https://github.com/youwebaba/Faber/releases/tag/a2.3).
+Download the [a2.4 Windows installer, relay kit and checksums](https://github.com/youwebaba/Faber/releases/tag/a2.4).
 Each version has its own full release, patch notes and installer. Earlier
 versions are available in the [release history](https://github.com/youwebaba/Faber/releases).
 

@@ -37,7 +37,7 @@ test('HTML is literal except exact emphasis tags and single allowlisted color de
   assert.deepEqual(all(root, 'span').map(node => node.style.color), ['#ff6600', 'red']);
   assert.equal(all(root, 'u')[0].textContent, 'Under');
   for (const source of [
-    '<script>alert(1)</script>', '<img src=x onerror=alert(1)>', '<svg onload=alert(1)>x</svg>',
+    '<script>alert(1)</script>', '<img src=x onerror=alert(1)>', '<svg onload=alert(1)>x</svg>', '<video src="https://example.com/track.webm" autoplay></video>', '<audio src="file:///secret.wav" controls></audio>',
     '<iframe src="https://example.com">x</iframe>', '<a href="javascript:alert(1)">x</a>',
     '<span style="color: red; background: url(https://example.com/a)">x</span>',
     '<span style="color: expression(alert(1))">x</span>', '<span style="color: transparent">x</span>',
@@ -45,7 +45,7 @@ test('HTML is literal except exact emphasis tags and single allowlisted color de
   ]) {
     const result = render(source);
     assert.equal(result.textContent, source);
-    for (const tag of ['script', 'img', 'svg', 'iframe', 'a', 'span', 'u']) assert.equal(all(result, tag).length, 0, source);
+    for (const tag of ['script', 'img', 'svg', 'iframe', 'a', 'span', 'u', 'video', 'audio']) assert.equal(all(result, tag).length, 0, source);
   }
   assert.equal(render('&lt;script&gt; &#x41; &amp;').textContent, '<script> A &');
 });

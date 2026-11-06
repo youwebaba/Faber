@@ -14,6 +14,7 @@ import {defaultPromptPresets,generalPrompt,promptTextSchema,promptIdSchema,reaso
 import {bugReportDraft,redactReport,reportIssueUrl,externalWebUrl} from './bug-report.mjs';
 
 import { createRemoteWorkspace } from './remote-workspace.mjs';
+import { createMediaStore, sourceMediaRefs } from './media.mjs';
 
 const now = () => new Date().toISOString();
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -97,7 +98,16 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
   const recentErrors = [];
   let closed = false;
-  const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, modelDisplayName:host.modelDisplayName });
+  const mediaStore = createMediaStore({ dataDir, findReference(chatId,mediaId) {
+    const chat = state.chats.find(chat => chat.id === chatId);
+    const sources = [...(chat?.messages || []), ...state.runs.filter(run => run.chatId === chatId).flatMap(run => run.toolEvents)];
+    const media = chat && sources.flatMap(sourceMediaRefs).find(media => media.id === mediaId);
+    if (!media) throw new Error('Media is no longer available for this chat');
+    return media;
+  } });
+  const readMedia = (params,signal) => { if (closed) throw new Error('Runtime is closed'); return mediaStore.read(params,signal); };
+  await mediaStore.prune(state.chats.map(chat=>chat.id));
+  const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, readMedia, modelDisplayName:host.modelDisplayName });
   function emit(event) { remoteWorkspace.notify(event); if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
   function settingsSnapshot() { return structuredClone({ ...state.settings, defaultGrants: state.defaultChatGrants }); }
   function snapshot() { const { defaultChatGrants, ...publicState } = state; return structuredClone({ ...publicState, settings: settingsSnapshot(), tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
@@ -277,7 +287,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       event.result = JSON.parse(serialized); event.status = 'completed';
       return event.result;
     } catch (error) { event.status = signal.aborted ? 'canceled' : 'failed'; event.error = error.message; throw error; }
-    finally { event.endedAt = now(); await changed(); }
+    finally { event.endedAt = now(); try { await changed(); } finally { await mediaStore.settle(chat.id); } }
   }
   function contextMessages(chat, provider, prompt = chat.systemPrompt, full = false) {
     const system = `${prompt ?? generalPrompt}\n\nFaber runtime context: current chat ${chat.id}; project ${find('projects', chat.projectId).path}. Tool access is enforced by the harness, not by the selected prompt.`;
@@ -458,7 +468,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         catch (error) { signal.throwIfAborted(); result = { error: error.message }; }
         const image = typeof result?.image === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(result.image) ? result.image : undefined;
         const textResult = image ? { ...result, image: '[image supplied to model]' } : result;
-        addMessage(chat, 'tool', JSON.stringify(textResult), { toolName: call.name, toolCallId: call.id, runId: run.id, sourceMessageId: assistantMessage.id, modelCallId: modelCall.id, ...(image ? { image } : {}) });
+        const mediaRefs = sourceMediaRefs({ result });
+        addMessage(chat, 'tool', JSON.stringify(textResult), { toolName: call.name, toolCallId: call.id, runId: run.id, sourceMessageId: assistantMessage.id, modelCallId: modelCall.id, ...(image ? { image } : {}), ...(mediaRefs.length ? { mediaRefs } : {}) });
         await changed();
       }
     }
@@ -702,7 +713,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         await changed();return {ok:true,chatIds:[...ids],projectId:project.id};
       }
       case 'chat.delete':{
-        find('chats',params.chatId);const ids=chatTree(params.chatId);assertMutable(ids);const result=removeChats(ids);await changed();return {ok:true,...result};
+        find('chats',params.chatId);const ids=chatTree(params.chatId);assertMutable(ids);const result=removeChats(ids);await changed();await mediaStore.prune([...ids],true);return {ok:true,...result};
       }
       case 'project.archive':{
         const project=find('projects',params.projectId),ids=new Set(state.chats.filter(chat=>chat.projectId===project.id).map(chat=>chat.id));
@@ -712,7 +723,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       }
       case 'project.delete':{
         const project=find('projects',params.projectId),ids=new Set(state.chats.filter(chat=>chat.projectId===project.id).map(chat=>chat.id));
-        assertMutable(ids);const result=removeChats(ids);state.projects=state.projects.filter(item=>item.id!==project.id);await changed();return {ok:true,projectId:project.id,...result};
+        assertMutable(ids);const result=removeChats(ids);state.projects=state.projects.filter(item=>item.id!==project.id);await changed();await mediaStore.prune([...ids],true);return {ok:true,projectId:project.id,...result};
       }
       case 'provider.save': {
         const id = params.id || randomUUID(); const existing = state.providers.find(item => item.id === id);
@@ -785,6 +796,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   const runtime = {
     remoteRequest: remoteWorkspace.dispatch, request, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, emit,
+    readMedia,
+    publishMedia(args) { if (closed || !state.chats.some(chat => chat.id === args.chatId)) throw new Error('Chat no longer exists'); return mediaStore.publish(args); },
     registerTools(tools) { install(tools); },
     async withExternalProvider({ providerId, model }, callback) {
       if (closed) throw new Error('Runtime is closed');

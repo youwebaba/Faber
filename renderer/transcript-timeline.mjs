@@ -23,7 +23,7 @@ export function transcriptTimeline(state, chatId, streams = new Map()) {
         if (event) { used.add(event.id); return event; }
         const result = messages.find(item => item.role === 'tool' && item.toolCallId === call.id);
         let output = result?.content; try { output = JSON.parse(output); } catch { /* Ordinary text result. */ }
-        return { id: `call:${call.id}`, toolCallId: call.id, name: callName(call), args: callArgs(call), status: result ? output?.error ? 'failed' : result.status || 'completed' : isActive(run) ? 'queued' : 'interrupted', ...(result ? { result: output, image: result.image } : {}) };
+        return { id: `call:${call.id}`, toolCallId: call.id, name: callName(call), args: callArgs(call), status: result ? output?.error ? 'failed' : result.status || 'completed' : isActive(run) ? 'queued' : 'interrupted', ...(result ? { result: output, image: result.image, imageRefs: result.imageRefs, mediaRefs: result.mediaRefs } : {}) };
       });
       representedMessages.add(message.id);
       batches.push({ id: `${run.id}:step:${batches.length}`, run, events, slot: index + 1, at: message.createdAt, childRuns: [] });
@@ -51,7 +51,7 @@ export function transcriptTimeline(state, chatId, streams = new Map()) {
     rows.push(...slots.get(index) || []);
     const message = messages[index]; if (!message) continue;
     if (message.role === 'tool' && representedCalls.has(message.toolCallId)) continue;
-    if (representedMessages.has(message.id) && !message.content && !message.images?.length) continue;
+    if (representedMessages.has(message.id) && !message.content && !message.images?.length && !message.mediaRefs?.length) continue;
     rows.push({ kind: 'message', key: message.id, message });
   }
   for (const run of runs.filter(isActive)) {
@@ -65,7 +65,7 @@ export function reconcileTranscript(parent, nodes) {
   const allowed = new Set(nodes);
   for (const node of [...parent.children]) if (!allowed.has(node)) node.remove();
   let cursor = parent.firstChild;
-  for (const node of nodes) { if (node !== cursor) parent.insertBefore(node, cursor); cursor = node.nextSibling; }
+  for (const node of nodes) { if (node !== cursor) { if (node.parentNode === parent && parent.moveBefore) parent.moveBefore(node, cursor); else parent.insertBefore(node, cursor); } cursor = node.nextSibling; }
 }
 
 export function preserveTranscriptViewport(parent, update) {

@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.3 (application version 2.3.0), including
+This contract describes Faber a2.4 (application version 2.4.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -23,6 +23,13 @@ chat/tool/inbox image data. They do not accept a file path, fetch a URL or execu
 a command. Image IDs bind their owning chat, source and current content.
 Legacy controllers may continue to use bounded inline image responses, and
 a2.3 controllers omit the new option for hosts without the capability.
+
+a2.4 adds `mediaReferences` and `chat.read {mediaMode:'references'}`. Audio/video
+descriptors are chat-owned opaque IDs; `chat.media {chatId,mediaId,offset,length}`
+reads at most 256 KiB per request. Media bytes stay outside transcripts and
+provider history. The desktop streams validated references through its local
+protocol and owns clipboard and native Save As operations. Agent tools cannot
+write the clipboard or choose a save destination. See [Chat media](MEDIA.md).
 
 ## Implementation ownership
 

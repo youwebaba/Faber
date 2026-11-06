@@ -18,14 +18,14 @@ export function modelProgress(run, stream) {
   if (phase === 'connecting' || phase === 'thinking' || call?.status === 'running') return { label: detail || 'Thinking…', title: detail ? 'Model-reported progress.' : 'Awaiting the model response.', pulse: true };
   return run.toolEvents?.some(isActive) ? { label: 'Running tools…', title: '', pulse: false } : { label: 'Thinking…', title: 'Awaiting the model response.', pulse: true };
 }
-export function createRunActivity({ el, button, appendResult, selectChat, resolveApproval }) {
+export function createRunActivity({ el, button, appendResult, selectChat, resolveApproval, bindContent }) {
   const cards = new Map(), tools = new Map(), expanded = new Set();
   function disclosure(key, className) {
     const node = el('details', className); node.open = expanded.has(key);
     node.addEventListener('toggle', () => { node.open ? expanded.add(key) : expanded.delete(key); }); return node;
   }
-  function toolNode(event, runId) {
-    const key = `${runId}:${event.toolCallId || event.id}`, signature = JSON.stringify(event); let cached = tools.get(key);
+  function toolNode(event, run) {
+    const key = `${run.id}:${event.toolCallId || event.id}`, signature = JSON.stringify(event); let cached = tools.get(key);
     if (!cached) { cached = { node: disclosure(`tool:${key}`, 'run-activity-tool') }; tools.set(key, cached); }
     cached.node.dataset.eventId = event.id;
     if (cached.signature !== signature) {
@@ -35,6 +35,7 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
       if (event.args !== undefined) tool.append(el('div', 'activity-detail-label', 'Input'), el('pre', 'result-content', displayText(event.args)));
       if (event.result !== undefined) { tool.append(el('div', 'activity-detail-label', 'Output')); appendResult(tool, event.result, event.image); }
       if (event.error) tool.append(el('p', 'error-text', event.error));
+      bindContent?.(tool, { chatId: run.chatId, text: displayText(event.result ?? event.args ?? event.error) });
     }
     return cached.node;
   }
@@ -64,7 +65,7 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
         const branch = el('section', `run-activity-branch${item.primary ? '' : ' child'}`); branch.dataset.agentRunId = item.run.id;
         if (!item.primary) branch.append(button(item.title, () => selectChat(item.run.chatId), 'text-button'), el('span', 'hint', statusLabel(item.run.status)));
         if (isActive(item.run) && (!item.primary || activity.last)) { const progress = modelProgress(item.run, streams.get(item.run.id)), status = el('p', `hint model-progress${progress.pulse ? ' thinking-pulse' : ''}`, progress.label); status.title = progress.title; branch.append(status); }
-        for (const event of item.events) branch.append(toolNode(event, item.run.id));
+        for (const event of item.events) branch.append(toolNode(event, item.run));
         if (item.run.error && (!item.primary || activity.last)) branch.append(el('p', 'error-text', item.run.error));
         for (const approval of approvals.filter(approval => approval.runId === item.run.id)) {
           const pending = el('div', 'activity-pending-approval'); pending.append(el('strong', '', `Allow ${approval.permission} access?`), el('p', '', approval.summary));

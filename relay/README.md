@@ -13,13 +13,13 @@ it cannot authenticate itself as the pinned home PC.
 
 ## Windows operator kit
 
-Extract `Faber-Relay-a2.3.zip`, open its `relay` subfolder in PowerShell,
+Extract `Faber-Relay-a2.4.zip`, open its `relay` subfolder in PowerShell,
 then run `.\Start-FaberRelay.ps1`. Windows x64, Node.js 24+ with npm, and
 outbound Internet access are required. The launcher copies service files into
 `%LOCALAPPDATA%\FaberRelay`, installs the locked dependency, verifies the pinned
 Cloudflare tunnel helper and starts both processes in the background. Open Faber
 on the same PC to enable hosting and enroll its public route. See the application
-[remote-session guide](https://github.com/youwebaba/Faber/blob/a2.3/REMOTE.md).
+[remote-session guide](https://github.com/youwebaba/Faber/blob/a2.4/REMOTE.md).
 
 Run `.\Start-FaberRelay.ps1 -Stop` to stop the owned processes. The tunnel is
 temporary: its public address changes after restart. Keep operator settings,
