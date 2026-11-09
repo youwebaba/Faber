@@ -19,7 +19,7 @@ test('immutable native payload privacy gate scans complete binary bytes and reta
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-native-privacy-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const executable=path.join(directory,'faber-safetensors.exe'),notice=path.join(directory,'licenses','NOTICE.txt');await fs.mkdir(path.dirname(notice));
   await fs.writeFile(notice,'Copyright Fixture Maintainer. MIT license.');
-  const manifest={schemaVersion:1,protocol:2,executable:'faber-safetensors.exe',engineCommit:'465191d0b0a7e2432d327b0de06204ab3f94d3a2',files:[]},identity={terms:['Fixture Maintainer'],configured:true};
+  const manifest={schemaVersion:1,protocol:3,executable:'faber-safetensors.exe',engineCommit:'465191d0b0a7e2432d327b0de06204ab3f94d3a2',files:[]},identity={terms:['Fixture Maintainer'],configured:true};
   const refresh=async()=>{manifest.files=await Promise.all(['faber-safetensors.exe','licenses/NOTICE.txt'].map(async name=>({path:name,size:(await fs.stat(path.join(directory,name))).size,sha256:await safetensorsDigest(path.join(directory,name))})));};
   const privateFixturePath=['C:','Users','fixture-maintainer','private','cache','source.rs'].join('/');
   await fs.writeFile(executable,Buffer.concat([Buffer.alloc(10000),Buffer.from(privateFixturePath)]));await refresh();
@@ -89,7 +89,7 @@ test('private pipe frames preserve streaming and cancellation without any native
   const transport=createSafetensorsTransport();transport.attach(child);
   const frame=value=>{const body=Buffer.from(JSON.stringify(value)),header=Buffer.alloc(4);header.writeUInt32LE(body.length);child.stdout.write(Buffer.concat([header,body]));};
   const commands=[];child.stdin.on('data',bytes=>{const command=JSON.parse(bytes.subarray(4));commands.push(command);if(command.kind==='cancel')frame({kind:'done',id:command.id,canceled:true});else{frame({kind:'chunk',id:command.id,value:{model:'worker-model',choices:[{index:0,delta:{content:'hello'},finish_reason:null}]}});if(command.body.prompt!=='hold'){frame({kind:'chunk',id:command.id,value:{model:'worker-model',choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{completion_tokens:1}}});frame({kind:'done',id:command.id});}}});
-  frame({kind:'ready',protocol:2,model:'worker-model',backend:'cpu',quantization:{mode:'none'}});assert.equal((await transport.fetch('http://127.0.0.1:1/v1/models')).status,200);
+  frame({kind:'ready',protocol:3,model:'worker-model',backend:'cpu',quantization:{mode:'none'},precision:{verified:true,effectiveBitsPerParameter:32,parameters:1}});assert.equal((await transport.fetch('http://127.0.0.1:1/v1/models')).status,200);
   const controller=new AbortController(),response=await transport.fetch('http://127.0.0.1:1/v1/chat/completions',{body:JSON.stringify({model:alias,prompt:'hold',stream:true}),signal:controller.signal});const reader=response.body.getReader();assert.match(new TextDecoder().decode((await reader.read()).value),/hello/);controller.abort(new Error('fixture stopped'));await assert.rejects(reader.read(),/fixture stopped/);
   const next=await transport.fetch('http://127.0.0.1:1/v1/chat/completions',{body:JSON.stringify({model:alias,prompt:'next',stream:false})});assert.equal((await next.json()).choices[0].message.content,'hello');assert.ok(commands.some(command=>command.kind==='cancel'));transport.close();
 });
@@ -97,6 +97,6 @@ test('private pipe frames preserve streaming and cancellation without any native
 test('native worker handshake must confirm the exact requested quantization before readiness',async()=>{
   let killed=false;const child=new EventEmitter();Object.assign(child,{stdin:new PassThrough(),stdout:new PassThrough(),kill(){killed=true;child.emit('close');}});
   const transport=createSafetensorsTransport({quantization:{mode:'q4_0'}});transport.attach(child);
-  const body=Buffer.from(JSON.stringify({kind:'ready',protocol:2,model:'worker-model',backend:'cpu',quantization:{mode:'q8_0'}})),header=Buffer.alloc(4);header.writeUInt32LE(body.length);child.stdout.write(Buffer.concat([header,body]));
+  const body=Buffer.from(JSON.stringify({kind:'ready',protocol:3,model:'worker-model',backend:'cpu',quantization:{mode:'q8_0'}})),header=Buffer.alloc(4);header.writeUInt32LE(body.length);child.stdout.write(Buffer.concat([header,body]));
   assert.equal(killed,true);await assert.rejects(transport.fetch('http://127.0.0.1:1/v1/models'),/stopped/);assert.throws(()=>transport.observed(),/not confirmed/);
 });

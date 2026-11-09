@@ -20,7 +20,7 @@ export function createSafetensorsTransport({quantization={mode:'none'}}={}) {
   }
   function fail(error) { closed = true; ready = false; finish(error); }
   function accept(frame) {
-    if (frame.kind === 'ready') { if (frame.protocol !== 2 || frame.model !== 'worker-model' || frame.backend !== 'cpu'||JSON.stringify(frame.quantization)!==JSON.stringify(quantization)) throw new Error('Native worker did not confirm the selected load profile');handshake={quantization:{...quantization,accepted:true,precision:'layer-dependent'}}; ready = true; return; }
+    if (frame.kind === 'ready') { if (frame.protocol !== 3 || frame.model !== 'worker-model' || frame.backend !== 'cpu'||JSON.stringify(frame.quantization)!==JSON.stringify(quantization)||frame.precision?.verified!==true||!Number.isFinite(frame.precision.effectiveBitsPerParameter)||frame.precision.effectiveBitsPerParameter<=0||frame.precision.effectiveBitsPerParameter>128||!Number.isSafeInteger(frame.precision.parameters)||frame.precision.parameters<=0) throw new Error('Native worker did not confirm the selected profile and effective precision');handshake={quantization:{...quantization,accepted:true,precision:'layer-dependent'},precision:frame.precision}; ready = true; return; }
     if (!active || frame.id !== active.id) throw new Error('Unexpected native worker request identity');
     if (frame.kind === 'error') { finish(new Error(String(frame.message || 'Native model request failed').slice(0,1500))); return; }
     if (frame.kind === 'done') { finish(); return; }

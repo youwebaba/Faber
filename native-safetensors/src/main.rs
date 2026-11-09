@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail, ensure};
-use mistralrs::{CalledFunction, IsqType, Model, ModelDType, RequestBuilder, Response, StopTokens, TextMessageRole, TextModelBuilder, TokenSource, Tool, ToolCallResponse, ToolCallType, ToolChoice};
+use mistralrs::{CalledFunction, IsqType, LayerTopology, Model, ModelDType, RequestBuilder, Response, StopTokens, TextMessageRole, TextModelBuilder, TokenSource, Tool, ToolCallResponse, ToolCallType, ToolChoice, Topology};
+use std::{collections::BTreeMap,io::Read,path::Path};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -8,10 +9,45 @@ const LIMIT: usize = 16 * 1024 * 1024;
 
 #[derive(Deserialize,serde::Serialize,Clone,Copy)]
 #[serde(rename_all="snake_case")]
-enum QuantizationMode { None, Q4_0, Q8_0 }
+enum QuantizationMode { None, Q4_0, Q5_0, Q8_0, #[serde(rename="mixed_q4_q8")] MixedQ4Q8 }
 #[derive(Deserialize,serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct LoadProfile { mode: QuantizationMode }
+
+fn bounded_json(path:&Path)->Result<Value>{
+    let metadata=std::fs::symlink_metadata(path)?;ensure!(metadata.is_file()&&!metadata.file_type().is_symlink()&&metadata.len()<=LIMIT as u64,"Invalid native metadata file");
+    Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+}
+fn tensor_elements(shape:&Value)->Result<u64>{
+    let values=shape.as_array().context("Missing native tensor shape")?;ensure!(values.len()<=16,"Invalid native shape rank");
+    let mut count=1u64;for value in values{count=count.checked_mul(value.as_u64().context("Invalid native shape")?).context("Native shape overflow")?;}ensure!(count<=9007199254740991,"Native shape exceeds safe transport size");Ok(count)
+}
+fn tensor_header(path:&Path)->Result<Value>{
+    let mut file=std::fs::File::open(path)?;let mut prefix=[0u8;8];file.read_exact(&mut prefix)?;let length=u64::from_le_bytes(prefix);
+    ensure!(length<=LIMIT as u64&&length+8<=file.metadata()?.len(),"Invalid native tensor metadata length");let mut bytes=vec![0u8;length as usize];file.read_exact(&mut bytes)?;Ok(serde_json::from_slice(&bytes)?)
+}
+fn precision_report(model_path:&Path,verification:&Path,mode:QuantizationMode)->Result<Value>{
+    if matches!(mode,QuantizationMode::None){
+        let mut parameters=0u64;let mut tensors=0u64;
+        for entry in std::fs::read_dir(model_path)?{let entry=entry?;if entry.file_name().to_string_lossy().ends_with(".safetensors"){
+            for(name,tensor)in tensor_header(&entry.path())?.as_object().context("Invalid tensor header")?{if name!="__metadata__"{parameters=parameters.checked_add(tensor_elements(&tensor["shape"])?).context("Parameter count overflow")?;tensors+=1;}}
+        }}
+        ensure!(parameters>0&&parameters<=9007199254740991/4,"Invalid floating weight count");
+        return Ok(json!({"verified":true,"method":"native-float32-loader","parameters":parameters,"formats":{"f32":tensors},"effectiveBitsPerParameter":32.0,"logicalWeightBytes":parameters*4,"fallbackCount":0}));
+    }
+    let report=bounded_json(&verification.join("uqff_report.json"))?;let output=&report["outputs"][0];
+    let details=output["layer_details"].as_array().context("Missing native precision details")?;ensure!(!details.is_empty(),"No native quantized layers were verified");
+    let mut parameters=0u64;let mut parameters_by_format=BTreeMap::<String,u64>::new();
+    for layer in details{let count=tensor_elements(&layer["shape"])?;parameters=parameters.checked_add(count).context("Parameter count overflow")?;let format=layer["stored"].as_str().context("Missing actual native format")?;ensure!(format.len()<40,"Invalid format label");*parameters_by_format.entry(format.to_owned()).or_default()+=count;}
+    let residual=verification.join("residual.safetensors");if residual.is_file(){for(name,tensor)in tensor_header(&residual)?.as_object().context("Invalid residual tensor header")?{if name!="__metadata__"{let count=tensor_elements(&tensor["shape"])?;parameters=parameters.checked_add(count).context("Parameter count overflow")?;let dtype=tensor["dtype"].as_str().context("Missing residual dtype")?.to_lowercase();*parameters_by_format.entry(dtype).or_default()+=count;}}}
+    let mut packed_bytes=0u64;
+    for entry in std::fs::read_dir(verification)?{let entry=entry?;let metadata=entry.file_type()?;ensure!(metadata.is_file()&&!metadata.is_symlink(),"Unexpected native verification artifact");let name=entry.file_name();let name=name.to_string_lossy();if name.ends_with(".uqff")||name=="residual.safetensors"{packed_bytes=packed_bytes.checked_add(entry.metadata()?.len()).context("Native storage budget overflow")?;}}
+    ensure!(parameters>0&&parameters<=9007199254740991&&packed_bytes<=9007199254740991,"Invalid verified weight budget");
+    let result=json!({"verified":true,"method":"native-uqff-verification","parameters":parameters,"formats":output["actual_counts"],"parametersByFormat":parameters_by_format,"effectiveBitsPerParameter":packed_bytes as f64*8.0/parameters as f64,"packedBytes":packed_bytes,"fallbackCount":output["fallback_count"],"layers":output["layers"],"verificationRemoved":true});
+    let parent=model_path.canonicalize()?;let target=verification.canonicalize()?;
+    ensure!(target.parent()==Some(parent.as_path())&&target.file_name()==Some(std::ffi::OsStr::new(".faber-precision")),"Unsafe precision cleanup target");
+    std::fs::remove_dir_all(&target)?;Ok(result)
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,10 +148,16 @@ async fn main() -> Result<()> {
     let profile:LoadProfile=serde_json::from_str(&profile)?;
     ensure!(std::path::Path::new(&model_path).is_absolute() && std::path::Path::new(&model_path).join("config.json").is_file(), "Supply an existing local model package");
     ensure!(std::env::var("HF_HUB_OFFLINE").as_deref() == Ok("1"), "The worker requires offline mode");
-    let mut builder=TextModelBuilder::new(model_path).with_force_cpu().with_dtype(ModelDType::F32).with_token_source(TokenSource::None).with_max_num_seqs(1).without_paged_attn();
-    builder=match profile.mode { QuantizationMode::None=>builder,QuantizationMode::Q4_0=>builder.with_isq(IsqType::Q4_0),QuantizationMode::Q8_0=>builder.with_isq(IsqType::Q8_0) };
+    let model_path=std::path::PathBuf::from(model_path);let verification=model_path.join(".faber-precision");ensure!(!verification.exists(),"Native precision folder already exists");
+    let mut builder=TextModelBuilder::new(model_path.to_string_lossy()).with_force_cpu().with_dtype(ModelDType::F32).with_token_source(TokenSource::None).with_max_num_seqs(1).without_paged_attn();
+    builder=match profile.mode { QuantizationMode::None=>builder,QuantizationMode::Q4_0=>builder.with_isq(IsqType::Q4_0),QuantizationMode::Q5_0=>builder.with_isq(IsqType::Q5_0),QuantizationMode::Q8_0=>builder.with_isq(IsqType::Q8_0),QuantizationMode::MixedQ4Q8=>{
+        let config=bounded_json(&model_path.join("config.json"))?;let layers=config["num_hidden_layers"].as_u64().context("Mixed precision requires decoder layer metadata")?;ensure!((2..=8192).contains(&layers),"Unsupported mixed-precision layer count");
+        builder.with_isq(IsqType::Q4_0).with_topology(Topology::with_capacity(layers as usize).with_range(0..layers as usize/2,LayerTopology{isq:Some(IsqType::Q4_0),device:None}).with_range(layers as usize/2..layers as usize,LayerTopology{isq:Some(IsqType::Q8_0),device:None}))
+    }};
+    if !matches!(profile.mode,QuantizationMode::None){builder=builder.write_uqff(verification.join("weights.uqff"));}
     let model=builder.build().await?;
-    write(json!({"kind":"ready","protocol":2,"model":"worker-model","backend":"cpu","quantization":profile})).await?;
+    let precision=precision_report(&model_path,&verification,profile.mode)?;
+    write(json!({"kind":"ready","protocol":3,"model":"worker-model","backend":"cpu","quantization":profile,"precision":precision})).await?;
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let mut input = tokio::io::stdin();
@@ -140,6 +182,11 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn probe_native_ten_bit_candidate() {
+        let result=mistralrs::parse_isq_value("q10_0",None);assert!(result.is_err(),"A new upstream codec requires separate qualification");
+        println!("10-bit candidate q10_0 unsupported: {}",result.err().unwrap());
+    }
     #[test]
     fn untrusted_request_cannot_enable_host_tools_or_media() {
         assert!(serde_json::from_value::<LoadProfile>(json!({"mode":"q4_0","shell":true})).is_err());

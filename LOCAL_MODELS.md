@@ -50,16 +50,34 @@ select **Default** context, then **Start** and **Use in this chat**. The host
 retains the same chat tools, approvals and Stop controls. Unsupported packages
 stay visible with a reason and guidance to use GGUF or an external connection.
 
-**Quantization at load** offers original float32 execution, 4-bit Q4_0 or 8-bit
-Q8_0. Select the mode before Start; change a loaded model with Stop and another
+**Precision before Start** appears automatically for supported Safetensors.
+Its slider and profile selector offer original float32 execution, Q4_0, Q5_0,
+Q8_0 and true mixed Q4/Q8 decoder halves. Select the mode before Start; change a loaded model with Stop and another
 Start. A successful selection is remembered for that model. Published GGUF
 encodings and external connections retain their own settings.
 
+If a newer release saved a precision profile this version cannot load, Faber
+retains that setting and shows **Choose a supported profile**. Start remains
+disabled until a supported selection is made. Agent default Start also rejects
+the unsupported saved choice. Unrelated settings changes preserve the newer data.
+
 Quantization happens inside the native loader using the original weights. Loading
-can take longer and temporarily require float32 RAM. Norms, embeddings, output
-heads and other layers can retain different precision. The picker reports the
-requested profile and loader acceptance; RAM fit and uniform layer precision
-are not measured. See [a2.7 acceptance](docs/a2.7-safetensors-quantization.md).
+can take longer and temporarily require float32 RAM. Quantized profiles also
+write private precision-verification artifacts on the model drive, then remove
+them before readiness. The original package remains byte-exact. Norms, embeddings,
+output heads and other layers can retain different precision. Actual formats and
+the effective packed bit budget are verified and saved for the matching model,
+profile and adapter. A 10-bit candidate was tested and is explicitly unsupported
+by this pinned backend. See [a2.8 evidence](docs/a2.8-native-precision-fit.md).
+
+The fit display separates selected VRAM (green), system RAM (orange), and
+SSD/HDD backing (red), using labels and binary byte units. Each estimate splits
+weights, default-context storage and startup workspace, with reserved headroom.
+Disk distinguishes existing source files from additional temporary workspace.
+The native CPU route does not support GPU offload or RAM/GPU splitting. After
+Start, compare the estimates with verified CPU placement and the process working
+set sampled at readiness; context can grow later. Estimates are not measured fit
+or allocation guarantees.
 
 RAM use can substantially exceed download size, with additional context and
 execution buffers. Automatic and CPU modes use
