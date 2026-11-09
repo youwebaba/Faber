@@ -24,6 +24,7 @@ export function responsesInput(messages, provider) {
 }
 
 export function responsesBody({ provider, messages, tools }) {
+  const limits=[provider.compactionTokens,provider.workOutputTokens].filter(value=>Number.isSafeInteger(value)&&value>0);
   const thinking=provider.chatOptions?.thinking;
   const selectedEffort=provider.chatOptions?.reasoningEffort??provider.reasoningEffort;
   const effort=provider.chatOptions?.thinkingMode==='responses'&&typeof thinking==='boolean'?(thinking?(selectedEffort&&selectedEffort!=='none'?selectedEffort:provider.chatOptions?.defaultReasoningEffort||'medium'):'none'):selectedEffort;
@@ -31,7 +32,7 @@ export function responsesBody({ provider, messages, tools }) {
   return {
     model: provider.model, input: responsesInput(messages, provider), stream: true, store: false,
     include: ['reasoning.encrypted_content'],
-    ...(Number.isSafeInteger(provider.compactionTokens) && provider.compactionTokens > 0 ? { max_output_tokens: provider.compactionTokens } : {}),
+    ...(limits.length ? { max_output_tokens: Math.min(...limits) } : {}),
     ...(effort ? { reasoning: { effort } } : {}),
     tools: provider.authKind==='chatgpt'&&functions.length?[{type:'namespace',name:'faber',description:'Faber local tools. Each tool keeps its normal user-granted permissions.',tools:functions}]:functions,
   };

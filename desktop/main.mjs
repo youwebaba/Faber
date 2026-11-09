@@ -48,10 +48,11 @@ const smokeThinking=process.argv.includes('--smoke-thinking');
 const smokeBrowser=process.argv.includes('--smoke-browser');
 const smokeMedia=process.argv.includes('--smoke-media');
 const smokeWorker=process.argv.includes('--smoke-worker');
+const smokeSchedules=process.argv.includes('--smoke-schedules');
 const smokeInstalled=process.argv.includes('--smoke-installed');
 const smokeFaber=process.argv.includes('--smoke-faber');
 const smokePackage=process.argv.includes('--smoke-package');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia||smokeWorker;
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia||smokeWorker||smokeSchedules;
 const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):getProfileDirectory(process.env.LOCALAPPDATA??app.getPath('appData')));
 const profiles=bootstrap?.profiles||createProfiles(smoke?path.join(dataDir,'profile-registry'):process.env.LOCALAPPDATA??app.getPath('appData'),smoke?{defaultDirectory:dataDir}:{});
 const recoveryStatus={safeMode:bootstrap?.safeMode===true,reason:bootstrap?.recoveryReason||''};
@@ -103,6 +104,14 @@ const host={
     try{return await voice.action(action,args,signal);}finally{if(guarded)voiceOperations--;}
   },
   providerControls:(providerId,model)=>providerId.startsWith('chatgpt:')?chatgpt?.controls(providerId,model):localModels?.providerControls(providerId,model),
+  async routineResourcesBusy(){const state=await runtime.request('state.get'),local=await localModels.request('localModels.list');return state.runs.some(run=>!run.jobId&&['running','waiting_approval'].includes(run.status)&&run.providerId===local.managedProviderId);},
+  async prepareRoutineModel(definition,signal){
+    let local=await localModels.request('localModels.list',{},signal);
+    if(local.process.status!=='ready'||local.process.modelId!==definition.localModelId){await localModels.request('localModels.start',{modelId:definition.localModelId},signal);while(true){signal.throwIfAborted();local=await localModels.request('localModels.list',{},signal);if(local.process.status==='ready')break;if(['failed','stopped'].includes(local.process.status))throw new Error(local.process.error||'Local model did not become ready');await new Promise(resolve=>setTimeout(resolve,100));}}
+    const process=local.process;if(process.modelId!==definition.localModelId||!localModels.providerControls(process.providerId,process.model))throw new Error('Selected managed model identity changed');return {local:true,modelId:process.modelId,providerId:process.providerId,model:process.model};
+  },
+  async routineModelInfo(providerId,model,signal){const local=await localModels.request('localModels.list',{},signal),controls=localModels.providerControls(providerId,model);if(!controls||local.process.status!=='ready'||local.process.providerId!==providerId||local.process.model!==model)return null;const details=await localModels.request('localModels.details',{modelId:local.process.modelId},signal);return {local:true,architecture:details.architecture,contextTokens:controls.context.capacityTokens,label:localModels.modelDisplayName(providerId,model)};},
+  async routineIdleUnload(modelId,idleMs){const state=await runtime.request('state.get'),local=await localModels.request('localModels.list');if(local.process.modelId!==modelId||local.process.status!=='ready')return;const runs=state.runs.filter(run=>run.providerId===local.managedProviderId);if(runs.some(run=>['running','waiting_approval'].includes(run.status))||state.jobs.some(job=>job.definition.localModelId===modelId&&['loading_model','running','waiting_approval','waiting_resource'].includes(job.status)))return {retryAfterMs:Math.max(1000,idleMs)};const last=Math.max(0,...runs.map(run=>Date.parse(run.endedAt||run.startedAt))),remaining=idleMs-(Date.now()-last);if(remaining>0)return {retryAfterMs:remaining};await localModels.request('localModels.stop');},
   modelDisplayName:(providerId,model)=>providerId.startsWith('chatgpt:')?chatgpt?.status().accounts.find(account=>account.providerId===providerId)?.models.find(item=>item.id===model)?.name:localModels?.modelDisplayName(providerId,model),
   isAutomaticTool:(tool,permission)=>browser?.isAutomaticTool(tool,permission)===true||extensions?.isAutomaticTool(tool,permission)===true,
   assertProviderAvailable:(providerId,model,options)=>{if(providerId.startsWith('chatgpt:')){if(!chatgpt)throw new Error('ChatGPT account connection is unavailable');return chatgpt.assertAvailable(providerId,model,options);}return localModels?.assertProviderAvailable(providerId,model,options);},
@@ -186,7 +195,7 @@ modelHub=await createModelHub({dataDir,sourceDir,host,emit:event=>runtime.emit(e
 const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber||smokeB12||smokeB201?await import('../test/desktop-local-models-smoke.mjs'):null;
 const localFixture=localSmoke?await localSmoke.createLocalModelSmoke(dataDir,modelHub):null;
 if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
-localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options});
+localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options,...(smokeSchedules?{executable:process.env.FABER_REPORT_RUNNER}:{} )});
 music=createLocalMusic({dataDir,sourceDir,getHubState:()=>modelHub.request('models.state'),withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?{runtimeDirectory:path.join(bootstrap.resourcesPath,'music-runtime')}:{})});
 extensions=createAddons({dataDir,runtime,confirm,safeMode:recoveryStatus.safeMode,bundledSource:bootstrap?.bundledSource||path.join(sourceDir,'bundled-addons'),bundledResources:{lightpanda:bootstrap?.addonResources||path.join(sourceDir,'.runtime','lightpanda')},chooseAddon:host.chooseAddon,openPath:host.openPath,emit:event=>runtime.emit(event)});
 upgrades=createUpgrades({sourceDir:reloadFixture?.sourceDir||featureFixture?.upgradeSourceDir||sourceDir,dataDir,confirm:reloadFixture?async()=>true:confirm,onApplied:({id})=>runtime.emit({type:'uiUpdate',id})});
@@ -204,7 +213,8 @@ await runtime.startRoutines();
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 function applyZoom(value){if(window&&!window.isDestroyed()&&Number.isFinite(value)&&value>=0.75&&value<=1.5&&lastZoom!==value){window.webContents.setZoomFactor(value);lastZoom=value;}}
 browserChats=(await runtime.request('state.get')).chats;
-runtime.subscribe(event=>{if(event.type==='state'){browserChats=event.state.chats;browser.reconcile(event.state);applyZoom(event.state.settings.uiScale);}if(event.type==='worker')syncTray();emit(event);});
+runtime.subscribe(event=>{if(event.type==='state'){browserChats=event.state.chats;browser.reconcile(event.state);applyZoom(event.state.settings.uiScale);}else syncTray();},{accept:type=>type==='state'||type==='worker',view:'lifecycle'});
+runtime.subscribe(emit,{accept:()=>!!window&&!window.isDestroyed()});
 openWindow=async()=>{
 if(quitting)return;
 if(window&&!window.isDestroyed()){if(window.isMinimized())window.restore();window.show();window.focus();return window;}
@@ -280,6 +290,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
 });
 if(!worker.hiddenStart||showRequested)await openWindow();else{uiReady=true;bootstrap?.onReady?.();}
 if(smokeWorker){try{console.log(JSON.stringify(await(await import('../test/desktop-worker-smoke.mjs')).runWorkerSmoke({runtime,worker,getWindow:()=>window,openWindow,dataDir,sourceDir,app})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
+if(smokeSchedules){try{console.log(JSON.stringify(await(await import('../test/desktop-schedules-smoke.mjs')).runScheduleSmoke({runtime,worker,localModels,modelHub,getWindow:()=>window,openWindow,dataDir,sourceDir,app})));if(!process.argv.includes('--schedule-trial'))app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(browserStartupError)runtime.emit({type:'error',error:browserStartupError});
 if(chatGPTStartupError)runtime.emit({type:'error',error:chatGPTStartupError});
 if(extensionStartupError)runtime.emit({type:'error',error:`Extensions could not load: ${extensionStartupError}`});

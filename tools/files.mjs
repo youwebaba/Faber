@@ -36,7 +36,7 @@ export async function replaceProjectFile(ctx, relative, content, expectedSha256)
     const read=async()=>{try{return await fs.readFile(file);}catch(error){if(error.code==='ENOENT')return null;throw error;}};
     const digest=bytes=>bytes===null?null:crypto.createHash('sha256').update(bytes).digest('hex');
     const original=await read(), before=digest(original);
-    if(expectedSha256&&expectedSha256!==before)throw new Error('File changed since it was read');
+    if(expectedSha256!==undefined&&expectedSha256!==before)throw new Error('File changed since it was read');
     let backup;
     if(original!==null){
       if(!ctx.dataDir)throw new Error('A private data directory is required to back up existing files');
@@ -50,7 +50,8 @@ export async function replaceProjectFile(ctx, relative, content, expectedSha256)
       await fs.writeFile(temporary,content,{flag:'wx'});
       ctx.signal?.throwIfAborted();
       if(await containedPath(ctx.project.path,relative,{missing:true})!==file||digest(await read())!==before)throw new Error('File changed during write');
-      ctx.signal?.throwIfAborted();await fs.rename(temporary,file);
+      ctx.signal?.throwIfAborted();
+      if(expectedSha256===null)await fs.link(temporary,file);else await fs.rename(temporary,file);
     }finally{await fs.rm(temporary,{force:true});}
     return {path:relative,bytes:Buffer.byteLength(content),sha256:digest(content),backup};
   });
@@ -68,7 +69,7 @@ export function fileTools() {
       if(!stat.isFile()||stat.size>1024*1024) throw new Error('Expected a text file up to 1 MiB');
       const text=await fs.readFile(file,'utf8');return {path:args.path,text,sha256:crypto.createHash('sha256').update(text).digest('hex')};
     }},
-    {name:'files_write',description:'Atomically write UTF-8 text in the project, retaining a previous-content backup outside the project. Optional expectedSha256 prevents overwriting newer edits.',permission:'files',parameters:{...schema({path:{type:'string'},text:{type:'string',maxLength:1048576},expectedSha256:{type:'string',pattern:'^[a-f0-9]{64}$'}}),required:['path','text']},execute:async(args,ctx)=>{
+    {name:'files_write',description:'Atomically write UTF-8 text in the project, retaining a previous-content backup outside the project. Optional expectedSha256 prevents overwriting newer edits; null requires an absent destination and publishes without replacing an existing file.',permission:'files',parameters:{...schema({path:{type:'string'},text:{type:'string',maxLength:1048576},expectedSha256:{anyOf:[{type:'null'},{type:'string',pattern:'^[a-f0-9]{64}$'}]}}),required:['path','text']},execute:async(args,ctx)=>{
       return replaceProjectFile(ctx,args.path,args.text,args.expectedSha256);
     }}
   ];
