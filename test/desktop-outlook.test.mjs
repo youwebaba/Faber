@@ -6,7 +6,6 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createOutlook} from '../desktop/outlook.mjs';
 import {outlookAuth,outlookScopes} from '../desktop/outlook-auth.mjs';
-import {createRuntime} from '../core/runtime.mjs';
 import ledgerModule from '../desktop/action-ledger.cjs';
 
 const caps={inbox:true,drafts:true,send:true,calendar:true,events:true};
@@ -93,6 +92,7 @@ test('closing the account while Microsoft issues a device code invalidates the p
 });
 
 test('the Outlook settings action creates a real account-bound draft routine with no file access',async t=>{
+  const {createRuntime}=await import('../core/runtime.mjs');
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'faber-outlook-routine-')),projectPath=path.join(root,'project');
   await fs.mkdir(projectPath);let app;
   const host={routineResourceScope:(projectId,names)=>app?.routineScope(projectId,names)};
@@ -122,4 +122,63 @@ test('token refresh cannot restore a credential after disconnection and external
   const operation=auth.api(record,'/me');await started;await auth.disconnect(record.id);release();
   await assert.rejects(operation);assert.equal(await auth.connected(record.id),false);
   await assert.rejects(auth.begin(record),/Invalid Microsoft sign-in/);auth.close();
+});
+
+async function pagedGraph(t,{count=125}={}){
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'faber-outlook-pages-')),values=new Map(),requests=[],links=[],projects=[{id:'project'},{id:'other'}],access=randomUUID(),tokens=new Map();let time=Date.now(),accountId='paged-account',nextOverride,failNext,holdNext;
+  const messages=Array.from({length:count},(_,i)=>({id:'message-'+i,subject:'Controlled unread '+i,isRead:false,receivedDateTime:i===count-1?'1901-01-01T00:00:00Z':'2026-01-02T12:00:00Z',bodyPreview:'Untrusted fixture text'}));
+  const host={getSecret:async key=>values.get(key)||'',setSecret:async(key,value)=>{values.set(key,value);}},auth=outlookAuth({host,now:()=>time,fetcher:async(url,options)=>{
+    requests.push(url);assert.equal(new URL(url).origin,'https://graph.microsoft.com');assert.equal(options.redirect,'error');assert.equal(options.headers.Authorization,'Bearer '+access);assert.match(options.headers.Prefer,/ImmutableId/);
+    const u=new URL(url);assert.equal(u.pathname,'/v1.0/me/mailFolders/inbox/messages');
+    if(u.searchParams.get('$filter')==='isRead eq false'&&u.searchParams.has('$orderby'))return Response.json({error:{code:'InefficientFilter'}},{status:400});
+    const cursor=u.searchParams.get('$skiptoken'),offset=cursor?tokens.get(cursor):0,limit=Number(u.searchParams.get('$top'));
+    if(cursor&&holdNext){const gate=holdNext;holdNext=undefined;gate.enter();await gate.wait;}
+    if(cursor&&failNext){const status=failNext;failNext=undefined;return Response.json({error:{code:'ControlledFailure'}},{status});}
+    if(offset===undefined)return Response.json({error:{code:'InvalidSkipToken'}},{status:410});
+    const response={value:messages.slice(offset,offset+limit)};
+    if(offset+limit<messages.length){const next=new URL(url),token='opaque+'+(offset+limit)+'/=';tokens.set(token,offset+limit);next.searchParams.set('$skiptoken',token);response['@odata.nextLink']=nextOverride??next.href;links.push(response['@odata.nextLink']);}
+    return Response.json(response);
+  }}),runtime={request:async(method,args)=>method==='state.get'?{projects}:args};
+  const app=await createOutlook({dataDir:path.join(root,'profile'),runtime,host,auth:{...auth,poll:async()=>({accountId,accountName:'Controlled account'})},clock:()=>time});
+  t.after(async()=>{await app.close();await fs.rm(root,{recursive:true,force:true});});
+  async function link(projectId='project'){await app.request('outlook.configure',{...config,projectId});const connection=(await app.request('outlook.state')).connections.find(row=>row.projectId===projectId);await host.setSecret('outlook:'+connection.id,JSON.stringify({access,expires:time+3600000}));await app.request('outlook.poll',{projectId});}
+  await link();
+  const call=(args={},projectId='project',signal=new AbortController().signal)=>app.tools.find(tool=>tool.name==='outlook_inbox').execute(args,{project:{id:projectId},signal});
+  return {app,call,link,requests,links,projects,messages,setNext(value){nextOverride=value;},fail(status){failNext=status;},advance(ms){time+=ms;},account(value){accountId=value;},hold(){let enter,release;const entered=new Promise(resolve=>enter=resolve),wait=new Promise(resolve=>release=resolve);holdNext={enter,wait};return{entered,release};}};
+}
+
+test('real Graph auth adapter pages beyond fifty unread messages without date cutoffs or invalid filter/order and retries return the same page',async t=>{
+  const f=await pagedGraph(t),first=await f.call({limit:50,unread:true});assert.equal(first.messages.length,50);assert.equal(first.page,1);assert.equal(first.hasMore,true);assert.match(first.nextCursor,/^[a-f0-9-]{36}$/);assert.ok(!JSON.stringify(first).includes('https://graph.microsoft.com'));
+  const query=new URL(f.requests[0]);assert.equal(query.searchParams.get('$filter'),'isRead eq false');assert.equal(query.searchParams.has('$orderby'),false);assert.ok(!query.searchParams.get('$filter').includes('receivedDateTime'));
+  f.fail(503);await assert.rejects(f.call({cursor:first.nextCursor}),/503/);const second=await f.call({cursor:first.nextCursor});assert.equal(second.page,2);assert.equal(second.messages[0].id,'message-50');const before=f.requests.length;assert.deepEqual(await f.call({cursor:first.nextCursor}),second);assert.equal(f.requests.length,before,'successful cursor retry reuses cached page and child cursor');
+  const last=await f.call({cursor:second.nextCursor});assert.equal(last.messages.length,25);assert.equal(last.hasMore,false);assert.equal(last.nextCursor,null);assert.equal(last.truncated,false);assert.equal(last.messages.at(-1).received,'1901-01-01T00:00:00Z');assert.equal(new Set([...first.messages,...second.messages,...last.messages].map(row=>row.id)).size,125);
+  assert.ok(f.requests[1].includes('%2B')&&f.requests[1].includes('%2F'),'Graph opaque paging bytes retained');assert.equal(f.requests[1],f.links[0],'entire Graph-issued continuation is reused verbatim');assert.equal(f.requests[1],f.requests[2],'failed GET retries the unchanged Graph continuation');
+  await assert.rejects(f.call({cursor:first.nextCursor,unread:false}),/original limit and unread filter/);await assert.rejects(f.call({cursor:first.nextCursor,limit:20}),/original limit and unread filter/);
+});
+
+test('inbox cursors cannot authenticate attacker URLs or another pinned Graph route',async t=>{
+  const f=await pagedGraph(t);
+  for(const value of ['https://attacker.invalid/v1.0/me/mailFolders/inbox/messages?$skip=50','https://graph.microsoft.com.attacker.invalid/v1.0/me/mailFolders/inbox/messages?$skip=50','https://graph.microsoft.com@attacker.invalid/v1.0/me/mailFolders/inbox/messages?$skip=50','https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$skip=50','https://graph.microsoft.com/v1.0/me/messages?$skip=50','https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/../sentitems?$skip=50','https://graph.microsoft.com:443/v1.0/me/mailFolders/inbox/messages?$skip=50']){f.setNext(value);const before=f.requests.length;await assert.rejects(f.call({unread:true,limit:50}),/invalid inbox continuation/);assert.equal(f.requests.length,before+1,'only initial pinned inbox request was authenticated');}
+  const before=f.requests.length;await assert.rejects(f.call({cursor:'https://graph.microsoft.com/v1.0/me/messages'}),/cursor/);assert.equal(f.requests.length,before);
+  f.setNext('https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages?$top=1000&$skip=50');await assert.rejects(f.call({unread:true,limit:50}),/bounded inbox query/);
+});
+
+test('page tokens bind project/account/revision, fail closed after revocation or expiry, and restart clearly after Graph token rejection',async t=>{
+  const f=await pagedGraph(t),first=await f.call({unread:true,limit:50});await f.link('other');let before=f.requests.length;await assert.rejects(f.call({cursor:first.nextCursor},'other'),/unavailable for this project\/account/);assert.equal(f.requests.length,before);
+  f.projects[0].archived=true;await assert.rejects(f.call({cursor:first.nextCursor}),/project is no longer active/);assert.equal(f.requests.length,before);f.projects[0].archived=false;
+  f.fail(410);await assert.rejects(f.call({cursor:first.nextCursor}),/Restart without cursor/);before=f.requests.length;await assert.rejects(f.call({cursor:first.nextCursor}),/Restart without cursor/);assert.equal(f.requests.length,before);
+  const restart=await f.call({unread:true});f.advance(16*60000);before=f.requests.length;await assert.rejects(f.call({cursor:restart.nextCursor}),/Restart without cursor/);assert.equal(f.requests.length,before);
+  const fresh=await f.call({unread:true});f.account('changed-account');await f.app.request('outlook.poll',{projectId:'project'});before=f.requests.length;await assert.rejects(f.call({cursor:fresh.nextCursor}),/unavailable for this project\/account/);assert.equal(f.requests.length,before);
+  const revoked=await f.call({unread:true});await f.app.request('outlook.disconnect',{projectId:'project'});before=f.requests.length;await assert.rejects(f.call({cursor:revoked.nextCursor}),/not been enabled/);assert.equal(f.requests.length,before);
+});
+
+test('revoking a project while the next Graph page is in flight withholds page data and continuation',async t=>{
+  const f=await pagedGraph(t),first=await f.call({unread:true}),gate=f.hold(),next=f.call({cursor:first.nextCursor});await gate.entered;f.projects[0].archived=true;gate.release();await assert.rejects(next,/project is no longer active/);f.projects[0].archived=false;
+  const second=await f.call({cursor:first.nextCursor});assert.equal(second.page,2,'read-only failure did not consume the continuation');
+  const another=await f.call({unread:true}),held=f.hold(),pending=f.call({cursor:another.nextCursor});await held.entered;await f.app.request('outlook.disconnect',{projectId:'project'});held.release();await assert.rejects(pending,/revoked|abort/i);
+});
+
+test('paging storage and page count are bounded and completion never hides an unread remainder',async t=>{
+  const f=await pagedGraph(t,{count:5001});let page=await f.call({unread:true,limit:50});for(let i=1;i<100;i++)page=await f.call({cursor:page.nextCursor});assert.equal(page.page,100);assert.equal(page.hasMore,true);assert.equal(page.truncated,true);assert.equal(page.nextCursor,null);assert.match(page.reason,/unprocessed remainder/);assert.equal(f.requests.length,100);
+  const oldest=await f.call({unread:true});for(let i=0;i<130;i++)await f.call({unread:true});const before=f.requests.length;await assert.rejects(f.call({cursor:oldest.nextCursor}),/Restart without cursor/);assert.equal(f.requests.length,before,'evicted cursor never silently restarts at page one');
 });
