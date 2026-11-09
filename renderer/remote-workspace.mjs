@@ -1,9 +1,10 @@
-import { remoteWorkspace, remoteChat, remoteLive, remoteChatFamilies, remoteEvent } from './remote-state.mjs';
+import { remoteWorkspace, remoteCapabilities, remoteChat, remoteLive, remoteChatFamilies, remoteEvent } from './remote-state.mjs';
 import { isActive, latestRun, sameMessage, safeImage, displayText, chatApprovals, statusLabel } from './ui-helpers.mjs';
 import { createAttachmentDrafts, attachmentMessage } from './file-attachments.mjs';
 import { mergeRuntimeStreams } from './ui-refresh.mjs';
 import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createRunActivity } from './run-activity.mjs';
+import {createLiveViewer} from './live-viewer.mjs';
 import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
 import { createMediaOutputs, resultMedia } from './content-media.mjs';
@@ -14,6 +15,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const root = el('section', 'remote-workspace'); root.id = 'remote-workspace'; root.hidden = true; root.setAttribute('aria-label', 'Remote workspace');
   const header = el('header', 'remote-header'), hostLabel = el('strong'), hostSelect = el('select'); hostSelect.id = 'remote-host'; hostSelect.setAttribute('aria-label', 'Workspace device');
   const connections = button('Connections', () => { close(); showConnections(); });
+  const viewer=createLiveViewer({document,el,rpc,device:()=>deviceId,available:()=>online&&!root.hidden});
+  const watch=button('Watch live',()=>viewer.open());watch.id='remote-watch-live';header.append(watch);
   const showSidebar = button('☰', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); }, 'icon-button remote-show-sidebar'); showSidebar.setAttribute('aria-label', 'Show sidebar');
   header.append(showSidebar, hostLabel, hostSelect, connections); root.append(header);
   const layout = el('div', 'remote-layout');
@@ -120,6 +123,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     } catch (error) { if (token === session && generation === chatGeneration && !root.hidden) { imageCache.set(cacheKey, { error: true }); entry.node.replaceChildren(el('span', 'hint', `Host image unavailable. ${error.message || String(error)}`), button('Retry image', () => { imageCache.delete(cacheKey); queueImage(entry); }, 'text-button')); } }
   }
   function renderStatus() {
+    watch.hidden=!directories.get(deviceId)?.capabilities?.liveCapture;watch.disabled=!online;viewer.connectionChanged();
     const host = currentDevice(), name = host?.name || host?.deviceName || 'Host'; hostLabel.textContent = `Remote · ${name}`;
     const choices = [{ id: '', name: 'This PC · local workspace' }, ...getDevices().map(device => ({ id: device.id, name: `${device.name || device.deviceName || 'Host'}${device.online ? '' : ' · offline'}` }))];
     const signature = JSON.stringify(choices); if (hostSelect.choiceSignature !== signature) { hostSelect.choiceSignature = signature; hostSelect.replaceChildren(...choices.map(device => { const option = el('option', '', device.name); option.value = device.id; return option; })); } hostSelect.value = deviceId || '';
@@ -266,7 +270,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (!getDevices().some(device => device.id === id && (device.online || force))) return directories.get(id);
     const task = (async () => {
       const cached = directories.get(id), response = await request('remote.request', { deviceId: id, method: 'workspace.list', params: { limit: 200, ...(cached?.revision ? { since: cached.revision } : {}) } });
-      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true, mediaReferences: response.capabilities.mediaReferences === true, steering: response.capabilities.steering === true } } : {}), error: '' }; directories.set(id, value); return value; }
+      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: remoteCapabilities(response.capabilities) } : {}), error: '' }; directories.set(id, value); return value; }
       const value = remoteWorkspace(response), projects = new Map(value.projects.map(project => [project.id, project])), chats = new Map(value.chats.map(chat => [chat.id, chat])); let offset = value.nextOffset;
       const offsets = new Set();
       while (offset !== null && offset !== undefined) {

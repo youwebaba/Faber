@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {createHash} from 'node:crypto';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const exec=promisify(execFile),script=fileURLToPath(new URL('../scripts/audit-worker-trial.mjs',import.meta.url)),sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+test('read-only audit checks real snapshot/output bytes, independent pin and outside-root denial without exposing contents',async t=>{
+  const parent=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-qa-audit-io-')),root=path.join(parent,'trial');t.after(()=>fs.rm(parent,{recursive:true,force:true}));for(const folder of ['profile','source','project'])await fs.mkdir(path.join(root,folder),{recursive:true});
+  const files=[{path:'fixture.mjs',sha256:sha('controlled source')}],sourceDigest=sha(JSON.stringify(files)),start=Date.now()-60000,routineId='11111111-1111-4111-8111-111111111111',jobId='22222222-2222-4222-8222-222222222222',at=new Date(start+1000).toISOString(),inputs=Array.from({length:10},(_,n)=>n?{path:`input-${n}`,status:'summarized',sha256:sha('known'),bytes:5}:{path:'unreadable',status:'needs_review',error:'Controlled exception'}),manifestDigest=sha(JSON.stringify(inputs.map(({path,sha256,bytes,error})=>({path,sha256,bytes,error})))),output=Buffer.from('Input snapshot: '+manifestDigest),state={projects:[{id:'project',path:path.join(root,'project')}],jobs:[{id:jobId,routineId,status:'needs_attention',attempts:1,createdAt:at,endedAt:new Date(start+10000).toISOString(),definition:{projectId:'project'},report:{stage:'completed',inputs,manifestDigest,path:'report.md',sha256:sha(output)},budget:{calls:[]}}],scheduler:{receipts:[{key:'once',routineId,jobId,source:{kind:'schedule',dueAt:at}}]}},trial={schemaVersion:1,startedAt:new Date(start).toISOString(),eligibleAfter:new Date(start+7*86400000).toISOString(),lastObservedAt:new Date(start+60000).toISOString(),firstOccurrence:at,periodMinutes:1440,routineId,sourceDigest,pid:process.pid,health:[0,60000].map(ms=>({at:new Date(start+ms).toISOString(),paused:false,needsAttention:1})),interventions:[],expectedOccurrences:Array.from({length:7},(_,n)=>new Date(start+1000+n*86400000).toISOString())};
+  await fs.writeFile(path.join(root,'snapshot-manifest.json'),JSON.stringify({files,sourceDigest}));await fs.writeFile(path.join(root,'source/fixture.mjs'),'controlled source');await fs.writeFile(path.join(root,'project/report.md'),output);await fs.writeFile(path.join(root,'profile/schedule-trial.json'),JSON.stringify(trial));const save=()=>fs.writeFile(path.join(root,'profile/state.json'),JSON.stringify(state));await save();
+  const audit=async(pin=sourceDigest)=>JSON.parse((await exec(process.execPath,[script,'--trial-root',root,'--expected-source',pin],{windowsHide:true})).stdout);
+  const before=await fs.readFile(path.join(root,'profile/state.json'));let result=await audit();assert.deepEqual(result.issues,[]);assert.equal(result.occurrences[0].coverageVerified,true);assert.equal(result.sevenDayAcceptance,false);assert.deepEqual(await fs.readFile(path.join(root,'profile/state.json')),before);
+  assert.ok((await audit('0'.repeat(64))).issues.includes('independent_source_digest_unverified'));
+  await fs.writeFile(path.join(root,'source/fixture.mjs'),'changed source');assert.ok((await audit()).issues.includes('snapshot_files_unverified'));
+  state.projects[0].path=parent;await fs.writeFile(path.join(parent,'report.md'),'private fixture marker');await save();result=await audit();assert.ok(result.issues.includes('occurrence_destination_unverified'));assert.ok(!JSON.stringify(result).includes('private fixture marker'));assert.ok(!JSON.stringify(result).includes(parent));
+});

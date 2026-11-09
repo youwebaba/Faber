@@ -1,4 +1,6 @@
-import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,Tray,WebContentsView,powerMonitor,powerSaveBlocker,clipboard,nativeImage} from 'electron';
+import {app,BrowserWindow,desktopCapturer,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,Tray,WebContentsView,powerMonitor,powerSaveBlocker,clipboard,nativeImage} from 'electron';
+import {createLiveShare,captureMethods,remoteCaptureMethods} from './live-share.mjs';
+import {installCapturePermissions} from './capture-permissions.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -71,7 +73,8 @@ const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.star
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
 methods.add('upgrades.list');
-for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods])methods.add(method);
+for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods,...captureMethods])methods.add(method);
+let liveShare;
 let mcp,mcpError;
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 let worker,tray,openWindow,showRequested=false,desktopLocked=false;
@@ -121,6 +124,7 @@ const host={
 };
 app.on('window-all-closed',()=>{if(!worker?.enabled||quitting)app.quit();});
 async function shutdown(){
+  liveShare?.close();
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
@@ -147,8 +151,10 @@ void app.whenReady().then(async()=>{
 const reloadSmoke=smokeUIReload?await import('../test/desktop-ui-reload-smoke.mjs'):null;
 if(reloadSmoke)reloadFixture=await reloadSmoke.createUIReloadSmoke(dataDir,sourceDir);
 const allowAppFullscreen=(contents,permission,details)=>permission==='fullscreen'&&contents===window?.webContents&&details?.isMainFrame===true&&details.requestingUrl==='faber://app/index.html';
-session.defaultSession.setPermissionRequestHandler((contents,permission,callback,details)=>callback(allowAppFullscreen(contents,permission,details)));
-session.defaultSession.setPermissionCheckHandler((contents,permission,_origin,details)=>allowAppFullscreen(contents,permission,details));
+const captureSources=()=>desktopCapturer.getSources({types:['screen','window'],thumbnailSize:{width:0,height:0},fetchWindowIcons:false});
+liveShare=createLiveShare({sources:captureSources,controllers:async()=>remote?(await remote.request('remote.status',{})).devices:[],emit,
+  confirm:async(label,viewer)=>!recoveryStatus.safeMode&&window?.isVisible()&&(await dialog.showMessageBox(window,{type:'question',title:'Share live video',message:'Share '+label+'?',detail:viewer?'The paired device “'+viewer+'” can watch until sharing stops.':'Preview on this PC only.',buttons:['Cancel','Allow this share'],defaultId:0,cancelId:0,noLink:true})).response===1});
+installCapturePermissions({session:session.defaultSession,contents:()=>window?.webContents,share:liveShare,sources:captureSources,allowFullscreen:allowAppFullscreen});
 session.defaultSession.on('will-download',event=>event.preventDefault());
 protocol.handle('faber',async request=>{
   try{
@@ -165,7 +171,8 @@ const workerSmoke=smokeWorker?await import('../test/desktop-worker-smoke.mjs'):n
 runtime=await createRuntime({dataDir,sourceDir,host,...(workerSmoke?{provider:workerSmoke.workerProvider}:{})});
 worker=await createBackgroundWorker({dataDir,sourceDir,profileId:profiles.currentId,app,isAttached:()=>!!window&&!window.isDestroyed(),closeWindow:async()=>{window?.close();},pause:async()=>{await runtime.request('routines.pause',{paused:true});const state=await runtime.request('state.get');for(const id of new Set(state.runs.filter(run=>['running','waiting_approval'].includes(run.status)).map(run=>run.chatId)))await runtime.request('chat.forceStop',{chatId:id});},quit:()=>app.quit(),emit:event=>runtime.emit(event),allowLoginMutation:!smoke});
 desktopLocked=!['active','idle'].includes(powerMonitor.getSystemIdleState(1));
-powerMonitor.on('lock-screen',()=>{desktopLocked=true;});powerMonitor.on('unlock-screen',()=>{desktopLocked=false;});
+powerMonitor.on('lock-screen',()=>{desktopLocked=true;liveShare.stop('Windows locked.');});powerMonitor.on('unlock-screen',()=>{desktopLocked=false;});
+powerMonitor.on('suspend',()=>liveShare.stop('Windows suspended.'));
 media=createChatMedia({readMedia:runtime.readMedia,mediaNotes:runtime.mediaNotes,readImage:params=>runtime.remoteRequest('chat.image',params),remoteRequest:(deviceId,method,params,signal)=>{if(!remote)throw new Error('Remote connections unavailable');return remote.request('remote.request',{deviceId,method,params},{signal});},protectedPaths:[dataDir,...profiles.privatePaths],
   chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':mimeType.startsWith('video/')?'video':'document'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
   copyText:text=>clipboard.writeText(text),copyImage:data=>{const value=nativeImage.createFromDataURL(data);if(value.isEmpty())throw new Error('This image could not be copied');clipboard.writeImage(value);}
@@ -207,7 +214,10 @@ runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{mcp=await createMcp({dataDir,runtime,host,emit,safeMode:recoveryStatus.safeMode});void mcp.restore().catch(error=>{mcpError=error.message;});}catch(error){mcpError=error.message;}
-try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
+try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),
+  allowLocalRelay:smokeMedia&&process.argv.includes('--capture-ui'),
+  dispatch:(method,params,context)=>remoteCaptureMethods.includes(method)?liveShare.remoteRequest(method,params,context):runtime.remoteRequest(method,params,context),
+  emit:event=>{if(event.type==='remote'&&event.state?.devices)liveShare.reconcile(event.state.devices);emit(event);},powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
 gateway=await createGateway({dataDir,runtime,host,emit:event=>runtime.emit(event)});
 await runtime.startRoutines();
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
@@ -224,9 +234,10 @@ const ownedWindow=window;
 if(smokeWorker)window.webContents.on('console-message',event=>{if(event.level==='error'||event.level>=2)console.error('Worker renderer:',event.message);});
 window.on('blur',()=>{browserViewRequest++;browser.hideView({keepMonitoring:true});});
 for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();});
+for(const event of ['close','hide','minimize'])window.on(event,()=>liveShare.stop('Faber’s window was closed or hidden.'));
 window.on('close',()=>{browser.hideView();});
-window.on('closed',()=>{if(window===ownedWindow)window=null;media.cancel();if(!worker.enabled&&!quitting)app.quit();});
-window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){browserViewRequest++;browser.hideView();media.cancel();}});
+window.on('closed',()=>{liveShare.stop('Faber’s window closed.');if(window===ownedWindow)window=null;media.cancel();if(!worker.enabled&&!quitting)app.quit();});
+window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){liveShare.stop('The interface reloaded.');browserViewRequest++;browser.hideView();media.cancel();}});
 window.on('focus',()=>{emit({type:'browserViewHidden'});void browser.request('browser.state').then(state=>emit({type:'browser',state})).catch(()=>{});});
 window.webContents.on('blur',()=>{browserChromeFocus=null;});
 window.webContents.on('before-input-event',(event,input)=>{if(!browserChromeFocus||input.type!=='keyDown'||(!input.control&&!input.meta)||input.alt)return;const key=input.key.length===1?input.key.toLowerCase():input.key;const action={l:'address',t:'newTab',w:'closeTab',f:'find',Tab:input.shift?'previousTab':'nextTab','+':'zoomIn','=':'zoomIn','-':'zoomOut','0':'zoomReset'}[key];if(action){event.preventDefault();emit({type:'browserShortcut',...browserChromeFocus,action});}});
@@ -247,6 +258,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   validateRequestPayload(method,params);
   if((switchingProfile||quitting)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
   if(mediaMethods.includes(method))return media.request(method,params);
+  if(captureMethods.includes(method)){if(recoveryStatus.safeMode||desktopLocked)throw Error('Live capture requires an unlocked, normally running Faber window.');return liveShare.request(method,params);}
   if(method==='upgrades.list'){validate(params,{type:'object',properties:{},additionalProperties:false});return upgrades.list();}
   if(workerMethods.includes(method))return worker.request(method,params);
   if(mcpMethods.includes(method)){if(!mcp)throw new Error(mcpError||'MCP connections are unavailable');return mcp.request(method,params);}
@@ -306,6 +318,7 @@ if(smokeInstalled){
   }catch(error){console.error(error);await shutdown();app.exit(1);}return;
 }
 if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));window.close();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
+if(smokeMedia&&process.argv.includes('--capture-ui')){try{const check=await import('../test/desktop-capture-ui-smoke.mjs');console.log(JSON.stringify(await check.runCaptureUI({window,runtime,remote,liveShare,dataDir,host})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(smoke){
   try{
     const fixture=await fs.mkdtemp(path.join(path.dirname(dataDir),'Faber-smoke-workspace-'));await fs.writeFile(path.join(fixture,'hello.txt'),'Faber isolated smoke fixture\n');

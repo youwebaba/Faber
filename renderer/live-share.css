@@ -1,0 +1,6 @@
+.capture-indicator{display:flex;align-items:center;gap:.6rem;border:1px solid var(--danger,#ed6666);border-radius:7px;padding:.25rem .5rem}
+.capture-indicator strong{color:var(--danger,#ed6666);max-width:18rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.capture-dialog{padding:1.25rem;max-width:min(48rem,90vw)}
+.capture-dialog .modal-section{display:grid;gap:.65rem}
+.capture-preview{max-width:100%;max-height:65vh;object-fit:contain;background:#141416}
+.capture-indicator[hidden]{display:none}

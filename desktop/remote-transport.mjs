@@ -257,17 +257,24 @@ async function connectPinned(route, fingerprint, dial, signal) {
   if (signal.aborted) { raw.destroy(); signal.throwIfAborted(); }
   return new Promise((resolve, reject) => {
     const socket = tls.connect({ socket: raw, servername: authority, minVersion: 'TLSv1.2', rejectUnauthorized: false });
-    const stop = () => socket.destroy(new Error('Remote request canceled.'));
-    const failed = () => { signal.removeEventListener('abort', stop); socket.destroy(); reject(new Error('Remote secure connection failed.')); };
-    signal.addEventListener('abort', stop, { once: true }); socket.once('error', failed);
+    let settled=false;
+    function fail(message){
+      if(settled)return;settled=true;signal.removeEventListener('abort',stop);
+      socket.destroy();reject(new Error(message));
+    }
+    const stop=()=>fail('Remote request canceled.');
+    socket.on('error',()=>fail('Remote secure connection failed.'));
+    socket.once('close',()=>fail('Remote secure connection closed during handshake.'));
+    signal.addEventListener('abort', stop, { once: true });
+    if(signal.aborted){stop();return;}
     socket.once('secureConnect', () => {
       try {
         const peer = socket.getPeerCertificate().raw;
         if (!peer || !equalHash(hash(peer), fingerprint)) throw new Error();
         const cert = new X509Certificate(peer);
         if (Date.parse(cert.validFrom) > Date.now() || Date.parse(cert.validTo) <= Date.now()) throw new Error();
-        signal.removeEventListener('abort', stop); socket.removeListener('error', failed); socket.on('error', () => {}); resolve(socket);
-      } catch { signal.removeEventListener('abort', stop); socket.removeListener('error', failed); socket.destroy(); reject(new Error('Remote host certificate does not match the pairing identity.')); }
+        if(settled)return;settled=true;signal.removeEventListener('abort',stop);resolve(socket);
+      } catch { fail('Remote host certificate does not match the pairing identity.'); }
     });
   });
 }
