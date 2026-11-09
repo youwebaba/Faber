@@ -82,6 +82,34 @@ impl<R: Read + Seek> Reader<R> {
         Ok(Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_owned()))
     }
 
+    fn skip_strings(&mut self, mut count: u64) -> Result<(), String> {
+        let mut block = [0; 16 * 1024];
+        while count != 0 {
+            self.check(8)?;
+            // Every remaining string has an eight-byte length. Stay inside the array and inspection budget.
+            let size = (count * 8).min(block.len() as u64).min(self.remaining).min(self.size - self.offset);
+            let start = self.offset;
+            self.input.read_exact(&mut block[..size as usize]).map_err(|_| "Truncated GGUF metadata")?;
+            let end = start + size;
+            while count != 0 && end.saturating_sub(self.offset) >= 8 {
+                self.check(8)?;
+                let position = (self.offset - start) as usize;
+                let length = u64::from_le_bytes(block[position..position + 8].try_into().unwrap());
+                self.advance(8, true);
+                if length > MAX_SAFE_INTEGER {
+                    return Err("GGUF integer exceeds supported range".into());
+                }
+                self.check(length)?;
+                self.advance(length, false);
+                count -= 1;
+            }
+            if self.offset != end {
+                self.input.seek(SeekFrom::Start(self.offset)).map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
     fn value(&mut self, kind: u32, keep: bool, depth: usize) -> Result<Value, String> {
         if kind == 8 {
             return Ok(self.string(keep, 512)?.map(Value::String).unwrap_or(Value::Null));
@@ -97,6 +125,8 @@ impl<R: Read + Seek> Reader<R> {
             }
             if let Some(width) = width(subtype) {
                 self.skip(width * count)?;
+            } else if subtype == 8 {
+                self.skip_strings(count)?;
             } else {
                 for _ in 0..count {
                     self.value(subtype, false, depth + 1)?;
@@ -267,5 +297,30 @@ mod tests {
         assert_eq!(result["complete"], true);
         assert_eq!(result["bytesRead"], 24);
         assert_eq!(remaining, 8192 - 24);
+    }
+
+    #[test]
+    fn ignored_string_array_preserves_positions_budgets_and_truncation() {
+        let values = [0, 1, 24, 16_385, 0, 5];
+        let mut data = Vec::new();
+        for length in values {
+            data.extend((length as u64).to_le_bytes());
+            data.resize(data.len() + length, 0x41);
+        }
+        let size = data.len() as u64;
+        for (declared_size, budget) in [(size, size), (size, 8), (size, size - 1), (size - 2, size), (size, 36)] {
+            let make_reader = || Reader {
+                input: Cursor::new(&data), size: declared_size, remaining: budget,
+                offset: 0, deadline: MAX_SAFE_INTEGER, bytes_read: 0,
+            };
+            let mut scalar = make_reader();
+            let expected = (0..values.len()).try_for_each(|_| scalar.string(false, 512).map(|_| ()));
+            let mut grouped = make_reader();
+            assert_eq!(grouped.skip_strings(values.len() as u64), expected);
+            assert_eq!((grouped.offset, grouped.remaining, grouped.bytes_read), (scalar.offset, scalar.remaining, scalar.bytes_read));
+            if expected.is_ok() {
+                assert_eq!(grouped.input.position(), scalar.input.position());
+            }
+        }
     }
 }

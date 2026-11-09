@@ -46,6 +46,15 @@ export function transcriptTimeline(state, chatId, streams = new Map()) {
       add(batch.slot, batch);
     }
   }
+  const promptIds = new Set(runs.flatMap(run => (run.promptUsage || []).map(row => row.requestMessageId)));
+  for (const run of runs) for (const usage of run.promptUsage || []) {
+    const start = messages.findIndex(message => message.id === usage.requestMessageId);
+    if (start < 0 || usage.status === 'pending' || isActive(run) && usage === run.promptUsage.at(-1)) continue;
+    const next = messages.findIndex((message, index) => index > start && message.role === 'user' && (!message.steering || promptIds.has(message.id)));
+    const slot = next < 0 ? messages.length : next;
+    if (!slots.has(slot)) slots.set(slot, []);
+    slots.get(slot).push({ kind: 'usage', key: `usage:${run.id}:${usage.requestMessageId}`, usage });
+  }
   const rows = [];
   for (let index = 0; index <= messages.length; index++) {
     rows.push(...slots.get(index) || []);

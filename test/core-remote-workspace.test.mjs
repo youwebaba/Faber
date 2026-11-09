@@ -17,7 +17,7 @@ function fixture() {
 test('remote directory and transcript expose selected fields, paging and conditional reads',async()=>{
   const {service} = fixture(), read = service.dispatch;
   const first = await read('workspace.list',{limit:1}); assert.equal(first.projects.length,1); assert.equal(first.nextOffset,1);
-  assert.equal(first.projects[0].path,undefined); assert.deepEqual(await read('workspace.list',{since:first.revision}),{unchanged:true,revision:first.revision,capabilities:{imageReferences:true,mediaReferences:true}});
+  assert.equal(first.projects[0].path,undefined); assert.deepEqual(await read('workspace.list',{since:first.revision}),{unchanged:true,revision:first.revision,capabilities:{imageReferences:true,mediaReferences:true,steering:true}});
   const second = await read('workspace.list',{offset:2}); assert.equal(second.chats.length,2);assert.equal(second.nextOffset,null);
   const last = await read('chat.read',{chatId:'main',limit:1}); assert.equal(last.chat.messages[0].id,'last');
   const earlier = await read('chat.read',{chatId:'main',before:last.before}); assert.deepEqual(earlier.chat.messages.map(m=>m.id),['first']);

@@ -181,7 +181,7 @@ export async function refreshAlphaPrivacy(bundledSource, sourceDir, stock = orig
   } catch { console.warn('Stock privacy refresh preserved the native runtime'); }
 }
 
-export const sourceFolders = ['core', 'desktop', 'renderer', 'tools', 'extensions', 'model-hub', 'local-models', 'native', 'test', 'build', 'scripts', 'bundled-addons'];
+export const sourceFolders = ['core', 'desktop', 'renderer', 'tools', 'extensions', 'model-hub', 'local-models', 'local-music', 'native', 'test', 'build', 'scripts', 'bundled-addons'];
 export async function prepareWorkbench({ bundledSource, workbenchRoot, version }) {
   if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error('Invalid packaged source version');
   const sourceDir = path.join(workbenchRoot, version), marker = path.join(sourceDir, '.faber-workbench.json');

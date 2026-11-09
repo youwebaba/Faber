@@ -41,7 +41,7 @@ async function until(hub, predicate, timeout = 3000) {
 const finish = (hub, job) => until(hub, state => state.downloads.some(item => item.id === job.id && !['queued', 'downloading'].includes(item.status)) && published.get(hub).some(event => event.state.downloads.some(item => item.id === job.id && !['queued', 'downloading'].includes(item.status)))).then(state => state.downloads.find(item => item.id === job.id));
 const args = { repoId: id, revision: commit, files: ['model.safetensors'] };
 
-test('local file reservations reject active downloads and serialize new download/directory operations',async t=>{
+test('local file reservations reject overlapping work without blocking unrelated operations',async t=>{
   let transferEntered;const entered=new Promise(resolve=>transferEntered=resolve);
   const {hub,root}=await fixture(t,{transfer:async(_url,options)=>{transferEntered();return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true}));}});
   const directory=(await hub.request('models.state')).downloadDirectory;await fs.mkdir(directory,{recursive:true});
@@ -50,9 +50,11 @@ test('local file reservations reject active downloads and serialize new download
   await hub.request('models.cancel',{id:job.id});
   let release,locked;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>locked=resolve);
   const holding=hub.withModelFiles(directory,['manual.gguf'],async()=>{locked();await gate;return 'recycled';});await started;
+  await assert.rejects(hub.withModelFiles(directory,['manual.gguf'],()=>assert.fail('reserved file must block concurrent work')),/active download/);
+  assert.equal(await hub.withModelFiles(directory,['other.gguf'],()=>42),42);
   let settingsDone=false;const setting=hub.request('models.settings.save',{downloadDirectory:path.join(root,'other-models')}).then(()=>settingsDone=true);
   const controller=new AbortController();let effects=0;const canceled=hub.withModelFiles(directory,['manual.gguf'],()=>effects++,controller.signal);const rejected=assert.rejects(canceled,/abort/i);controller.abort();
-  await new Promise(resolve=>setTimeout(resolve,20));assert.equal(settingsDone,false);release();assert.equal(await holding,'recycled');await setting;await rejected;assert.equal(effects,0);
+  await setting;assert.equal(settingsDone,true);release();assert.equal(await holding,'recycled');await rejected;assert.equal(effects,0);
   await assert.rejects(hub.withModelFiles(directory,['manual.gguf'],()=>effects++),/ENOENT|changed/);assert.equal(effects,0);
 });
 

@@ -7,6 +7,7 @@ import { createRunActivity } from './run-activity.mjs';
 import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
 import { createMediaOutputs, resultMedia } from './content-media.mjs';
+import { correctionLabel, correctionRequest } from './prompt-progress.mjs';
 
 export function createRemoteWorkspace({ request, subscribe, el, getDevices, showConnections, contentMenu, suspendLocal = () => {}, onChange = () => {}, document = globalThis.document }) {
   const button = (label, callback, className = 'button') => { const node = el('button', className, label); node.type = 'button'; node.addEventListener('click', async () => { node.disabled = true; try { await callback(); } catch (error) { setError(error); } finally { node.disabled = false; renderStatus(); renderApprovals(); } }); return node; };
@@ -42,10 +43,12 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const attach = button('Attach images', () => { pickerKey = key(); picker.click(); }); attach.id = 'remote-attach-images';
   const picker = el('input'); picker.type = 'file'; picker.id = 'remote-image-picker'; picker.accept = 'image/png,image/jpeg,image/webp'; picker.multiple = true; picker.hidden = true; picker.setAttribute('aria-label', 'Choose images for the host');
   const imageDrafts = el('div', 'image-drafts'); imageDrafts.id = 'remote-image-drafts'; imageDrafts.hidden = true; imageDrafts.setAttribute('aria-label', 'Images attached to this host chat');
-  const send = el('button', 'button primary', 'Send'); send.type = 'submit'; send.id = 'remote-send'; toolbar.append(attach, compact, clearDraft, el('span', 'composer-spacer'), forceStop, stop, send);
+  const steer = button('Steer now', () => submit(true)); steer.id = 'remote-steer'; steer.hidden = true;
+  const send = el('button', 'button primary', 'Send'); send.type = 'submit'; send.id = 'remote-send'; toolbar.append(attach, compact, clearDraft, el('span', 'composer-spacer'), forceStop, stop, steer, send);
   composer.append(imageDrafts, picker, prompt, toolbar); composerWrap.append(approvalList, composer, caption); conversation.append(titlebar, modelPanel, notice, retry, older, transcript, composerWrap); layout.append(conversation); root.append(layout); (document.querySelector('.workspace') || document.body).append(root);
   const drafts = new Map(), selections = new Map(), streams = new Map(), messageNodes = new Map(), streamNodes = new Map(), directories = new Map(), directoryLoads = new Map(), details = new Map(), imageCache = new Map(), imageNodes = new Map();
   const attachments = createAttachmentDrafts({ onChange: draft => { if (draft === key()) { renderAttachments(); renderStatus(); } onChange(); } });
+  const pendingCorrections = new Map();
   const imageQueue = [], imageObserver = typeof globalThis.IntersectionObserver === 'function' ? new globalThis.IntersectionObserver(records => { for (const record of records) { const entry = imageNodes.get(record.target.dataset.imageKey); if (!entry) continue; entry.visible = record.isIntersecting; if (entry.visible) queueImage(entry); else unloadImage(entry); } }, { root: transcript, rootMargin: '200px' }) : null;
   let deviceId, selectedChatId, selectedProjectId, state = { projects: [], chats: [], runs: [], approvals: [] }, selectedDetail, online = false, connecting = false, pending = false, session = 0, chatGeneration = 0, streamVersion = -1, timer, chatTimer, directoryTimer, polling, listVersion = '', transcriptIdentity, readSequence = 0, lastError = '', returnFocus, chatRevision, olderToken, loadingOlder = false, hostProviders = [], disposed = false, pickerKey, attachmentSignature, imageReads = 0;
   const identity = (device, chat, project) => JSON.stringify([device, chat || null, chat ? null : project || null]);
@@ -129,7 +132,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     prompt.disabled = !online || pending || !project || readOnly; prompt.placeholder = readOnly ? archived ? 'Archived chat · read only' : 'Host-managed chat · read only' : `Message ${name}…`;
     const files = attachments.get(key());
     attach.disabled = !online || pending || !project || readOnly;
-    send.disabled = !online || pending || !project || readOnly || files.some(item => item.pending) || (!prompt.value.trim() && !files.length); send.textContent = isActive(run) ? 'Send follow-up' : 'Send';
+    send.disabled = !online || pending || !project || readOnly || files.some(item => item.pending) || (!prompt.value.trim() && !files.length); send.textContent = isActive(run) ? 'Queue follow-up' : 'Send';
+    steer.hidden = !isActive(run) || !directories.get(deviceId)?.capabilities?.steering; steer.disabled = send.disabled;
     newChat.disabled = !online || pending || !project || project.archived;
     stop.hidden = forceStop.hidden = !isActive(run); stop.disabled = forceStop.disabled = !online || pending || readOnly;
     compact.hidden = !run?.contextOverflow; compact.disabled = !online || pending || readOnly || isActive(run);
@@ -166,15 +170,16 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (focused) [...navigation.querySelectorAll('button')].find(node => node.dataset.remoteKey === focused)?.focus({ preventScroll: true });
   }
   function messageNode(message) {
-    let cached = messageNodes.get(message.id); if (sameMessage(cached?.message, message) && JSON.stringify(cached.message.imageRefs) === JSON.stringify(message.imageRefs)) return cached.node;
+    const correction = correctionLabel(state.runs.find(run => run.id === message.runId)?.steering?.find(item => item.messageId === message.id));
+    let cached = messageNodes.get(message.id); if (sameMessage(cached?.message, message) && cached.correction === correction && JSON.stringify(cached.message.imageRefs) === JSON.stringify(message.imageRefs)) return cached.node;
     const node = el('article', `message ${message.role === 'user' ? 'user' : 'assistant'}${message.status === 'pending' ? ' pending-followup' : ''}`); node.dataset.messageId = message.id;
-    node.append(el('div', 'message-heading', message.status === 'pending' ? 'You · queued follow-up' : message.role === 'user' ? 'You' : message.role === 'tool' ? message.toolName || 'Tool' : 'Faber'));
+    node.append(el('div', 'message-heading', correction ? `You · ${correction}` : message.status === 'pending' ? 'You · queued follow-up' : message.role === 'user' ? 'You' : message.role === 'tool' ? message.toolName || 'Tool' : 'Faber'));
     const content = el('div', 'message-content'); content.append(renderRichContent(message.content, { document, onOpenLink: url => request('app.openLink', { url }).catch(setError) })); node.append(content);
     const images = renderOutputImages([message.image, ...(message.images || [])], { document }); if (images.childNodes.length) node.append(images);
     if (message.imageRefs?.length) node.append(referencedImages(message.imageRefs));
     node.append(...mediaOutputs.get(message.mediaRefs?.length ? message.mediaRefs : message.role === 'tool' ? resultMedia(message.content) : [], { chatId: selectedChatId, deviceId }));
     bindContent(node, { chatId: selectedChatId, text: displayText(message.content) });
-    cached = { message, node }; messageNodes.set(message.id, cached); return node;
+    cached = { message, node, correction }; messageNodes.set(message.id, cached); return node;
   }
   function renderTranscript() {
     mediaOutputs.setAvailable(online);
@@ -186,6 +191,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
       if (selectedDetail?.id === selectedChatId) {
         const timeline = transcriptTimeline({ ...state, approvals: [] }, selectedChatId, streams);
         for (const row of timeline) {
+          if (row.kind === 'usage') { nodes.push(activity.promptUsage(row.key, row.usage)); continue; }
           if (row.kind === 'activity') {
             nodes.push(activity.get(state, { ...row.activity, approvals: [] }, streams));
             for (const branch of [{ run: row.activity.run, events: row.activity.events }, ...row.activity.childRuns.map(run => ({ run, events: run.toolEvents || [] }))]) for (const event of branch.events) {
@@ -260,7 +266,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (!getDevices().some(device => device.id === id && (device.online || force))) return directories.get(id);
     const task = (async () => {
       const cached = directories.get(id), response = await request('remote.request', { deviceId: id, method: 'workspace.list', params: { limit: 200, ...(cached?.revision ? { since: cached.revision } : {}) } });
-      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true, mediaReferences: response.capabilities.mediaReferences === true } } : {}), error: '' }; directories.set(id, value); return value; }
+      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true, mediaReferences: response.capabilities.mediaReferences === true, steering: response.capabilities.steering === true } } : {}), error: '' }; directories.set(id, value); return value; }
       const value = remoteWorkspace(response), projects = new Map(value.projects.map(project => [project.id, project])), chats = new Map(value.chats.map(chat => [chat.id, chat])); let offset = value.nextOffset;
       const offsets = new Set();
       while (offset !== null && offset !== undefined) {
@@ -326,15 +332,23 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     catch (error) { if (token === session) setError(error); }
     finally { if (token === session) { pending = false; renderStatus(); } onChange(); }
   }
-  async function submit() {
+  async function submit(steerNow = false) {
     const submitted = prompt.value, draft = key(), files = [...attachments.get(draft)], token = session, target = deviceId, projectId = selectedProjectId;
     if ((!submitted.trim() && !files.length) || files.some(item => item.pending) || pending || !online || prompt.disabled) return;
+    const run = steerNow ? latestRun(state, selectedChatId) : undefined;
+    if (steerNow && (!isActive(run) || !directories.get(target)?.capabilities?.steering)) { setError('The host has no active task available to steer. Your draft is kept.'); return; }
     pending = true; renderStatus();
     try {
       let chatId = selectedChatId;
       if (!chatId) { const chat = await rpc('chat.create', { projectId }, target); if (token !== session) return; if (!chat || typeof chat.id !== 'string') throw new Error('The host returned an invalid new chat.'); chatId = chat.id; }
       const images = files.filter(item => item.image).map(item => item.image);
-      await rpc('chat.send', { chatId, text: attachmentMessage(submitted, files), ...(images.length ? { images } : {}) }, target);
+      const params = { chatId, text: attachmentMessage(submitted, files), ...(images.length ? { images } : {}) };
+      if (steerNow) {
+        const correction = correctionRequest(pendingCorrections.get(draft), run.id, params.text, files);
+        pendingCorrections.set(draft, correction);
+        await rpc('chat.steer', { ...params, runId: run.id, correctionId: correction.correctionId }, target);
+      } else await rpc('chat.send', params, target);
+      pendingCorrections.delete(draft);
       if (drafts.get(draft) === submitted) drafts.delete(draft); attachments.remove(draft, files.map(item => item.id));
       if (token === session) { if (key() === draft && prompt.value === submitted) prompt.value = ''; lastError = ''; await reload(token); if (key() === draft && !selectedChatId) await selectChat(chatId, projectId); }
     } catch (error) { if (token === session) setError(error); }

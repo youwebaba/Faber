@@ -5,7 +5,7 @@ import { openStore } from './store.mjs';
 import { checkTool, toolMetadata, validate, permissions } from './registry.mjs';
 import { streamProvider, providerBody, testProvider, validateBaseUrl, validateCredentialTransport } from './provider.mjs';
 import { validateChatImages, imageBytesLimit } from './images.mjs';
-import { cleanUsage } from './usage.mjs';
+import { cleanUsage, usageSummary, closeIterator } from './usage.mjs';
 import { inspectionCalls, inspectionContent, chatInspection, agentInspection } from './inspection.mjs';
 import {contextTokensSchema,thinkingSchema,configuredControls} from './controls.mjs';
 import {estimateInputTokens,callMetrics,estimateBasis} from './metrics.mjs';
@@ -79,6 +79,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     for (const event of run.toolEvents) if (['running', 'waiting_approval'].includes(event.status)) { event.status = 'interrupted'; event.endedAt = now(); }
   }
   for (const run of state.runs) for (const call of run.modelCalls || []) if (call.status === 'running') { call.status = 'interrupted'; call.endedAt = now(); }
+  for (const run of state.runs) for (const correction of run.steering || []) if (correction.mode === 'native' && ['queued', 'accepted'].includes(correction.status)) {
+    correction.status = 'unknown'; correction.error = 'App restarted before the provider steering outcome was confirmed. No correction was replayed.';
+  }
   for (const chat of state.chats) {
     repairInterruptedTools(chat); chat.contextTokens??=null;
     chat.projectGrants ??= [];
@@ -110,9 +113,29 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, readMedia, modelDisplayName:host.modelDisplayName });
   function emit(event) { remoteWorkspace.notify(event); if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
   function settingsSnapshot() { return structuredClone({ ...state.settings, defaultGrants: state.defaultChatGrants }); }
-  function snapshot() { const { defaultChatGrants, ...publicState } = state; return structuredClone({ ...publicState, settings: settingsSnapshot(), tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
+  function refreshUsage() {
+    const groups = new Map(), runsById = new Map(state.runs.map(run => [run.id, run]));
+    for (const run of state.runs) for (const messageId of run.promptMessageIds || []) groups.set(run.id + '/' + messageId, { owner: run.id, messageId, calls: [] });
+    for (const run of state.runs) for (const call of run.modelCalls || []) {
+      const owner = call.promptRunId || run.id, messageId = call.requestMessageId || run.requestMessageId;
+      if (!messageId) continue;
+      const key = owner + '/' + messageId;
+      if (!groups.has(key)) groups.set(key, { owner, messageId, calls: [] });
+      groups.get(key).calls.push(call);
+    }
+    const owners = new Map();
+    for (const group of groups.values()) {
+      if (!owners.has(group.owner)) owners.set(group.owner, []);
+      const run = runsById.get(group.owner), sharedWithMessageId = run?.promptShares?.[group.messageId], summary = usageSummary(group.calls);
+      if (!group.calls.length && sharedWithMessageId) Object.assign(summary, { status: 'unknown', allocation: 'shared', sharedWithMessageId });
+      if (!group.calls.length && run?.steering?.some(item => item.messageId === group.messageId && ['unknown', 'failed'].includes(item.status))) summary.status = 'unknown';
+      owners.get(group.owner).push({ requestMessageId: group.messageId, ...summary });
+    }
+    for (const run of state.runs) run.promptUsage = owners.get(run.id) || [];
+  }
+  function snapshot() { refreshUsage(); const { defaultChatGrants, ...publicState } = state; return structuredClone({ ...publicState, settings: settingsSnapshot(), tools: [...registry.values()].map(toolMetadata), streams: [...streams.values()], streamSequence, stateRevision }); }
   function clearStream(runId) { if (streams.delete(runId)) streamSequence++; }
-  async function changed() { stateRevision++; await store.save(state); emit({ type: 'state', state: snapshot() }); }
+  async function changed() { stateRevision++; refreshUsage(); await store.save(state); emit({ type: 'state', state: snapshot() }); }
   function find(collection, id) { const item = state[collection].find(entry => entry.id === id); if (!item) throw new Error(`Unknown ${collection}: ${id}`); return item; }
   function clearRunTimer(execution) { clearTimeout(execution.timer); execution.timer = null; }
   function scheduleRunTimer(run, execution) {
@@ -129,12 +152,31 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   function addMessage(chat, role, content, extra = {}) { const message = { id: randomUUID(), role, content, createdAt: now(), ...extra }; chat.messages.push(message); chat.updatedAt = now(); return message; }
   function deliverInbox(chat, runId) {
-    for (const message of chat.inbox?.splice(0) || []) addMessage(chat, 'user', message.text, {
+    const messages = chat.inbox?.splice(0) || [], userIds = messages.filter(message => message.source === 'user').map(message => message.id);
+    for (const message of messages) {
+      addMessage(chat, 'user', message.text, {
       id: message.id, createdAt: message.createdAt, runId,
       ...(message.fromChatId ? { fromChatId: message.fromChatId } : {}),
       ...(message.source === 'user' ? { steering: true } : {}),
       ...(message.images?.length ? { images: [...message.images] } : {}),
-    });
+      });
+      if (message.source === 'user') {
+        if (message.runId !== runId) {
+          const previousRun = state.runs.find(run => run.id === message.runId);
+          if (previousRun?.promptMessageIds) previousRun.promptMessageIds = previousRun.promptMessageIds.filter(id => id !== message.id);
+        }
+        const execution = live.get(runId);
+        if (execution) { execution.promptRunId = runId; execution.requestMessageId = message.id; }
+        const correction = state.runs.flatMap(run => run.steering || []).find(item => item.messageId === message.id);
+        if (correction && correction.mode !== 'native') { correction.status = 'applied'; correction.appliedAt = now(); delete correction.waitingFor; }
+      }
+    }
+    const run = state.runs.find(run => run.id === runId);
+    if (run && userIds.length) {
+      run.promptMessageIds = [...new Set([...(run.promptMessageIds || []), ...userIds])];
+      for (const id of userIds.slice(0, -1)) (run.promptShares ||= {})[id] = userIds.at(-1);
+    }
+    return userIds;
   }
   function projectIds(run) {
     return new Set([find('chats', run.chatId).projectId, ...(run.projectGrants || [])].filter(id => state.projects.some(project => project.id === id && !project.archived)));
@@ -183,7 +225,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     for (const run of state.runs) if (ids.has(run.chatId) && live.has(run.id)) {
       try { assertRunAuthority(run); } catch { cancel.add(run.id); }
     }
-    for (const id of cancel) await stopRun(id, 'Project access revoked by user');
+    if (cancel.size) await stopRuns(descendants(cancel), 'Project access revoked by user');
   }
   async function authorizePath(run, file, summary) {
     if (typeof file !== 'string' || !isAbsolute(file)) throw new Error('Path authorization requires an absolute path');
@@ -215,11 +257,11 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   function assertMutable(ids){for(const id of ids)if(chatLocks.has(id)||state.runs.some(run=>run.chatId===id&&live.has(run.id)))throw new Error('Stop this chat and its child agents before moving or deleting it.');}
   async function stopChats(ids,wait=false){
-    const runs=state.runs.filter(run=>ids.has(run.chatId)),stopped=new Set(),done=[];
-    for(const run of runs)for(const id of descendants(run.id)){if(live.has(id))done.push(live.get(id).done);}
-    for(const run of runs)for(const id of (await stopRun(run.id)).stopped)stopped.add(id);
+    const targets=descendants(state.runs.filter(run=>ids.has(run.chatId)).map(run=>run.id)),done=[];
+    for(const id of targets)if(live.has(id))done.push(live.get(id).done);
+    const result=await stopRuns(targets);
     if(wait)await Promise.all(done);
-    return {stopped:[...stopped]};
+    return result;
   }
   function removeChats(ids){
     const runIds=new Set(state.runs.filter(run=>ids.has(run.chatId)).map(run=>run.id));
@@ -230,8 +272,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     return {deletedChatIds:[...ids],deletedRunIds:[...runIds]};
   }
   function descendants(rootId) {
-    const result = new Set([rootId]);
-    for (let changed = true; changed;) { changed = false; for (const run of state.runs) if (result.has(run.parentRunId) && !result.has(run.id)) { result.add(run.id); changed = true; } }
+    const result = new Set(typeof rootId === 'string' ? [rootId] : rootId), children = new Map();
+    for (const run of state.runs) if (run.parentRunId) { if (!children.has(run.parentRunId)) children.set(run.parentRunId, []); children.get(run.parentRunId).push(run.id); }
+    for (const id of result) for (const child of children.get(id) || []) result.add(child);
     return result;
   }
   function checkSpawn(parentRunId) {
@@ -271,10 +314,15 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const chat = find('chats', run.chatId), project = find('projects', chat.projectId);
     const event = { id: randomUUID(), name, args: structuredClone(args), status: 'running', startedAt: now(), ...origin };
     run.toolEvents.push(event);
+    const operation = { event, stage: 'approval', superseded: false };
+    execution.tool = operation;
     await changed();
     try {
+      if (operation.superseded) throw new Error('Action superseded by steering before execution');
       if (execution.externalSessionId || host.isAutomaticTool?.(tool, tool.permission) !== true) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`);
       signal.throwIfAborted();
+      if (operation.superseded) throw new Error('Action superseded by steering before execution');
+      operation.stage = 'running';
       const value = await abortable(tool.execute(args, { runtime: execution.externalSessionId ? Object.freeze({}) : runtime, chat: structuredClone(chat), project: structuredClone(project), runId: run.id, signal, dataDir, sourceDir, host, authorizePath: (file, summary) => authorizePath(run, file, summary), authorizeProject: (projectId, summary) => approveProject(run, projectId, summary), approve: (permission, summary) => {
         if (!permissions.includes(permission)) throw new Error('Unknown permission');
         signal.throwIfAborted();
@@ -286,8 +334,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       if (serialized.length > 16000000) throw new Error('Tool result exceeds 16 MB');
       event.result = JSON.parse(serialized); event.status = 'completed';
       return event.result;
-    } catch (error) { event.status = signal.aborted ? 'canceled' : 'failed'; event.error = error.message; throw error; }
-    finally { event.endedAt = now(); try { await changed(); } finally { await mediaStore.settle(chat.id); } }
+    } catch (error) { event.status = signal.aborted ? 'canceled' : operation.superseded ? 'superseded' : 'failed'; event.error = error.message; throw error; }
+    finally { if (execution.tool === operation) delete execution.tool; event.endedAt = now(); try { await changed(); } finally { await mediaStore.settle(chat.id); } }
   }
   function contextMessages(chat, provider, prompt = chat.systemPrompt, full = false) {
     const system = `${prompt ?? generalPrompt}\n\nFaber runtime context: current chat ${chat.id}; project ${find('projects', chat.projectId).path}. Tool access is enforced by the harness, not by the selected prompt.`;
@@ -305,31 +353,51 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     return full ? projected : workingMessages(chat, projected);
   }
   async function modelTurn(run, configuration, messages, tools, purpose = 'response') {
-    const chat = find('chats', run.chatId), signal = live.get(run.id).controller.signal;
+    const chat = find('chats', run.chatId), execution = live.get(run.id), controller = new AbortController();
+    const signal = AbortSignal.any([execution.controller.signal, controller.signal]);
+    const attempt = { controller, purpose, steerVersion: execution.steerVersion || 0 };
+    execution.modelAttempt = attempt;
     const stream = injectedProvider ? (typeof injectedProvider === 'function' ? injectedProvider : injectedProvider.stream.bind(injectedProvider)) : streamProvider;
-    const lastAssistantId = chat.messages.findLast(message => message.role === 'assistant')?.id ?? null;
-    const modelCall = { id: randomUUID(), sequence: run.modelCalls.length + 1, providerId: configuration.id, model: configuration.model, purpose, startedAt: now(), status: 'running', phase: purpose === 'compaction' ? 'compacting' : 'thinking' };
-    const measurement = { started: performance.now(), estimatedInputTokens: estimateInputTokens(providerBody({ provider: configuration, messages, tools })), capacityTokens: run.contextCapacityTokens ?? null, characters: 0, usage: {}, timing: {} };
+    let lastAssistantId = chat.messages.findLast(message => message.role === 'assistant')?.id ?? null;
+    const callRecord = () => ({ id: randomUUID(), sequence: run.modelCalls.length + 1, providerId: configuration.id, model: configuration.model, purpose, promptRunId: execution.promptRunId || run.id, requestMessageId: execution.requestMessageId || run.requestMessageId, startedAt: now(), status: 'running', phase: purpose === 'compaction' ? 'compacting' : 'thinking' });
+    let modelCall = callRecord();
+    const inputEstimate = estimateInputTokens(providerBody({ provider: configuration, messages, tools }));
+    const callMeasurement = () => ({ started: performance.now(), estimatedInputTokens: inputEstimate, capacityTokens: run.contextCapacityTokens ?? null, characters: 0, usage: {}, timing: {} });
+    let measurement = callMeasurement();
     const measure = () => modelCall.metrics = callMetrics(measurement);
     let content = '', providerOutput; const calls = [];
-    function progress(phase, summary) {
+    function progress(phase, summary, force = false) {
       if (purpose === 'compaction') phase = 'compacting';
       const safeSummary = purpose === 'compaction' ? undefined : typeof summary === 'string' ? summary.slice(-4000) : phase === modelCall.phase ? modelCall.progressSummary : undefined;
       if (!['connecting', 'thinking', 'responding', 'preparing_tools', 'compacting'].includes(phase)) return;
-      if (modelCall.phase === phase && modelCall.progressSummary === safeSummary && streams.has(run.id)) return;
+      if (!force && modelCall.phase === phase && modelCall.progressSummary === safeSummary && streams.has(run.id)) return;
       modelCall.phase = phase; if (safeSummary === undefined) delete modelCall.progressSummary; else modelCall.progressSummary = safeSummary; measure();
       const partial = { chatId: chat.id, runId: run.id, text: purpose === 'response' ? content : '', sequence: ++streamSequence, lastAssistantId, modelCallId: modelCall.id, phase, progressSummary: safeSummary, metrics: structuredClone(modelCall.metrics) };
       streams.set(run.id, partial);
       emit({ type: 'progress', ...partial, streamSequence, summary: safeSummary });
     }
     measure(); run.modelCalls.push(modelCall);
+    let iterator, finished = false;
     try {
       await changed(); signal.throwIfAborted(); progress(modelCall.phase);
-      const iterator = stream({ provider: configuration, messages, tools, signal, host })[Symbol.asyncIterator]();
+      iterator = stream({ provider: configuration, messages, tools, signal, host, onSteer: handler => { attempt.steer = handler; } })[Symbol.asyncIterator]();
       while (true) {
         const next = await abortable(iterator.next(), signal);
-        if (next.done) break;
+        if (next.done) { finished = true; break; }
         const event = next.value;
+        if (event.type === 'response_start') {
+          if (modelCall.responseId && modelCall.responseId !== event.responseId) {
+            modelCall.endedAt = now(); measure();
+            if (modelCall.status === 'running') modelCall.status = 'completed';
+            modelCall = callRecord(); measurement = callMeasurement(); run.modelCalls.push(modelCall);
+            content = ''; calls.length = 0; providerOutput = undefined;
+          }
+          for (const id of attempt.appliedPromptIds?.slice(0, -1) || []) (run.promptShares ||= {})[id] = attempt.appliedPromptIds.at(-1);
+          attempt.appliedPromptIds = [];
+          modelCall.responseId = event.responseId;
+          await changed(); progress(modelCall.phase, undefined, true);
+        }
+        if (event.type === 'response_end') { modelCall.status = event.status; modelCall.endedAt = now(); measure(); }
         if (event.type === 'progress') progress(event.phase, event.summary);
         if (event.type === 'delta' || event.type === 'text') {
           if (typeof event.text !== 'string') throw new Error('Provider returned invalid text');
@@ -345,24 +413,56 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
           }
         }
         if (event.type === 'provider_output') providerOutput = event.data;
-        if (event.type === 'usage') { const usage = cleanUsage(event.usage); if (Object.keys(usage).length) modelCall.usage = { ...modelCall.usage, ...usage }; measurement.usage = modelCall.usage || {}; measure(); }
+        if (event.type === 'usage') { const usage = cleanUsage(event.usage); if (Object.keys(usage).length) modelCall.usage = { ...modelCall.usage, ...usage }; measurement.usage = modelCall.usage || {}; measure(); progress(modelCall.phase, undefined, true); }
+        if (event.type === 'output_progress' && Number.isSafeInteger(event.characters) && event.characters >= 0) { measurement.toolCharacters = event.characters; measure(); progress('preparing_tools', undefined, true); }
+        if (event.type === 'steering') {
+          const correction = run.steering?.find(item => item.id === event.id);
+          if (correction) {
+            correction.status = event.status;
+            if (event.status === 'accepted') correction.acceptedAt = now();
+            if (event.status === 'applied') {
+              (attempt.appliedPromptIds ||= []).push(correction.messageId);
+              correction.appliedAt = now(); delete correction.waitingFor;
+              if (content.trim()) {
+                const partial = addMessage(chat, 'assistant', content, { status: modelCall.status === 'completed' ? 'completed' : 'interrupted', runId: run.id, modelCallId: modelCall.id });
+                const correctionIndex = chat.messages.findIndex(message => message.id === correction.messageId);
+                if (correctionIndex >= 0) { chat.messages.pop(); chat.messages.splice(correctionIndex, 0, partial); }
+                lastAssistantId = partial.id;
+              }
+              content = ''; calls.length = 0; providerOutput = undefined; clearStream(run.id);
+              execution.requestMessageId = correction.messageId; execution.promptRunId = run.id; attempt.steerVersion = execution.steerVersion;
+            }
+            if (event.error) correction.error = String(event.error).slice(0, 1500);
+            await changed();
+          }
+        }
         if (event.type === 'timing' && Number.isFinite(event.timing?.generationMs) && event.timing.generationMs > 0) { measurement.timing.generationMs = event.timing.generationMs; measure(); }
         if (event.type === 'tool') {
           if (purpose === 'compaction') throw new Error('Context summarization must not request tools');
           if (calls.length >= 32) throw new Error('Too many tool calls in one turn');
           calls.push({ id: event.id || randomUUID(), name: event.name, args: event.args });
+          measurement.toolCharacters = Math.max(measurement.toolCharacters || 0, calls.reduce((sum, call) => sum + String(call.name || '').length + (JSON.stringify(call.args)?.length || 0), 0));
+          measure(); progress('preparing_tools', undefined, true);
         }
       }
       signal.throwIfAborted();
       if (!calls.length && !content.trim()) throw new Error('The model returned no visible answer. Retry, or try turning thinking off for this chat.');
       modelCall.status = 'completed';
-      return { content, providerOutput, calls, modelCall };
+      return { content, providerOutput, calls, modelCall, steerVersion: attempt.steerVersion };
     } catch (error) {
-      clearStream(run.id); modelCall.status = signal.aborted ? 'canceled' : 'failed'; modelCall.error = error.message;
+      clearStream(run.id); modelCall.status = execution.controller.signal.aborted ? 'canceled' : controller.signal.aborted ? 'interrupted' : 'failed'; modelCall.error = error.message;
+      if (controller.signal.aborted && !execution.controller.signal.aborted) error.steered = true;
+      for (const correction of run.steering || []) if (correction.mode === 'native' && ['queued', 'accepted'].includes(correction.status)) {
+        correction.status = 'unknown'; correction.error = 'Connection ended before the steering outcome was confirmed. No correction or tool action was replayed.';
+      }
       if (purpose === 'response' && content.trim()) addMessage(chat, 'assistant', content, { status: modelCall.status, runId: run.id, modelCallId: modelCall.id });
       if (content.trim() || calls.length) error.partialOutput = true;
       throw error;
-    } finally { modelCall.endedAt = now(); measure(); await changed(); }
+    } finally {
+      if (!finished) { controller.abort(new Error('Provider stream closed')); closeIterator(iterator); }
+      if (execution.modelAttempt === attempt) delete execution.modelAttempt;
+      modelCall.endedAt = now(); measure(); await changed();
+    }
   }
   async function loop(run) {
     const chat = find('chats', run.chatId), signal = live.get(run.id).controller.signal;
@@ -421,7 +521,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       }
     }
     let forceCompact = Boolean(run.compactRequested); delete run.compactRequested;
-    while (true) {
+    responseLoop: while (true) {
       signal.throwIfAborted(); assertRunAuthority(run);
       if (chat.inbox?.length) {
         deliverInbox(chat, run.id);
@@ -433,11 +533,13 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         await compact(forceCompact); forceCompact = false;
         messages = contextMessages(chat, configuration, run.systemPrompt);
       }
+      if (chat.inbox?.some(message => message.mode === 'steer')) continue;
       let result, recoveries = 0;
       while (true) {
         try { result = await modelTurn(run, configuration, messages, tools()); break; }
         catch (error) {
           signal.throwIfAborted();
+          if (error.steered) continue responseLoop;
           if (!isContextOverflow(error) || error.partialOutput) throw error;
           run.contextOverflow = true;
           const reported = contextCapacityFromError(error);
@@ -453,18 +555,25 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         }
       }
       delete run.contextOverflow; delete run.compactionSummaryTokens;
-      const { content, providerOutput, calls, modelCall } = result;
+      const { content, providerOutput, calls, modelCall, steerVersion } = result;
       if (!messages.some(message => message.image || message.images?.length || message.providerOutput?.items?.some(item => item.encrypted_content)) && modelCall.usage?.inputTokens && modelCall.metrics.estimatedInputTokens) estimateScale = Math.max(1, modelCall.usage.inputTokens / modelCall.metrics.estimatedInputTokens);
       signal.throwIfAborted();
       if (new Set(calls.map(call => call.id)).size !== calls.length) throw new Error('Provider returned duplicate tool call IDs');
       if (calls.some(call => chat.messages.some(message => message.toolCalls?.some(previous => previous.id === call.id)))) throw new Error('Provider repeated a previously dispatched tool call ID');
       const assistantMessage = addMessage(chat, 'assistant', content, { ...(calls.length ? { toolCalls: calls } : {}), ...(providerOutput ? { providerOutput } : {}), status: 'completed', runId: run.id, modelCallId: modelCall.id });
       clearStream(run.id); await changed();
-      if (!calls.length) { if (chat.inbox?.length || chat.messages.length > messageCount + 1) continue; return; }
+      if (!calls.length) {
+        const unconsumed = chat.messages.slice(messageCount).some(message => message.role === 'user' && !run.steering?.some(item => item.messageId === message.id && item.mode === 'native' && item.status === 'applied'));
+        if (chat.inbox?.length || unconsumed) continue;
+        return;
+      }
       for (const call of calls) {
         signal.throwIfAborted();
         let result;
-        try { result = await executeTool(run, call.name, call.args, { toolCallId: call.id, sourceMessageId: assistantMessage.id, modelCallId: modelCall.id }); }
+        try {
+          if ((live.get(run.id).steerVersion || 0) > steerVersion) result = { error: 'Action superseded by steering before execution; no tool was dispatched.' };
+          else result = await executeTool(run, call.name, call.args, { toolCallId: call.id, sourceMessageId: assistantMessage.id, modelCallId: modelCall.id });
+        }
         catch (error) { signal.throwIfAborted(); result = { error: error.message }; }
         const image = typeof result?.image === 'string' && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(result.image) ? result.image : undefined;
         const textResult = image ? { ...result, image: '[image supplied to model]' } : result;
@@ -507,21 +616,28 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const started = performance.now();
     const run = { id: randomUUID(), chatId: chat.id, providerId: chat.providerId, model, ...(parentRunId ? { parentRunId } : {}), status: 'running', startedAt: now(), toolEvents: [], modelCalls: [], grants: parent ? (sameProject ? chat.grants.filter(permission => parent.grants.includes(permission)) : []) : [...chat.grants], projectGrants: parent ? [...projectIds(parent)].filter(id => id !== chat.projectId) : [...chat.projectGrants] };
     if (executionOptions.externalSessionId) { run.grants = []; run.projectGrants = []; run.externalSessionId = executionOptions.externalSessionId; }
-    if (!singleTool) deliverInbox(chat, run.id);
+    const inboxPromptIds = singleTool ? [] : deliverInbox(chat, run.id);
     const requestMessage = text !== undefined ? addMessage(chat, 'user', text, { runId: run.id, ...(images?.length ? { images: [...images] } : {}) }) : null;
     if (compactRequested) run.compactRequested = true;
     run.modelDisplayName = modelDisplayName;
     run.systemPrompt = chat.systemPrompt ?? generalPrompt;
     if (requestMessage) { run.requestMessageId = requestMessage.id; requestMessage.runId = run.id; }
+    run.promptMessageIds = [...inboxPromptIds, ...(!parent && requestMessage ? [requestMessage.id] : [])];
+    const currentPrompt = run.promptMessageIds.at(-1);
+    if (currentPrompt) for (const id of inboxPromptIds.filter(id => id !== currentPrompt)) (run.promptShares ||= {})[id] = currentPrompt;
     if(selected){run.chatOptions=chatOptions;run.contextCapacityTokens=selected.context.mode==='ollama'?selected.contextTokens:selected.context.capacityTokens;}
     const hint = chat.contextCapacityHint;
     if (!run.contextCapacityTokens && hint?.providerId === run.providerId && hint.baseUrl === find('providers', run.providerId).baseUrl && hint.model === run.model && Number.isSafeInteger(hint.capacityTokens) && hint.capacityTokens > 0) run.contextCapacityTokens = hint.capacityTokens;
     if (compactRequested && !run.requestMessageId) run.requestMessageId = chat.messages.findLast(message => message.role === 'user' && !message.fromChatId)?.id;
+    if (compactRequested && run.requestMessageId && !run.promptMessageIds.includes(run.requestMessageId)) run.promptMessageIds.push(run.requestMessageId);
     state.runs.push(run);
     const controller = new AbortController();
     let finish;
     const done = new Promise(resolveDone => { finish = resolveDone; });
-    const execution = { controller, approved: new Set(parentRunId && sameProject ? live.get(parentRunId)?.approved || [] : []), done, ...executionOptions, started, timer: null };
+    const execution = { controller, approved: new Set(parentRunId && sameProject ? live.get(parentRunId)?.approved || [] : []), done, ...executionOptions, started, timer: null,
+      promptRunId: parent ? live.get(parent.id)?.promptRunId || parent.id : run.id,
+      requestMessageId: parent ? live.get(parent.id)?.requestMessageId || parent.requestMessageId : run.requestMessageId,
+    };
     live.set(run.id, execution);
     try { await changed(); } catch (error) { clearRunTimer(execution); live.delete(run.id); state.runs.splice(state.runs.indexOf(run), 1); finish(); throw error; }
     scheduleRunTimer(run, execution);
@@ -535,9 +651,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       finally {
         clearRunTimer(execution); clearStream(run.id); run.endedAt = now();
         if (run.status === 'failed' || run.status === 'canceled') {
-          for (const child of state.runs.filter(item => item.parentRunId === run.id)) {
-            try { await stopRun(child.id, `Parent run ${run.status}`); } catch (error) { emit({ type: 'error', message: error.message }); }
-          }
+          const children = state.runs.filter(item => item.parentRunId === run.id);
+          try { if (children.length) await stopRuns(descendants(children.map(child => child.id)), `Parent run ${run.status}`); } catch (error) { emit({ type: 'error', message: error.message }); }
           repairInterruptedTools(chat);
         }
         live.delete(run.id);
@@ -547,11 +662,12 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     });
     return { runId: run.id };
   }
-  async function stopRun(runId, reason = 'Stopped by user or parent agent') {
-    const ids = descendants(runId);
+  async function stopRuns(ids, reason = 'Stopped by user or parent agent') {
+    let stopping = false;
     for (const id of ids) {
       const execution = live.get(id);
       if (execution) {
+        stopping = true;
         clearRunTimer(execution); clearStream(id);
         execution.controller.abort(new Error(reason));
         const run = find('runs', id); run.status = 'canceled'; run.endedAt = now();
@@ -559,8 +675,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     }
     for (const approval of state.approvals) if (ids.has(approval.runId)) pending.get(approval.id)?.reject(new Error('Run canceled'));
     state.approvals = state.approvals.filter(item => !ids.has(item.runId));
-    await changed(); return { stopped: [...ids] };
+    if (stopping) await changed(); return { stopped: [...ids] };
   }
+  function stopRun(runId, reason) { return stopRuns(descendants(runId), reason); }
   async function createChat(projectId, title = 'New chat', parentChatId, externalSessionId) {
     if(find('projects', projectId).archived)throw new Error('Project is archived');
     const parent = parentChatId ? find('chats', parentChatId) : null;
@@ -589,7 +706,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     'state.get': object({}), 'project.create': object({ name: string, path: string }, ['name']), 'project.update': object({ id: idSchema, name: string }, ['id']),
     'chat.create': object({ projectId: idSchema, title: string }, ['projectId']),
     'chat.update': object({ id: idSchema, title: string, providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema,reasoningEffort:reasoningEffortSchema,systemPrompt:promptTextSchema,systemPromptPresetId:promptIdSchema, projectGrants: projectGrantsSchema, grants: grantsSchema, voice: object({ enabled: { type: 'boolean' }, phrase: string, speakReplies: { type: 'boolean' } }, []) }, ['id']),
-    'chat.send': object({ chatId: idSchema, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId', 'text']), 'chat.stop': object({ chatId: idSchema }), 'chat.archive': object({ chatId: idSchema }),
+    'chat.send': object({ chatId: idSchema, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId', 'text']),
+    'chat.steer': object({ chatId: idSchema, runId: idSchema, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } }, correctionId: idSchema }, ['chatId', 'runId', 'text']),
+    'chat.stop': object({ chatId: idSchema }), 'chat.archive': object({ chatId: idSchema }),
     'chat.compact':object({chatId:idSchema}),'chat.controls':object({chatId:idSchema}),'chat.forceStop':object({chatId:idSchema}),'chat.delete':object({chatId:idSchema}),'chat.move':object({chatId:idSchema,projectId:idSchema}),
     'project.archive':object({projectId:idSchema}),'project.delete':object({projectId:idSchema}),
     'provider.save': object({ id: idSchema, name: string, kind: { enum: ['openai', 'ollama', 'openai-responses'] }, baseUrl: string, model: { type: 'string', maxLength: 300 }, apiKey: { type: 'string', maxLength: 10000 }, reasoningEffort: { enum: ['', 'low', 'medium', 'high', 'xhigh', 'max'] } }, ['name', 'kind', 'baseUrl', 'model']),
@@ -668,6 +787,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         if (!chat.messages.some(message => message.role === 'user')) throw new Error('This chat has no request to continue');
         return start(chat, undefined, undefined, undefined, undefined, true);
       }
+      case 'chat.steer':
       case 'chat.send': {
         validateChatImages(params.images);
         if (!params.text.trim() && !params.images?.length) throw new Error('A message requires text or an image');
@@ -675,19 +795,47 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         if (chat.externalSessionId) throw new Error('This chat belongs to an external tool session');
         if (chatLocks.has(chat.id)) throw new Error('Chat is being stopped or changed');
         if (chat.archived || find('projects', chat.projectId).archived) throw new Error('Chat or project is archived');
+        if (method === 'chat.steer') {
+          const previous = params.correctionId && state.runs.filter(item => item.chatId === chat.id).flatMap(item => item.steering || []).find(item => item.id === params.correctionId);
+          if (previous) {
+            if (previous.runId !== params.runId || previous.text !== params.text || JSON.stringify(previous.images || []) !== JSON.stringify(params.images || [])) throw new Error('Conflicting steering correction ID');
+            return { runId: previous.runId, messageId: previous.messageId, status: previous.status, mode: previous.mode, ...(previous.waitingFor ? { waitingFor: previous.waitingFor } : {}) };
+          }
+          if (!run || run.id !== params.runId) throw new Error('The intended task has finished or changed; send a new message instead.');
+          const execution = live.get(run.id);
+          if (!execution || execution.controller.signal.aborted) throw new Error('Chat is stopping; wait for it to settle');
+          if ((run.steering || []).filter(item => ['queued', 'accepted'].includes(item.status)).length >= 32) throw new Error('Too many pending corrections');
+          const attempt = execution.modelAttempt, native = attempt?.purpose === 'response' && typeof attempt.steer === 'function';
+          const correction = { id: params.correctionId || randomUUID(), messageId: randomUUID(), runId: run.id, text: params.text, ...(params.images?.length ? { images: [...params.images] } : {}), status: 'queued', mode: native ? 'native' : 'restart', createdAt: now(), waitingFor: execution.tool ? execution.tool.stage === 'approval' ? 'approval' : 'tool' : 'model' };
+          (run.steering ||= []).push(correction); execution.steerVersion = (execution.steerVersion || 0) + 1;
+          (run.promptMessageIds ||= []).push(correction.messageId);
+          if (native) {
+            addMessage(chat, 'user', correction.text, { id: correction.messageId, createdAt: correction.createdAt, runId: run.id, steering: true, ...(correction.images ? { images: correction.images } : {}) });
+            try { attempt.steer(correction); }
+            catch (error) { correction.status = 'unknown'; correction.error = 'Steering could not be confirmed. No correction was replayed.'; }
+          } else {
+            (chat.inbox ||= []).push({ id: correction.messageId, text: correction.text, source: 'user', mode: 'steer', runId: run.id, createdAt: correction.createdAt, ...(correction.images ? { images: correction.images } : {}) });
+            if (attempt?.purpose === 'response') attempt.controller.abort(new Error('Model attempt interrupted by steering'));
+            if (execution.tool?.stage === 'approval') {
+              execution.tool.superseded = true;
+              for (const approval of state.approvals) if (approval.runId === run.id) pending.get(approval.id)?.reject(new Error('Action superseded by steering before execution'));
+            }
+          }
+          await changed();
+          return { runId: run.id, messageId: correction.messageId, status: correction.status, mode: correction.mode, ...(correction.waitingFor ? { waitingFor: correction.waitingFor } : {}) };
+        }
         if (run) {
           if (!live.has(run.id) || live.get(run.id).controller.signal.aborted) throw new Error('Chat is stopping; wait for it to settle');
           if (chat.inbox?.length >= 32) throw new Error('Chat followup queue is full');
           const message = { id: randomUUID(), text: params.text, source: 'user', runId: run.id, createdAt: now(), ...(params.images?.length ? { images: [...params.images] } : {}) };
+          (run.promptMessageIds ||= []).push(message.id);
           (chat.inbox ||= []).push(message); await changed();
           return { runId: run.id, queued: true, messageId: message.id };
         }
         return start(chat, params.text, undefined, undefined, params.images);
       }
       case 'chat.stop': {
-        find('chats', params.chatId); const stopped = new Set();
-        for (const run of state.runs.filter(item => item.chatId === params.chatId)) for (const id of (await stopRun(run.id)).stopped) stopped.add(id);
-        return { stopped: [...stopped] };
+        find('chats', params.chatId); return stopChats(chatTree(params.chatId));
       }
       case 'chat.forceStop':{
         find('chats',params.chatId);const ids=chatTree(params.chatId);
@@ -868,7 +1016,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     },
     async setExtensions(metadata) { state.extensions = structuredClone(metadata); await changed(); },
     async replaceExtensionTools(tools, metadata) { const copy = structuredClone(metadata); install(tools, true); state.extensions = copy; await changed(); },
-    async close() { if (closed) return; closed = true; remoteWorkspace.close(); const done = [...live.values()].map(item => item.done); for (const runId of [...live.keys()]) await stopRun(runId); await Promise.all(done); await store.flush(); listeners.clear(); },
+    async close() { if (closed) return; closed = true; remoteWorkspace.close(); const done = [...live.values()].map(item => item.done); await stopRuns(new Set(live.keys())); await Promise.all(done); await store.flush(); listeners.clear(); },
   };
   const builtin = (name, description, parameters, execute) => ({ name, description, parameters, permission: 'read', execute });
   runtime.registerTools([

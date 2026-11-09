@@ -7,6 +7,12 @@ chat run. Model selection still requires **Use in this chat**.
 ## Downloaded files
 
 Standalone GGUF files and complete, originally named GGUF shard sets are listed.
+Safetensors files are grouped with their authoritative shard index and supporting
+configuration/tokenizer data. Missing shards or configuration make the package
+incomplete; a complete package still needs a compatible runtime. Shared support
+files are shown in details and retained when recycling weights. Music3's five
+GGUF components appear as one music pipeline, excluded from the chat picker.
+Multiple component variants require an explicit downloaded package selection.
 Discovery checks file metadata and the GGUF header. It skips auxiliary models,
 hidden/partial files and filesystem links. Tracked downloads classify auxiliary
 files using their repository-relative file paths, so a repository name containing

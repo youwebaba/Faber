@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
 import {createUpgrades} from '../desktop/upgrades.mjs';
 
 async function fixture(t,options={}){
@@ -12,6 +13,71 @@ async function fixture(t,options={}){
   await fs.writeFile(path.join(sourceDir,'test','value.test.mjs'),"import {value} from '../core/value.mjs';import assert from 'node:assert/strict';assert.equal(value,2);");
   return {sourceDir,dataDir,manager:createUpgrades({sourceDir,dataDir,confirm:async()=>true,...options})};
 }
+test('stage cleanup retains usable stages, durable rollback records and unrelated folders',async t=>{
+  let allow=false;
+  const {sourceDir,dataDir,manager}=await fixture(t,{runner:async()=>({code:0}),confirm:async()=>allow});
+  await manager.expireStages();
+  const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);
+  await manager.verify(stage.id);
+  await assert.rejects(manager.apply(stage.id),/declined/);
+  await manager.expireStages();
+  assert.equal((await manager.verify(stage.id)).verified,true);
+  allow=true;
+  const result=await manager.apply(stage.id);
+  assert.equal(await fs.readFile(path.join(result.backupDir,'core/value.mjs'),'utf8'),'export const value=1;');
+  await assert.rejects(fs.access(path.join(dataDir,'upgrades',stage.id,'stage')),{code:'ENOENT'});
+  const orphan=path.join(dataDir,'upgrades',randomUUID());
+  const nativeOutput=`native-output-${randomUUID()}`;
+  for(const name of ['stage',nativeOutput,'native-output-not-ours','backup'])await fs.mkdir(path.join(orphan,name),{recursive:true});
+  const unrelated=path.join(dataDir,'upgrades','user-folder','stage');
+  await fs.mkdir(unrelated,{recursive:true});
+  const restarted=createUpgrades({sourceDir,dataDir,confirm:async()=>true});
+  await restarted.expireStages();
+  assert.deepEqual((await fs.readdir(orphan)).sort(),['backup','native-output-not-ours']);
+  await fs.access(unrelated);
+  assert.equal((await restarted.rollback()).rolledBack,true);
+  const unused=await restarted.stage([{path:'core/value.mjs',content:'export const value=3;'}]);
+  await restarted.close();
+  await assert.rejects(fs.access(path.join(dataDir,'upgrades',unused.id,'stage')),{code:'ENOENT'});
+});
+
+test('failed staging removes partial copies and cleanup does not follow profile junctions',async t=>{
+  const {sourceDir,dataDir,manager}=await fixture(t);
+  const original=fs.cp.bind(fs);
+  t.mock.method(fs,'cp',async(from,...args)=>{
+    if(from===path.join(sourceDir,'test'))throw new Error('Synthetic copy failure');
+    return original(from,...args);
+  });
+  await assert.rejects(manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]),/copy failure/);
+  const root=path.join(dataDir,'upgrades');
+  for(const id of await fs.readdir(root))assert.deepEqual(await fs.readdir(path.join(root,id)),[]);
+  const outside=path.join(path.dirname(dataDir),'outside');
+  await fs.mkdir(path.join(outside,'stage'),{recursive:true});
+  await fs.writeFile(path.join(outside,'stage','keep'),'unchanged');
+  await fs.symlink(outside,path.join(root,randomUUID()),process.platform==='win32'?'junction':'dir');
+  await manager.expireStages();
+  assert.equal(await fs.readFile(path.join(outside,'stage','keep'),'utf8'),'unchanged');
+});
+
+test('Cargo build output is excluded before traversing source, staging, and core backup',async t=>{
+  const {sourceDir,dataDir}=await fixture(t);
+  const cache=path.join(sourceDir,'native','target');
+  await fs.mkdir(path.join(cache,'large-cache'),{recursive:true});
+  await fs.symlink(path.join(cache,'large-cache'),path.join(cache,'nested-link'),process.platform==='win32'?'junction':'dir');
+  const metadata='{"name":"fixture","version":"1.0.0"}';
+  await fs.writeFile(path.join(sourceDir,'package.json'),metadata);
+  const manager=createUpgrades({sourceDir,dataDir,confirm:async()=>true,runner:async()=>({code:0})});
+  assert.equal((await manager.activationStatus()).restartRequired,false);
+  const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);
+  const staged=path.join(dataDir,'upgrades',stage.id,'stage');
+  assert.equal(await fs.readFile(path.join(staged,'package.json'),'utf8'),metadata);
+  await assert.rejects(fs.access(path.join(staged,'native','target')),{code:'ENOENT'});
+  await fs.writeFile(path.join(cache,'new-cache'),'generated after staging');
+  assert.equal((await manager.verify(stage.id)).verified,true);
+  const backup=await manager.backupCore();
+  await assert.rejects(fs.access(path.join(backup.backupDir,'native','target')),{code:'ENOENT'});
+  await manager.close();
+});
 test('staged verification includes the read-only scripts imported by installed tests',async t=>{
   const {sourceDir,manager}=await fixture(t);
   await fs.mkdir(path.join(sourceDir,'scripts'));

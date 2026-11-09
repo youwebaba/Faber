@@ -29,10 +29,14 @@ The desktop allowlists these requests and delegates to the hub manager:
   public models, bounded result count; format is `all`, `gguf` or `safetensors`.
 - `models.inspect` `{repoId,revision?}` → model summary plus pinned `revision`,
   `files:[]`, `quantizations:[]` and `totalBytes` for the current revision.
-- `models.download` `{repoId,revision,files?:string[],quantizationId?:string}`
+- `models.download` `{repoId,revision,files?:string[],quantizationId?:string,packageId?:string,components?:object}`
   → background download job. Supply exactly one selection method. A variant ID
   expands its authoritative file list after re-inspecting the pinned revision.
   Never automatically fetch every quantization.
+  A package ID selects its complete authoritative file group. Music3 also
+  requires exactly one offered variant ID for each of `language_model`,
+  `rvq_depth_decoder`, `condition_encoder`, `transformer` and `vocoder` in
+  `components`. Explicit files, quantization and package are mutually exclusive.
 - `models.cancel` `{id}` → updated job.
 - `models.settings.save` `{downloadDirectory?,token?,clearToken?}` → hub state.
   Blank omitted token retains the current encrypted credential.
@@ -57,8 +61,29 @@ missing, duplicated or inconsistent shards make it unavailable for variant
 download. Unknown names and auxiliary weights remain in the manual file list.
 Sizes and VRAM estimates describe the entire selected variant. This downloads
 published quantizations; it does not convert weights into another quantization.
+
+Inspection also returns `packages:[]`. Safetensors packages include the actual
+`weight_map` shards from a bounded, pinned `.safetensors.index.json` read,
+configuration, tokenizer and supporting data. Unindexed numbered shards,
+missing configuration/shards, unsafe references and case collisions are
+unavailable as packages. Alternate weight files, Python/model code and executable
+files are excluded. The advanced individual-file selector remains available;
+subfolder paths are preserved for every transfer. Group downloads re-inspect the
+pinned metadata before files approval and transfer.
+
+MiniMax-Music3 GGUF packages present five separate component selectors with
+runtime-specific encoding compatibility and explicit missing components. They
+are one music pipeline, never five standalone chat models. Whole-pipeline memory
+depends on all five components and runtime buffers; component estimates are not
+a GPU fit guarantee. The official native Safetensors modular pipeline groups its
+five components, tokenizer and scheduler without the legacy training checkpoints.
+That native package needs a compatible Diffusers runtime; the bundled Music3
+runtime consumes GGUF. See the publisher's [GGUF component card](https://huggingface.co/Serveurperso/MiniMax-Music3-GGUF),
+[runtime](https://github.com/ServeurpersoCom/minimaxmusic.cpp) and
+[native model](https://huggingface.co/MiniMaxAI/MiniMax-Music3).
+
 Job:
-`{id,repoId,revision,status,directory,files:[],quantizationId?,quantizationLabel?,downloadedBytes,totalBytes,speedBytesPerSecond,progress,createdAt,updatedAt,error?}`.
+`{id,repoId,revision,status,directory,files:[],quantizationId?,quantizationLabel?,packageId?,packageLabel?,packageType?,components?,downloadedBytes,totalBytes,speedBytesPerSecond,progress,createdAt,updatedAt,error?}`.
 Job status: `queued`, `downloading`, `completed`, `canceled`, `failed`,
 `interrupted`. Progress is `0..1` or null if unknown. Job file entries retain
 path/size and per-file status/bytes. The destination is fixed when a job starts;

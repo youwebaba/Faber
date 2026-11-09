@@ -26,6 +26,7 @@ import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
 import {imageTools} from '../tools/images.mjs';
 import {mediaTools} from '../tools/media.mjs';
+import {createLocalMusic} from '../local-music/index.mjs';
 import {createChatMedia,mediaMethods} from './chat-media.mjs';
 import {createBrowserManager,browserMethods} from './browser.mjs';
 
@@ -61,8 +62,8 @@ const uiMethods=new Set(['app.reloadUI','app.uiState','app.uiStateAck']);
 const chatGPTMethods=new Set(['chatgpt.status','chatgpt.signIn','chatgpt.cancel','chatgpt.signOut','chatgpt.select','chatgpt.models','chatgpt.usage']);
 const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.start','gateway.stop','gateway.rotateToken']);
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
-const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
-let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
+const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
+let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
@@ -101,10 +102,11 @@ async function shutdown(){
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
-  const results=await Promise.allSettled([browser?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
+  const results=await Promise.allSettled([browser?.close(),music?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
   for(const result of results)if(result.status==='rejected')failures.push(result.reason);
   try{await extensions?.close();}catch(error){failures.push(error);}
   try{await localModels?.close();}catch(error){failures.push(error);}
+  try{await upgrades?.close();}catch(error){failures.push(error);}
   await featureFixture?.close();await reloadFixture?.close();if(browserParking&&!browserParking.isDestroyed())browserParking.destroy();
   for(const error of failures)console.error('Shutdown failed:',error);return failures.length===0;
 }
@@ -165,12 +167,14 @@ const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber||smokeB12||smokeB20
 const localFixture=localSmoke?await localSmoke.createLocalModelSmoke(dataDir,modelHub):null;
 if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
 localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options});
+music=createLocalMusic({dataDir,sourceDir,getHubState:()=>modelHub.request('models.state'),withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?{runtimeDirectory:path.join(bootstrap.resourcesPath,'music-runtime')}:{})});
 extensions=createAddons({dataDir,runtime,confirm,safeMode:recoveryStatus.safeMode,bundledSource:bootstrap?.bundledSource||path.join(sourceDir,'bundled-addons'),bundledResources:{lightpanda:bootstrap?.addonResources||path.join(sourceDir,'.runtime','lightpanda')},chooseAddon:host.chooseAddon,openPath:host.openPath,emit:event=>runtime.emit(event)});
 upgrades=createUpgrades({sourceDir:reloadFixture?.sourceDir||featureFixture?.upgradeSourceDir||sourceDir,dataDir,confirm:reloadFixture?async()=>true:confirm,onApplied:({id})=>runtime.emit({type:'uiUpdate',id})});
+await upgrades.expireStages().catch(error=>console.error('Expired upgrade cleanup failed:',error.message));
 // Recognition errors can leave a live session; only an explicit off event clears the reload barrier.
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
-runtime.registerTools([...fileTools(),...imageTools(),...mediaTools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
+runtime.registerTools([...fileTools(),...imageTools(),...mediaTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
@@ -250,7 +254,7 @@ if(smokeInstalled){
       if(Date.now()>=deadline)throw new Error('Installed smoke interface did not become ready within ten seconds.');
       await new Promise(resolve=>setTimeout(resolve,25));
     }
-    console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir})));app.quit();
+    console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window})));app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}return;
 }
 if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));window.close();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}

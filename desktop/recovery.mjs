@@ -19,7 +19,7 @@ async function safePath(root,relative,{generated=false}={}){
 }
 export async function atomicWrite(file,bytes){const temporary=file+'.'+crypto.randomUUID()+'.tmp';try{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(temporary,bytes,{flag:'wx'});await fs.rename(temporary,file);}finally{await fs.rm(temporary,{force:true});}}
 export async function writeRecoveryRecord(dataDir,record){const target=path.join(dataDir,'upgrades','last-applied.json');await fs.mkdir(path.dirname(target),{recursive:true});await atomicWrite(target,JSON.stringify(record,null,2));}
-async function recoveryProfilePath(dataDir,relative){
+export async function recoveryProfilePath(dataDir,relative){
   const base=await fs.realpath(dataDir),target=path.join(base,relative);let current=base;
   for(const part of relative.split('/')){current=path.join(current,part);try{if((await fs.lstat(current)).isSymbolicLink())throw new Error('Recovery storage contains a link or junction');const resolved=await fs.realpath(current),inside=path.relative(base,resolved);if(inside==='..'||inside.startsWith(`..${path.sep}`)||path.isAbsolute(inside))throw new Error('Recovery storage escapes the profile');}catch(error){if(error.code!=='ENOENT')throw error;}}
   return target;

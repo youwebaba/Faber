@@ -1,5 +1,7 @@
 import { repoId, revision, validFilePath } from './paths.mjs';
 import { quantizationCatalog, auxiliaryGGUF } from './quantizations.mjs';
+import { packageCatalog, musicComponent } from './packages.mjs';
+import { fetchFile } from './transfer.mjs';
 
 const GiB = 1024 ** 3;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -62,7 +64,8 @@ export function modelDetails(raw, requestedRepo, requestedRevision) {
   });
   const totalBytes = files.every(file => file.size !== null) ? files.reduce((sum, file) => sum + file.size, 0) : null;
   if (totalBytes !== null && !Number.isSafeInteger(totalBytes)) throw new Error('Repository size exceeds supported integer range');
-  return { ...summary, revision: pinned, files, quantizations: quantizationCatalog(files, estimateVram), totalBytes, sizeBytes: totalBytes, sizeLabel: 'All files in this pinned revision; may include multiple variants' };
+  const variants = quantizationCatalog(files, estimateVram);
+  return { ...summary, revision: pinned, files, quantizations: variants.filter(variant => !musicComponent(variant.files[0])), packages: packageCatalog(files, {}, variants, estimateVram), totalBytes, sizeBytes: totalBytes, sizeLabel: 'All files in this pinned revision; may include multiple variants' };
 }
 
 export function httpError(status) {
@@ -72,9 +75,10 @@ export function httpError(status) {
   return new Error(`Hugging Face request failed (HTTP ${status})`);
 }
 export function createMetadata({ fetchImpl, token }) {
-  async function json(url, signal) {
+  async function json(url, signal, limit = 16 * 1024 * 1024, file = false) {
     const credential = await token();
-    const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(20000), ...(signal ? [signal] : [])]), headers: { Accept: 'application/json', ...(credential ? { Authorization: `Bearer ${credential}` } : {}) } });
+    const boundedSignal = AbortSignal.any([AbortSignal.timeout(20000), ...(signal ? [signal] : [])]);
+    const response = file ? await fetchFile(url, { fetchImpl, token: credential, signal: boundedSignal }) : await fetchImpl(url, { redirect: 'error', signal: boundedSignal, headers: { Accept: 'application/json', ...(credential ? { Authorization: `Bearer ${credential}` } : {}) } });
     if (!response.ok) throw httpError(response.status);
     if (!response.body) throw new Error('Hub returned an empty metadata response');
     const chunks = []; let size = 0;
@@ -83,7 +87,7 @@ export function createMetadata({ fetchImpl, token }) {
       while (true) {
         const { done, value } = await reader.read(); if (done) break;
         size += value.byteLength;
-        if (size > 16 * 1024 * 1024) throw new Error('Hub metadata response too large');
+        if (size > limit) throw new Error('Hub metadata response too large');
         chunks.push(value);
       }
     } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
@@ -104,7 +108,16 @@ export function createMetadata({ fetchImpl, token }) {
       repoId(id);
       if (ref !== undefined && (typeof ref !== 'string' || !ref || ref.length > 200 || /[\x00-\x1f]/.test(ref))) throw new Error('Invalid model revision');
       const url = `https://huggingface.co/api/models/${id}${ref ? `/revision/${encodeURIComponent(ref)}` : ''}?blobs=true`;
-      return modelDetails(await json(url, signal), id, ref);
+      const model = modelDetails(await json(url, signal), id, ref), documents = {};
+      const indexes = model.files.filter(file => /\.safetensors\.index\.json$/i.test(file.path) || file.path === 'modular_model_index.json');
+      if (indexes.length > 64) throw new Error('Too many Safetensors indexes to inspect safely; use a narrower repository');
+      for (const file of indexes) {
+        if (file.size !== null && file.size > 2 * 1024 * 1024) continue;
+        const fileUrl = `https://huggingface.co/${id}/resolve/${model.revision}/${file.path.split('/').map(encodeURIComponent).join('/')}`;
+        documents[file.path] = await json(fileUrl, signal, 2 * 1024 * 1024, true);
+      }
+      model.packages = packageCatalog(model.files, documents, quantizationCatalog(model.files, estimateVram), estimateVram);
+      return model;
     },
   };
 }

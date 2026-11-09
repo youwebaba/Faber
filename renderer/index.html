@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Faber a2.4</title>
+  <title>Faber</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="models.css">
   <link rel="stylesheet" href="connections.css">
@@ -20,7 +20,7 @@
 <body>
   <div class="shell">
     <aside class="sidebar" id="sidebar" aria-label="Projects and chats">
-      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label">a2.4</span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
+      <div class="brand-row"><img class="brand-mark faber-symbol" src="assets/faber-symbol.svg" alt=""><span class="brand">Faber</span><span class="build-label"></span><button id="collapse-sidebar" class="icon-button" title="Hide sidebar" aria-label="Hide sidebar" data-icon="panel"></button></div>
       <button id="new-chat" class="nav-button new-chat" data-icon="compose">New chat <kbd>Ctrl N</kbd></button>
       <button id="open-tools" class="nav-button" data-icon="tools">Tools & extensions</button>
       <button id="open-models" class="nav-button" data-icon="models">Models</button>
@@ -61,8 +61,9 @@
               </div>
               <div id="composer-bottom" class="composer-bottom">
                 <div class="composer-spacer"></div>
+                <button type="button" id="steer-message" class="button" title="Correct the current task" hidden>Steer now</button>
                 <button type="button" id="stop-run" class="send-button" aria-label="Stop run" title="Stop run" data-icon="stop" hidden></button>
-                <button type="submit" id="send-message" class="send-button" aria-label="Send message" title="Send message" data-icon="arrow"></button>
+                <button type="submit" id="send-message" class="send-button" aria-label="Send message" title="Send message" data-icon="arrow"><span hidden>Queue follow-up</span></button>
               </div>
             </form>
             <div id="chatgpt-plan-status" class="chatgpt-plan-status" hidden></div>

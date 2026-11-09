@@ -10,13 +10,13 @@ export function libraryMetadata(entry, details) {
 export function libraryEntries(local, downloads) {
   const active = downloads.filter(job => ['queued', 'downloading'].includes(job.status));
   const reserved = new Set(active.flatMap(job => job.files.map(file => pathKey(job.directory, file.path))));
-  const rows = active.map(job => ({ kind: 'transfer', id: `job:${job.id}`, label: job.quantizationLabel || (job.files.length === 1 ? job.files[0].path : `${job.repoId} · ${job.files.length} selected files`), job }));
+  const rows = active.map(job => ({ kind: 'transfer', id: `job:${job.id}`, label: job.packageLabel || job.quantizationLabel || (job.files.length === 1 ? job.files[0].path : `${job.repoId} · ${job.files.length} selected files`), job }));
   for (const model of local.models || []) {
     const paths = model.files.map(file => pathKey(local.directory, file)); const downloading = paths.some(path => reserved.has(path));
     if (downloading && paths.every(path => reserved.has(path))) continue;
     const running = local.process?.modelId === model.id && ['loading', 'ready', 'stopping'].includes(local.process.status);
-    const job = downloads.findLast(job => job.files.length === paths.length && job.files.every(file => paths.includes(pathKey(job.directory, file.path))));
-    rows.push({ kind: 'disk', id: `disk:${model.id}`, label: model.label, model, job, canDelete: !running && !downloading,
+    const job = downloads.findLast(job => paths.every(target => job.files.some(file => pathKey(job.directory, file.path) === target)));
+    rows.push({ kind: 'disk', id: `disk:${model.id}`, label: model.packageId ? (job?.packageLabel || model.label).split('/').at(-1) : model.label, model, job, canDelete: !running && !downloading,
       deleteReason: running ? 'Stop this model before moving its files.' : downloading ? 'Cancel the active download first.' : '',
       status: running ? `Runtime ${local.process.status}` : model.available ? 'On disk' : 'On disk · unavailable for this runtime' });
   }
@@ -79,7 +79,9 @@ export function createDiskLibrary({ request, el, button, actions, notify, inspec
     if (info.vram) detail.append(el('p', 'hint', `${info.vram.basis || 'Estimated memory'}. Actual use depends on context, runtime, and offload; this is not a fit guarantee.`));
     for (const warning of info.warnings) detail.append(el('p', 'hint', warning));
     if (model && metadataErrors.has(model.id)) detail.append(button('Retry local metadata', () => readMetadata(model.id, entry.id)));
-    detail.append(el('pre', 'result-content', model ? model.files.join('\n') : job.files.map(file => `${file.path} · ${formatBytes(file.size)}`).join('\n')));
+    if (model?.components) detail.append(el('p', 'hint', 'MiniMax-Music3: complete five-component music pipeline. Use Music to generate audio; this pipeline is separate from chat inference. Whole-pipeline memory includes all five components and runtime buffers.'));
+    detail.append(el('pre', 'result-content', model ? [...model.files, ...(model.supportFiles || [])].join('\n') : job.files.map(file => `${file.path} · ${formatBytes(file.size)}`).join('\n')));
+    if (model?.supportFiles?.length) detail.append(el('p', 'hint', 'Configuration, tokenizer and index support files are retained when recycling weights because other packages may share them.'));
     if (model?.reason) detail.append(el('p', 'hint error-text', model.reason));
     if (job?.repoId) detail.append(button('Inspect publisher quantizations', () => inspect(job.repoId)));
     detail.append(el('p', 'hint', 'Use the model selector in chat to choose hardware, start a compatible local model, and apply it to a chat.'));

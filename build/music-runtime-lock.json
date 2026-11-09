@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "executable": "mm-synth.exe",
+  "source": "https://github.com/ServeurpersoCom/minimaxmusic.cpp",
+  "commit": "35ba334b4d23b5a8e631e3c2d97f074a185e41d4",
+  "ggmlCommit": "210138933b22221ced02943b7b6e4308610ab530",
+  "platform": "windows-x64",
+  "backends": [
+    "cpu"
+  ],
+  "build": "MSVC 19.51; Release; GGML_BACKEND_DL=ON; GGML_NATIVE=OFF; GGML_CPU_ALL_VARIANTS=ON",
+  "license": "MIT; yyjson MIT; minimp3 CC0; Microsoft Visual C++ redistributable terms",
+  "files": [
+    {
+      "path": "ggml-base.dll",
+      "size": 716800,
+      "sha256": "a80d1c4669c333c85665939be5f2da3ae6860e882352b355400b3442a82f41b8"
+    },
+    {
+      "path": "ggml-cpu-alderlake.dll",
+      "size": 997888,
+      "sha256": "c6ecf89115000e05928c63bdf0887f4b99d805cebe027fb3c87a47a0fc5d921a"
+    },
+    {
+      "path": "ggml-cpu-cannonlake.dll",
+      "size": 1039360,
+      "sha256": "860760a7ca52d81ee06844277c3395c99a653d4870061e51221448731345418c"
+    },
+    {
+      "path": "ggml-cpu-cascadelake.dll",
+      "size": 1053184,
+      "sha256": "45d8f72932252cbe7355654a83d98c849efd326469d0d71fc5553943cce631f1"
+    },
+    {
+      "path": "ggml-cpu-haswell.dll",
+      "size": 998912,
+      "sha256": "2bdb58fd082646167f436a8aa955e57d1ae3273b999a843b0072bcbdaac7dc4d"
+    },
+    {
+      "path": "ggml-cpu-icelake.dll",
+      "size": 1053184,
+      "sha256": "48bdad1e9a596f9038fc6fc45b2d497d56167d4db816d15a3b2368b322040152"
+    },
+    {
+      "path": "ggml-cpu-sandybridge.dll",
+      "size": 1046528,
+      "sha256": "45f71ce161edd97129848a67c2ed61502efa3c281511e147ef519e0971f347d1"
+    },
+    {
+      "path": "ggml-cpu-skylakex.dll",
+      "size": 1039360,
+      "sha256": "a681f82b92c0da55615f43972a9c28592253d93be6d77f7026c37fbe5d8cb7b7"
+    },
+    {
+      "path": "ggml-cpu-sse42.dll",
+      "size": 882688,
+      "sha256": "83b4ea0c325b570f369cfa55351179de6ea95af02c0704e02d0c1ae9b2a65649"
+    },
+    {
+      "path": "ggml-cpu-x64.dll",
+      "size": 886272,
+      "sha256": "1ed148d279fe74823d7bfaafbd17bc2ca39b3cba8b11278ab3b9d4cfe965fb7b"
+    },
+    {
+      "path": "ggml.dll",
+      "size": 61440,
+      "sha256": "1d59b74e49ea66f6b8acdc9e4aed6cbe0c271d9e07f0993d87bcc4d8bc53f8c9"
+    },
+    {
+      "path": "licenses/GGML-LICENSE.txt",
+      "size": 1099,
+      "sha256": "bcd8ec749126d45cb06737d0690295d73df4b6e7e194205bcf91190368f27285"
+    },
+    {
+      "path": "licenses/MICROSOFT-VS18-REDIST.txt",
+      "size": 187,
+      "sha256": "eea534b04c6e4e16d213a28478df552d98e44bd4cdcf486e2bfb2dcac164828d"
+    },
+    {
+      "path": "licenses/MINIMAXMUSIC-LICENSE.txt",
+      "size": 1090,
+      "sha256": "de3cc388855deff82f7024a12cf257439932817a8c786913d00314bcd17bae40"
+    },
+    {
+      "path": "licenses/MINIMP3-LICENSE.txt",
+      "size": 324,
+      "sha256": "df54b02d1354386d730aeda8c39bbc96ba24416f7362cb138cd6cadaf4f22712"
+    },
+    {
+      "path": "licenses/THIRD-PARTY-NOTICES.txt",
+      "size": 3496,
+      "sha256": "75a728ad1b837fb7d9dccc8c89fd6b8f26e4909e0d788ecef55da3c02f9a0217"
+    },
+    {
+      "path": "licenses/YYJSON-LICENSE.txt",
+      "size": 1249,
+      "sha256": "9d5ba1d29b6f58e63f8e85d00deee0179fee041f7b4f483f0a4ad5d8d898c0e3"
+    },
+    {
+      "path": "mm-synth.exe",
+      "size": 479232,
+      "sha256": "94dbfc2f8f9bf9ce38a0d66caa2c6b49905a909e89ba06bbfde0df7a93aff31a"
+    },
+    {
+      "path": "msvcp140.dll",
+      "size": 643512,
+      "sha256": "7c26614e1d733892c2deac7e245ce115504b1d80592dd0a01b08e3e5a55f89ca"
+    },
+    {
+      "path": "vcomp140.dll",
+      "size": 212920,
+      "sha256": "95d4ce4a6802d1e18b5e0e1722cc30ea72ca7e033f83828f05c0b7b993fe7cbf"
+    },
+    {
+      "path": "vcruntime140_1.dll",
+      "size": 50112,
+      "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e"
+    },
+    {
+      "path": "vcruntime140.dll",
+      "size": 178616,
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+    }
+  ]
+}

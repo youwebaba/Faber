@@ -5,6 +5,50 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.5
+
+The Windows source suite passed 642 tests, with one optional skip. The packaged
+a2.4 → a2.5 → a2.4 → a2.5 launches used one disposable profile and retained
+its chats, addon, secured test credential and selected model directory. The
+a2.5 window title, About screen, build label and bug report matched the app version.
+
+Qwen interrupted generation before dispatching an obsolete write. The paired
+TLS fixture lost the first reply, reconnected and applied the same correction
+once. A separate full-tool-registry remote trial timed out on an approval for an
+unrelated tool chosen by the model. [Steering checks](docs/a2.5-steering.md)
+
+The pinned Mistral.rs Windows CPU build streamed an answer from an original
+Safetensors package. With an embedded Qwen MTP head, the managed llama.cpp
+runner accepted 23 of 23 draft tokens and produced the same greedy output as
+the baseline. [Runner qualification](docs/a2.5-runner-qualification.md)
+
+The package picker was exercised in Electron, including an agent-requested
+package download. The music tool generated a four-second WAV on the Windows
+CPU. Local and encrypted loopback playback reached `canplay`, sought and saved
+the original bytes. [Model package checks](docs/a2.5-model-packages.md) · [Music generation and playback](docs/a2.5-music-verification.md)
+
+The upgrade regression suite passed 26 tests, including interrupted staging,
+expired temporary directories, retained rollback files, profile junctions and
+exclusion of Cargo output before traversal. The Rust worker passed four tests.
+
+The GGUF experiment opened three real model files, applying the desktop
+8 MiB budget and five-second deadline. Each row is one inspection on this PC.
+The counts are file read/seek calls. Timings exclude process startup.
+
+| Header | Original calls and time | Grouped tokenizer reads and time |
+| --- | --- | --- |
+| Qwen3.5 9B Q8_0 | 386,719 reads + 386,616 seeks, 513 ms | 602 reads + 477 seeks, 19 ms |
+| Gemma 4 12B Q5_K_M | 371,171 reads + 371,044 seeks, 491 ms | 566 reads + 405 seeks, 19 ms |
+| Qwen3.8 27B IQ2_S | 386,723 reads + 386,609 seeks, 537 ms | 617 reads + 481 seeks, 19 ms |
+
+Grouping reads increased physical reads from 3.0–3.1 MB to 6.3–7.4 MB per
+file. All stayed below the original budget and returned the same parsed byte
+counts, warnings and remaining budgets (9, 0 and 7 bytes). The three headers
+exceeded that budget in both versions. Run the `gguf_io` Cargo example in
+`native` with paths to GGUF files to reproduce the measurements.
+
+Physical two-PC/WAN acceptance remains open.
+
 ## a2.4
 
 The final source suite passed **602 tests, zero failures and one optional

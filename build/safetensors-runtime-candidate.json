@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "status": "CPU loader qualified; managed integration and redistribution review pending",
+  "runtime": "mistralrs",
+  "version": "0.9.5",
+  "source": "https://github.com/EricLBuehler/mistral.rs",
+  "commit": "465191d0b0a7e2432d327b0de06204ab3f94d3a2",
+  "platform": "windows-x64-cpu",
+  "archive": {
+    "url": "https://github.com/EricLBuehler/mistral.rs/releases/download/v0.9.5/mistralrs-cpu-x86_64-pc-windows-msvc.zip",
+    "size": 34199612,
+    "sha256": "64d567c299a5c97ef265aa0362649aafb968af47706810df640f74fe8ea4702a"
+  },
+  "cargoLockSha256LF": "4c1856b225d7054dbcf94b198902b3070cbf99d85455150b239b162cb67b71e7",
+  "nativeCore": { "name": "candle-core", "version": "0.11.0", "commit": "66a8cf184a5a519671454066b1b9efd446ec9f5c" },
+  "primaryModelDependencies": { "safetensors": "0.8.0", "tokenizers": "0.21.4" },
+  "files": [
+    { "path": "mistralrs.exe", "size": 99808256, "sha256": "cdef3b664222ff469657e1e9ad8ea5846add4fe3991fd9fb2fcfb645a92b240c" },
+    { "path": "vcruntime140.dll", "size": 178616, "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7" },
+    { "path": "vcruntime140_1.dll", "size": 50112, "sha256": "a7146c08f89fe5b04541ab507cdb59ff7b44534d4ba3c668a426c6450a03434e" }
+  ],
+  "license": "MIT; native dependency notices and Microsoft redistributable terms must accompany redistribution",
+  "licenseSha256LF": "b40bb09c7b3b6f697a8920cf9d2cb3ff8cfcf77a0fcb6d264a92842b43c4dcae",
+  "bundled": false
+}

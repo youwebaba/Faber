@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {createHash} from 'node:crypto';
 import { clipboard, dialog, nativeImage } from 'electron';
 import { createRemoteHost, createRemoteController } from '../desktop/remote-transport.mjs';
 import { createRelayHostAdapter, connectRelayController, generateRouteSecret, deriveRouteId } from '../desktop/remote-relay.mjs';
@@ -21,7 +22,9 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     throw new Error(`Media smoke timeout: ${label}`);
   }
   const state = await runtime.request('state.get'), project = state.projects.find(row => row.id === chat.projectId);
-  const originals = new Map([['tone.wav', waveFixture()], ['motion.webm', await webmFixture(window)]]);
+  const generatedAudio=process.env.FABER_MUSIC_SMOKE_AUDIO;
+  if(generatedAudio&&!path.isAbsolute(generatedAudio))throw new Error('Music playback smoke requires an absolute generated WAV path');
+  const originals = new Map([['tone.wav', generatedAudio?await fs.readFile(generatedAudio):waveFixture()], ['motion.webm', await webmFixture(window)]]);
   assert.equal(originals.get('tone.wav').toString('ascii', 0, 4), 'RIFF');
   assert.equal(originals.get('motion.webm').readUInt32BE(), 0x1a45dfa3);
   const refs = [];
@@ -151,7 +154,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await controller?.dispose(); await adapter?.close(); await receiver?.dispose(); await relay?.close();
   }
   assert.ok((await runtime.request('state.get')).runs.every(run => !run.modelCalls?.length), 'no model calls in the isolated media fixture');
-  const report = { ok: true, synthetic: true, providerCalls: 0, checks, mediaRequests: requests.filter(request => request.method === 'chat.media').length, screenshotNames: Object.keys(screenshots), limits: ['Native Save As chooser and clipboard writers were intercepted; user clipboard was untouched.', 'Paired TLS used the real WebSocket relay on loopback; physical two-PC/WAN testing and additional codecs remain pending.'] };
+  const report = { ok: true, synthetic: !generatedAudio, generatedMusicAudio:!!generatedAudio,...(generatedAudio?{generatedAudioSha256:createHash('sha256').update(originals.get('tone.wav')).digest('hex')}:{}),syntheticVideo:true, providerCalls: 0, checks, mediaRequests: requests.filter(request => request.method === 'chat.media').length, screenshotNames: Object.keys(screenshots), limits: ['Native Save As chooser and clipboard writers were intercepted; user clipboard was untouched.', 'Paired TLS used the real WebSocket relay on loopback; physical two-PC/WAN testing and additional codecs remain pending.'] };
   await fs.writeFile(path.join(dataDir, 'media-smoke-report.json'), JSON.stringify(report, null, 2));
   return report;
 }

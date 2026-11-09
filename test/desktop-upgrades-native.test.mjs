@@ -48,6 +48,7 @@ test('compiled upgrade switches a verified pointer and independent recovery rest
   const stage=await f.manager.stage([rustChange]);
   assert.deepEqual(await fs.readFile(path.join(f.sourceDir,rustChange.path)),originalSource);
   assert.equal((await f.manager.verify(stage.id)).verified,true);assert.equal(f.builds.length,1);
+  await assert.rejects(fs.access(f.builds[0].outputDir),{code:'ENOENT'});
   assert.equal((await f.manager.verify(stage.id)).verified,true);assert.equal(f.builds.length,1);
   const applied=await f.manager.apply(stage.id);assert.equal(applied.activation,'restart');assert.equal(applied.uiRefreshRequested,false);
   const active=await verifyNativeRuntime(f.sourceDir);assert.notEqual(active.manifest.sha256,f.original.manifest.sha256);
@@ -89,8 +90,9 @@ test('compiled patch paths exclude generated artifacts, dependencies and recover
 });
 
 test('compiler failure, failed Node verification and cancellation cannot activate Rust changes',async t=>{
-  const f=await fixture(t,{nativeBuilder:async()=>{throw new Error('Synthetic compile failure');}}),before=await fs.readFile(path.join(f.sourceDir,'native/runtime.json'));
+  const f=await fixture(t,{nativeBuilder:async({outputDir})=>{await fs.mkdir(outputDir,{recursive:true});throw new Error('Synthetic compile failure');}}),before=await fs.readFile(path.join(f.sourceDir,'native/runtime.json'));
   const stage=await f.manager.stage([rustChange]);await assert.rejects(f.manager.verify(stage.id),/compile failure/);await assert.rejects(f.manager.apply(stage.id),/Verify/);
+  assert.deepEqual(await fs.readdir(path.join(f.dataDir,'upgrades',stage.id)),['stage']);
   assert.deepEqual(await fs.readFile(path.join(f.sourceDir,'native/runtime.json')),before);
   const second=createUpgrades({sourceDir:f.sourceDir,dataDir:f.dataDir,confirm:async()=>true,nativeBuilder:f.nativeBuilder,runner:async()=>({code:1,stdout:'failed test',stderr:''})});
   const failed=await second.stage([rustChange]);assert.equal((await second.verify(failed.id)).verified,false);await assert.rejects(second.apply(failed.id),/Verify/);
