@@ -9,6 +9,7 @@ const appRoot = path.resolve(__dirname, '..');
 const smokeModes = new Set(['--smoke','--smoke-live','--smoke-models','--smoke-features','--smoke-local-models','--smoke-ui-reload','--smoke-package','--smoke-faber','--smoke-installed','--smoke-b11','--smoke-b12','--smoke-b201','--smoke-thinking','--smoke-browser','--smoke-media']);
 smokeModes.add('--smoke-worker');
 smokeModes.add('--smoke-schedules');
+smokeModes.add('--smoke-interactive-media');
 const smoke = process.argv.some(value => smokeModes.has(value));
 const profileIndex = process.argv.indexOf('--smoke-profile');
 const workerProfileIndex=process.argv.indexOf('--worker-profile');
@@ -33,7 +34,7 @@ void (async()=>{try {
   const lockDirectory=profiles.directory('default');
   fs.mkdirSync(lockDirectory,{recursive:true});app.setPath('userData',lockDirectory);
   app.setAppUserModelId('ai.clocal.faber');
-  protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },{scheme:'faber-preview',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
+  protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },{scheme:'faber-preview',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}},{scheme:'faber-artifact',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
   if (!app.requestSingleInstanceLock()) { if (process.argv.includes('--rollback-last')) { console.error('Close Faber before running recovery.'); app.quit(); process.exit(1); } app.quit(); process.exit(0); }
   let profileOwner;
   try{profileOwner=await require('./profile-owner.cjs').acquireProfileOwner(dataDir);}catch(error){

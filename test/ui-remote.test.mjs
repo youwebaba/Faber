@@ -59,7 +59,7 @@ class Element {
 }
 const flush = async () => { for (let n = 0; n < 8; n++) await new Promise(resolve => setImmediate(resolve)); };
 const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF9sAAAAASUVORK5CYII=';
-function fixture({ imageReferences = false, mediaReferences = false, steering = false, loseSteerReply, contentMenu, sendGate, imageGate, imageFailure } = {}) {
+function fixture({ imageReferences = false, mediaReferences = false, steering = false, loseSteerReply, contentMenu, sendGate, imageGate, imageFailure,capabilities } = {}) {
   const document = { activeElement: null, createElement(tag) { return new Element(tag, this); }, createTextNode(text) { const node = this.createElement('text'); node.textContent = text; return node; }, querySelector(selector) { return this.body.querySelector(selector); } };
   document.body = document.createElement('body'); const local = document.createElement('div'); local.className = 'shell'; const sidebar = document.createElement('aside'); sidebar.id = 'sidebar'; const navigation = document.createElement('nav'); navigation.id = 'project-list'; sidebar.append(navigation); const workspacePane = document.createElement('main'); workspacePane.className = 'workspace'; const localPrompt = document.createElement('textarea'); localPrompt.id = 'prompt'; localPrompt.value = 'Keep my local draft'; workspacePane.append(localPrompt); local.append(sidebar, workspacePane); document.body.append(local);
   const el = (tag, cls, text) => { const node = document.createElement(tag); node.className = cls || ''; if (text !== undefined) node.textContent = text; return node; };
@@ -68,7 +68,7 @@ function fixture({ imageReferences = false, mediaReferences = false, steering = 
   const chats = [{ id: 'c', projectId: 'p', title: 'Parent' }, { id: 'child', projectId: 'p', title: 'Agent', parentChatId: 'c' }, { id: 'archived', projectId: 'old', title: 'Old chat', archived: true }];
   const messages = [{ id: 'm', role: 'assistant', content: '**Remote response** <script>literal</script>' }];
   const runs = [];
-  const request = async (method, params) => { calls.push({ method, params }); if (method === 'media.release') return { released: true }; assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return { projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory', ...(imageReferences || mediaReferences || steering ? { capabilities: { imageReferences, mediaReferences, steering } } : {}) };
+  const request = async (method, params) => { calls.push({ method, params }); if (method === 'media.release') return { released: true }; assert.equal(method, 'remote.request'); if (!devices.find(device => device.id === params.deviceId)?.online) throw new Error('Fixture host offline'); if (params.method === 'workspace.list') return capabilities&&params.params.since?{unchanged:true,revision:'directory',capabilities}:{ projects, chats: params.params.offset ? chats.slice(1) : chats.slice(0, 1), nextOffset: params.params.offset ? null : 1, revision: 'directory', ...(capabilities?{capabilities}:imageReferences || mediaReferences || steering ? { capabilities: { imageReferences, mediaReferences, steering } } : {}) };
     if (params.method === 'chat.read') return params.params.since ? { unchanged: true, revision: 'chat' } : { chat: { ...chats.find(chat => chat.id === params.params.chatId), messages }, runs, approvals: [], streams: [], before: null, revision: 'chat' };
     if (params.method === 'chat.image') { if (imageGate) await imageGate; if (imageFailure?.value) throw new Error('Synthetic image read failed'); return { imageId: params.params.imageId, image }; }
     if (params.method === 'chat.steer') { if (loseSteerReply?.value) { loseSteerReply.value=false; throw new Error('Host reply lost'); } return {runId:params.params.runId,status:'applied'}; }
@@ -78,6 +78,15 @@ function fixture({ imageReferences = false, mediaReferences = false, steering = 
   workspace.updateDevices();
   return { workspace, document, local, sidebar, localPrompt, calls, devices, chats, messages, runs, emit: event => listener(event), get: id => document.querySelector(`#${id}`), row: (deviceId, chatId) => navigation.querySelectorAll('button').find(node => node.dataset.remoteDeviceId === deviceId && node.dataset.remoteChatId === chatId) };
 }
+
+test('scene, live viewing and Work Inbox capabilities remain conditional on initial and unchanged directory refreshes',async()=>{
+  const prior=globalThis.document,capabilities={imageReferences:true,mediaReferences:true,sceneReferences:true,liveCapture:true,workInbox:true},f=fixture({capabilities});globalThis.document=f.document;
+  try{
+    await flush();await f.row('host','c').events.click();await flush();assert.equal(f.get('remote-watch-live').hidden,false);assert.equal(f.get('remote-work-inbox').hidden,false);assert.ok(f.calls.some(call=>call.params?.method==='chat.read'&&call.params.params.sceneMode==='references'));
+    capabilities.sceneReferences=capabilities.liveCapture=capabilities.workInbox=false;f.workspace.updateDevices();await flush();assert.equal(f.get('remote-watch-live').hidden,true);assert.equal(f.get('remote-work-inbox').hidden,true);
+    capabilities.sceneReferences=capabilities.liveCapture=capabilities.workInbox=true;f.workspace.updateDevices();await flush();assert.equal(f.get('remote-watch-live').hidden,false);assert.equal(f.get('remote-work-inbox').hidden,false);assert.ok(f.calls.some(call=>call.params?.method==='workspace.list'&&call.params.params.since==='directory'));
+  }finally{f.workspace.dispose();globalThis.document=prior;}
+});
 
 test('paired steering targets the selected run, retains the draft after a lost reply and reconciles one correction',async()=>{
   const prior=globalThis.document, f=fixture({steering:true,loseSteerReply:{value:true}});globalThis.document=f.document;

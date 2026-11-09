@@ -299,7 +299,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     const paired = new Set(getDevices().map(device => device.id)); for (const id of directories.keys()) if (!paired.has(id)) directories.delete(id);
     for (const cache of [details, imageCache]) for (const key of cache.keys()) if (!paired.has(JSON.parse(key)[0])) cache.delete(key);
     await Promise.allSettled(getDevices().filter(device => device.online).map(device => loadDirectory(device.id)));
-    if (disposed) return; renderNavigation();
+    if (disposed) return; renderNavigation();if(!root.hidden)renderStatus();
     if (getDevices().length) { directoryTimer = setTimeout(syncDirectories, 8000); directoryTimer.unref?.(); }
   }
   async function reload(token = session, read = true) {
