@@ -17,7 +17,7 @@ function fixture() {
 test('remote directory and transcript expose selected fields, paging and conditional reads',async()=>{
   const {service} = fixture(), read = service.dispatch;
   const first = await read('workspace.list',{limit:1}); assert.equal(first.projects.length,1); assert.equal(first.nextOffset,1);
-  assert.equal(first.projects[0].path,undefined); assert.deepEqual(await read('workspace.list',{since:first.revision}),{unchanged:true,revision:first.revision,capabilities:{imageReferences:true,mediaReferences:true,steering:true,liveCapture:true}});
+  assert.equal(first.projects[0].path,undefined); assert.deepEqual(await read('workspace.list',{since:first.revision}),{unchanged:true,revision:first.revision,capabilities:{imageReferences:true,mediaReferences:true,sceneReferences:true,steering:true,workInbox:true,liveCapture:true}});
   const second = await read('workspace.list',{offset:2}); assert.equal(second.chats.length,2);assert.equal(second.nextOffset,null);
   const last = await read('chat.read',{chatId:'main',limit:1}); assert.equal(last.chat.messages[0].id,'last');
   const earlier = await read('chat.read',{chatId:'main',before:last.before}); assert.deepEqual(earlier.chat.messages.map(m=>m.id),['first']);
@@ -131,4 +131,22 @@ test('remote writes deduplicate concurrent sends and bind approval to the named 
   await assert.rejects(()=>write('chat.selectModel',{chatId:'main',providerId:'p',model:'unknown'}));
   await assert.rejects(()=>write('chat.send',{...send,grants:['shell']}));
   service.close();
+});
+test('paired supervision scopes approvals and steering to the exact job and preserves bounded evidence',async()=>{
+  const f=fixture(),device={id:'paired'},scope={device};
+  f.state.jobs=[{id:'job',routineId:'routine',revision:2,status:'waiting_approval',chatId:'main',runId:'attempt',attempts:1,definition:{projectId:'one',name:'Report',private:'hidden'},inputs:'sensitive internal details',report:{path:'report.md',inputs:[{path:'first.txt',status:'summarized',sha256:'a'.repeat(64)}]},outputs:[{tool:'files_write',result:{path:'report.md',sha256:'b'.repeat(64),backup:'private'}}]}];
+  f.state.runs.push({id:'attempt',jobId:'job',chatId:'main',status:'waiting_approval'});
+  f.state.approvals.push({id:'review-step',chatId:'main',runId:'attempt',summary:'Approve draft?'});
+  const read=(method,params)=>f.service.dispatch(method,params,scope);
+  const write=(method,params,requestId=randomUUID())=>f.service.dispatch(method,params,{device,requestId});
+  await assert.rejects(f.service.dispatch('work.list',{}),/paired device/i);
+  assert.deepEqual((await read('work.list',{})).jobs.map(j=>j.id),['job']);
+  const detail=await read('work.read',{jobId:'job'});assert.equal(detail.outputs[0].path,'report.md');assert.equal(detail.outputs[0].backup,undefined);assert.equal(detail.definition,undefined);assert.equal(detail.sources[0].path,'first.txt');
+  await assert.rejects(write('work.approve',{jobId:'job',runId:'unrelated',id:'review-step',allow:true}),/selected job/);
+  const requestId=randomUUID(),params={jobId:'job',runId:'attempt',id:'review-step',allow:false};
+  await write('work.approve',params,requestId);await write('work.approve',params,requestId);
+  assert.equal(f.calls.filter(([method])=>method==='approval.resolve').length,1);
+  await write('work.steer',{jobId:'job',runId:'attempt',correctionId:'correction',text:'Summarize first.txt'});
+  await assert.rejects(write('work.stop',{jobId:'job',runId:'older'}),/attempt changed/);
+  await write('work.stop',{jobId:'job',runId:'attempt'});assert.equal(f.calls.at(-1)[0],'routines.stop');
 });

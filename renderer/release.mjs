@@ -1,1 +1,1 @@
-export const releaseLabel = 'a2.6';
+export const releaseLabel = 'a2.7';

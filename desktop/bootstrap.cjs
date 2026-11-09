@@ -35,11 +35,16 @@ void (async()=>{try {
   app.setAppUserModelId('ai.clocal.faber');
   protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },{scheme:'faber-preview',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
   if (!app.requestSingleInstanceLock()) { if (process.argv.includes('--rollback-last')) { console.error('Close Faber before running recovery.'); app.quit(); process.exit(1); } app.quit(); process.exit(0); }
-  const profileOwner=await require('./profile-owner.cjs').acquireProfileOwner(dataDir);
+  let profileOwner;
+  try{profileOwner=await require('./profile-owner.cjs').acquireProfileOwner(dataDir);}catch(error){
+    if(!['EADDRINUSE','EACCES'].includes(error.code))throw error;const control=require('./worker-control.cjs'),status=await control.callWorkerControl({dataDir,command:'status'});if(status.kind!=='boot')throw error;
+    await control.callWorkerControl({dataDir,command:'handoff'});for(let attempt=0;attempt<100;attempt++){try{profileOwner=await require('./profile-owner.cjs').acquireProfileOwner(dataDir);break;}catch(retry){if(!['EADDRINUSE','EACCES'].includes(retry.code)||attempt===99)throw retry;await new Promise(resolve=>setTimeout(resolve,50));}}
+  }
   if(workerProfileId&&profiles.currentId!==workerProfileId)profiles.select(workerProfileId);
   app.on('will-quit',()=>{void profileOwner.close();});
   app.setPath('userData',dataDir);app.setPath('sessionData',dataDir);
-  const boot=beginBoot(dataDir,{safeMode:process.argv.includes('--safe-mode')});let ready=false,cleanShutdown=false,recovering=false,sourceDir=appRoot;
+  let bootWorkerFailed=false;try{const previous=JSON.parse(fs.readFileSync(path.join(dataDir,'boot-worker','process-state.json'),'utf8'));bootWorkerFailed=previous.phase!=='clean';}catch(error){if(error.code!=='ENOENT')bootWorkerFailed=true;}
+  const boot=beginBoot(dataDir,{safeMode:process.argv.includes('--safe-mode')||bootWorkerFailed});let ready=false,cleanShutdown=false,recovering=false,sourceDir=appRoot;
   app.on('quit',(_event,code)=>{if(code===0&&ready&&cleanShutdown)updateBoot(dataDir,boot.id,'clean');});
   const watchdog=spawn(process.execPath,[path.join(appRoot,'desktop','boot-state.cjs'),'--watch-boot',dataDir,boot.id],{env:{...process.env,ELECTRON_RUN_AS_NODE:'1'},windowsHide:true,detached:true,stdio:'ignore'});watchdog.on('error',error=>console.error('Startup watchdog unavailable:',error.message));watchdog.unref();
   async function recover(error){
@@ -62,11 +67,12 @@ void (async()=>{try {
   }
   void (async () => {
     const packaged = app.isPackaged;
+    const migration=await require('./worker-update.cjs').prepareWorkerStartup({dataDir,registryRoot:profiles.privatePaths[0],isolated:smoke,protocol:1});if(migration.safeMode){boot.safeMode=true;boot.reason=migration.reason;}
     const { prepareWorkbench } = await import(pathToFileURL(path.join(appRoot, 'desktop', 'packaged-paths.mjs')).href);
     const workbenchRoot = smoke ? `${dataDir}-workbench` : path.join(localAppData, 'FaberWorkbench');
     sourceDir=packaged?path.join(workbenchRoot,app.getVersion()):appRoot;
     if(packaged)sourceDir=await prepareWorkbench({ bundledSource: appRoot, workbenchRoot, version: app.getVersion() });
-    globalThis.__FABER_BOOTSTRAP__ = Object.freeze({ dataDir, sourceDir, packaged, resourcesPath: process.resourcesPath, version: app.getVersion(), hasLock: true, profiles, safeMode:boot.safeMode,recoveryReason:boot.reason,onReady(){ready=true;updateBoot(dataDir,boot.id,'ready');},onShutdown(clean){cleanShutdown=clean===true;},onFailure:recover,bundledSource: path.join(appRoot,'bundled-addons'), addonResources: packaged?path.join(process.resourcesPath,'lightpanda'):path.join(appRoot,'.runtime','lightpanda') });
+    globalThis.__FABER_BOOTSTRAP__ = Object.freeze({ dataDir, sourceDir, packaged, resourcesPath: process.resourcesPath, version: app.getVersion(), hasLock: true, trustedRoot:appRoot, createWorkerUpdate:require('./worker-update.cjs').createWorkerUpdate, startWorkerControl:require('./worker-control.cjs').startWorkerControl, createBootControl:async options=>(await import(pathToFileURL(path.join(appRoot,'desktop','boot-control.mjs')).href)).createBootControl(options), openProfileActionLedger:require('./action-ledger.cjs').openProfileActionLedger, profiles, safeMode:boot.safeMode,recoveryReason:boot.reason,onReady(){ready=true;updateBoot(dataDir,boot.id,'ready');},onShutdown(clean){cleanShutdown=clean===true;},onFailure:recover,bundledSource: path.join(appRoot,'bundled-addons'), addonResources: packaged?path.join(process.resourcesPath,'lightpanda'):path.join(appRoot,'.runtime','lightpanda') });
     if (process.argv.includes('--rollback-last')) {
       const { readRecoveryRecord, restoreUpgrade } = await import(pathToFileURL(path.join(appRoot, 'desktop', 'recovery.mjs')).href);
       const result = await restoreUpgrade({ dataDir, sourceDir, record: await readRecoveryRecord(dataDir, sourceDir) });

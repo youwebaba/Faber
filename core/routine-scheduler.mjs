@@ -61,6 +61,7 @@ export function createRoutineScheduler({state,save,enqueue,scope,clock=Date.now,
     }finally{polling=false;finishPoll();}
   }
   return {poll,notices:()=>structuredClone(state.scheduler.notices),
+    refresh(){for(const receipt of state.scheduler.receipts)handled.add(receipt.key);},
     start(){if(timer||closed)return;timer=setInterval(()=>void poll().catch(onError),1000);timer.unref?.();},
     async close(){closed=true;clearInterval(timer);await pollDone;},
     acknowledge(id){const notice=state.scheduler.notices.find(value=>value.id===id);if(!notice)throw new Error('Unknown work notice');notice.status='acknowledged';notice.acknowledgedAt=stamp(clock());},

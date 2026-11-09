@@ -15,6 +15,7 @@ const schema = {
   'remote.status':object({}), 'remote.configure':configSchema, 'remote.invite':object({}),
   'remote.pair':object({ invite:{type:'string',minLength:1,maxLength:4096}, deviceName:name }, ['invite']),
   'remote.approve':object({id,allow:flag}), 'remote.revoke':object({id}), 'remote.forget':object({id}),
+  'remote.changeRelay':object({id}),
   'remote.request':object({ deviceId:id, ...rpcSchema.properties },['deviceId','method','params']),
 };
 export const remoteMethods = Object.keys(schema);
@@ -62,7 +63,7 @@ export async function createRemoteService({ dataDir, operatorDir, host, dispatch
       hosting:{state,...(error?{error}:{})}, pairing:c.pending, pairingError:pairError,
       pending:h.pending.map(p => ({id:p.id,deviceName:p.name,requestedAt:p.createdAt,expiresAt:p.expiresAt})),
       devices:[...h.devices.map(d=>({id:d.id,name:d.name,role:'controller',online:d.online,pairedAt:d.createdAt,lastSeen:d.lastSeenAt})),
-        ...c.connections.map(d=>({id:d.id,name:d.hostName,role:'host',online:Date.now()-(lastSeen.get(d.id) || 0)<45000,pairedAt:d.createdAt,lastSeen:lastSeen.get(d.id)||null}))] };
+        ...c.connections.map(d=>({id:d.id,name:d.hostName,role:'host',relayUrl:d.relayUrl,online:Date.now()-(lastSeen.get(d.id) || 0)<45000,pairedAt:d.createdAt,lastSeen:lastSeen.get(d.id)||null}))] };
   }
   function publish() {
     if (closed) return;
@@ -186,6 +187,7 @@ export async function createRemoteService({ dataDir, operatorDir, host, dispatch
       if (method === 'remote.pair') { pairError=''; await controller.pair({invitation:params.invite,deviceName:params.deviceName || config.deviceName}); publish(); return status(); }
       if (method === 'remote.approve') { if (params.allow) await receiver.acceptPairing(params.id); else receiver.rejectPairing(params.id); }
       if (method === 'remote.revoke') await receiver.revokeDevice(params.id);
+      if (method === 'remote.changeRelay') {if(!relayUrl())throw Error('Save the permanent relay address first.');await controller.changeRelay(params.id,relayUrl());lastSeen.set(params.id,Date.now());}
       if (method === 'remote.forget') { await controller.forget(params.id); lastSeen.delete(params.id); }
       publish(); return status();
     },

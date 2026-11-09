@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validate } from './registry.mjs';
+import { workBudgetStatus } from './work-budget.mjs';
 import { imageBytesLimit, validateChatImages } from './images.mjs';
 import { mediaChunkLimit, mediaIdSchema, sourceMediaRefs, mediaNotesSchemas } from './media.mjs';
 
@@ -7,14 +8,18 @@ const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const chatRef = object({ chatId: id });
-const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, steering: true, liveCapture:true };
+const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, sceneReferences:true, steering: true, workInbox:true, liveCapture:true };
 const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
   ...Object.fromEntries(Object.entries(mediaNotesSchemas).map(([action,schema])=>['chat.mediaNotes.'+action,schema])),
   'workspace.ping': object({}), 'workspace.models': object({}),
+  'work.list':object({offset:bounded(0,10000000),limit:bounded(1,100)},[]),'work.read':object({jobId:id}),
+  'work.approve':object({jobId:id,runId:id,id,allow:{type:'boolean'}}),
+  'work.steer':object({jobId:id,runId:id,correctionId:id,text:{type:'string',minLength:1,maxLength:200000}}),
+  'work.stop':object({jobId:id,runId:id},['jobId']),
   'chat.selectModel': object({ chatId:id, providerId:id, model:{type:'string',minLength:1,maxLength:300} }),
   'workspace.list': object({ since: id, offset: bounded(0, 10000000), limit: bounded(1, 500) }, []),
-  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000), imageMode, mediaMode: imageMode }, ['chatId']),
+  'chat.read': object({ chatId: id, since: id, before: id, limit: bounded(1, 100), waitMs: bounded(0, 15000), imageMode, mediaMode: imageMode,sceneMode:imageMode }, ['chatId']),
   'chat.image': object({ chatId: id, imageId: { type: 'string', minLength: 1, maxLength: 2048 } }),
   'chat.media': object({ chatId: id, mediaId: mediaIdSchema, offset: bounded(0, 536870912), length: bounded(0, mediaChunkLimit) }),
   'chat.send': object({ chatId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','text']),
@@ -78,9 +83,9 @@ function imageRefs(chatId, kind, source, images) {
   return images.map((image,index) => ({ id: imageId(chatId,kind,source.id,index,image), mimeType: image.slice(5,image.indexOf(';')),
     bytes: (image.length - image.indexOf(',') - 1) / 4 * 3 - (image.endsWith('==') ? 2 : image.endsWith('=') ? 1 : 0) }));
 }
-function visibleMessage(message, chatId, references, mediaReferences) {
+function visibleMessage(message, chatId, references, mediaReferences,sceneReferences) {
   const images = sourceImages(message,'m',references);
-  const mediaRefs = mediaReferences ? sourceMediaRefs(message) : [];
+  const mediaRefs = mediaReferences ? sourceMediaRefs(message).filter(ref=>ref.kind!=='scene'||sceneReferences) : [];
   if ((!['assistant','user'].includes(message.role) && !(message.role === 'tool' && (images.length || mediaRefs.length))) || (!message.content && !images.length && !mediaRefs.length && !message.toolCalls?.length)) return null;
   let text = message.role === 'tool' ? '' : String(message.content ?? '');
   if (references && message.role === 'assistant' && text.length <= 200000) text = text.replace(inlineImage, (raw,image) => images.includes(image) ? '[Image output below]' : raw);
@@ -91,7 +96,7 @@ function visibleMessage(message, chatId, references, mediaReferences) {
   if (mediaRefs.length) row.mediaRefs = mediaRefs;
   return row;
 }
-function runRow(run, references, budget, mediaReferences) {
+function runRow(run, references, budget, mediaReferences,sceneReferences) {
   return { ...pick(run, ['id','chatId','status','startedAt','endedAt','requestMessageId','parentRunId','contextOverflow']), error: String(run.error ?? '').slice(0,2000),
     promptUsage: structuredClone(run.promptUsage || []),
     steering: (run.steering || []).slice(-64).map(item=>pick(item,['id','messageId','runId','status','mode','createdAt','acceptedAt','appliedAt','waitingFor','error'])),
@@ -100,7 +105,7 @@ function runRow(run, references, budget, mediaReferences) {
       const row = { ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
         summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) };
       const images = sourceImages(event,'e');
-      const mediaRefs = mediaReferences ? sourceMediaRefs(event) : [];
+      const mediaRefs = mediaReferences ? sourceMediaRefs(event).filter(ref=>ref.kind!=='scene'||sceneReferences) : [];
       if (mediaRefs.length) row.mediaRefs = mediaRefs;
       if (images.length && references) row.imageRefs = imageRefs(run.chatId,'e',event,images);
       else if (images[0]?.length <= budget.remaining) { row.image = images[0]; budget.remaining -= images[0].length; }
@@ -161,8 +166,39 @@ export function createRemoteWorkspace({ current, request, readMedia, mediaNotes,
     if (!image || imageId(chatId,kind,sourceId,Number(index),image) !== requestedId) throw new Error('Image no longer available for this chat');
     return {imageId:requestedId,image};
   }
+  function jobRow(job,state) {
+    return {...pick(job,['id','routineId','revision','chatId','runId','status','attempts','createdAt','startedAt','endedAt']),
+      name:job.definition.name,projectId:job.definition.projectId,reason:String(job.reason||'').slice(0,1500),projectName:state.projects.find(p=>p.id===job.definition.projectId)?.name||''};
+  }
+  function availableJob(id,state) {
+    const job=state.jobs?.find(row=>row.id===id),project=job&&state.projects.find(p=>p.id===job.definition.projectId),chat=job?.chatId&&state.chats.find(c=>c.id===job.chatId);
+    if(!job||!project||project.archived||chat?.externalSessionId||chat?.archived)throw Error('This host job is unavailable.');
+    return job;
+  }
+  function jobDetail(job,state){
+    const rows=(items,fields)=>(items||[]).slice(-100).map(item=>pick(item,fields));
+    const runs=new Set(state.runs.filter(r=>r.jobId===job.id).map(r=>r.id));
+    const approvals=state.approvals.filter(a=>runs.has(a.runId)).map(a=>pick(a,['id','chatId','runId','permission','summary']));
+    return {...jobRow(job,state),approvals,step:job.step&&pick(job.step,['tool','eventId','startedAt']),budget:job.budget&&job.limits&&workBudgetStatus(job.budget,job.limits),
+      sources:rows(job.report?.inputs||job.inputReceipts,['path','name','sha256','status','error']),
+      outputs:(job.outputs||[]).slice(-100).map(o=>({...pick(o,['tool','actionId','recordedAt']),...pick(o.result||{},['path','sha256','bytes','status','verified','externalId'])})),
+      report:job.report&&pick(job.report,['path','sha256','stage','needsReview','reused'])};
+  }
+  async function mutateJob(method,params){
+    const {state}=current(),job=availableJob(params.jobId,state);
+    if(method==='work.approve') {
+      const run=state.runs.find(r=>r.id===params.runId&&r.jobId===job.id);
+      if(!run||!state.approvals.some(a=>a.id===params.id&&a.runId===run.id&&a.chatId===run.chatId))throw Error('This approval no longer belongs to the selected job step.');
+      await request('approval.resolve',{id:params.id,allow:params.allow});
+    }else{
+      if((job.runId||null)!==(params.runId||null))throw Error('The selected attempt changed. Refresh the host job.');
+      if(method==='work.steer')await request('routines.steer',{jobId:job.id,correctionId:params.correctionId,text:params.text});
+      else await request('routines.stop',{jobId:job.id});
+    }
+    return jobDetail(job,current().state);
+  }
   async function transcript(args, signal) {
-    const {chatId, since, before, limit = 30, waitMs = 0, imageMode, mediaMode} = args, references = imageMode === 'references', mediaReferences = mediaMode === 'references';
+    const {chatId, since, before, limit = 30, waitMs = 0, imageMode, mediaMode,sceneMode} = args, references = imageMode === 'references', mediaReferences = mediaMode === 'references',sceneReferences=sceneMode==='references';
     let view = current(), family = chatFamily(view.state.chats,chatId), token = revision(view,family);
     findChat(view.state,chatId);
     if (!before && since === token && waitMs) { await wait(family,waitMs,signal); view = current(); family = chatFamily(view.state.chats,chatId); token = revision(view,family); }
@@ -176,7 +212,7 @@ export function createRemoteWorkspace({ current, request, readMedia, mediaNotes,
     const messages = []; let bytes = 0;
     while (cursor > 0 && messages.length < limit) {
       const message = source[cursor-1];
-      const row = visibleMessage(message,chatId,references,mediaReferences);
+      const row = visibleMessage(message,chatId,references,mediaReferences,sceneReferences);
       if (!row) { cursor--; continue; }
       const size = Buffer.byteLength(JSON.stringify(row));
       if (messages.length && bytes + size > transcriptBytesLimit) break;
@@ -191,11 +227,12 @@ export function createRemoteWorkspace({ current, request, readMedia, mediaNotes,
       return row;
     });
     return { chat: { ...chatRow(chat,state.providers,modelDisplayName), messages, inbox }, before: cursor ? messages[0]?.id ?? null : null, revision: token,
-      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(run => runRow(run,references,budget,mediaReferences)),
+      runs: state.runs.filter(row => family.has(row.chatId)).slice(-50).map(run => runRow(run,references,budget,mediaReferences,sceneReferences)),
       streams: live,
       approvals: state.approvals.filter(row => family.has(row.chatId)).map(row => pick(row,['id','kind','chatId','runId','permission','toolName','summary'])) };
   }
   async function mutate(method, params, signal) {
+    if(method.startsWith('work.'))return mutateJob(method,params);
     const {state} = current();
     const chat = params.chatId && findChat(state,params.chatId);
     const project = state.projects.find(row => row.id === (chat?.projectId ?? params.projectId));
@@ -219,6 +256,13 @@ export function createRemoteWorkspace({ current, request, readMedia, mediaNotes,
     const schema = methods.get(method);
     if (!schema) throw new Error('Unsupported remote workspace action');
     validate(params,schema);
+    if(method.startsWith('work.')&&!device?.id)throw Error('A paired device is required to supervise jobs.');
+    if(method==='work.list'){
+      const {state}=current(),projects=new Set(state.projects.filter(p=>!p.archived).map(p=>p.id)),jobs=(state.jobs||[]).filter(j=>projects.has(j.definition.projectId));
+      const offset=params.offset||0,end=offset+(params.limit||50),page=jobs.slice(Math.max(0,jobs.length-end),Math.max(0,jobs.length-offset)).reverse();
+      return {jobs:page.map(j=>jobRow(j,state)),nextOffset:end<jobs.length?end:null};
+    }
+    if(method==='work.read'){const {state}=current();return jobDetail(availableJob(params.jobId,state),state);}
     if (method === 'workspace.ping') return { online: true, capabilities };
     if (method === 'workspace.models') return {providers:hostModels(current().state.providers,modelDisplayName)};
     if (method === 'workspace.list') return directory(current(),params);

@@ -24,7 +24,7 @@ async function exercise(t, publicRoute) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(),'faber-remote-test-'));
   const operator = publicRoute ? path.join(process.env.LOCALAPPDATA,'FaberRelay') : root;
   const routeFile = path.join(operator,'routes.json');
-  let relay, home, laptop, runtime, routeId;
+  let relay, home, laptop, runtime, routeId,relayPort;
   t.after(async()=>{
     await Promise.allSettled([home?.close(),laptop?.close()]);
     if (publicRoute && routeId) {
@@ -36,12 +36,14 @@ async function exercise(t, publicRoute) {
   if (!publicRoute) {
     await fs.writeFile(routeFile,'{"routes":[]}');
     relay = createRelayServer({allowedRouteFile:routeFile});
-    const {port} = await relay.start();
+    const {port} = await relay.start();relayPort=port;
     await fs.writeFile(path.join(operator,'operator.json'),JSON.stringify({relayUrl:'ws://127.0.0.1:' + port,allowLocalEnrollment:true}));
   }
-  let calls = 0, effects = 0;
+  let calls = 0, effects = 0,jobPhase=0;
   runtime = await createRuntime({dataDir:path.join(root,'home'),sourceDir:path.join(root,'source'),provider:async function*({signal}){
     calls++;
+    if(jobPhase){if(jobPhase++===1){yield {type:'tool',id:'routine-effect',name:'fixture_action',args:{}};return;}
+      yield {type:'delta',text:'Routine active on the host.'};await sleep(30000,null,{signal});return;}
     if (calls===2) { yield {type:'tool',id:'demo-safe-effect',name:'fixture_action',args:{}}; return; }
     if (calls===3) { yield {type:'delta',text:'Working on host.'}; await sleep(30000,null,{signal}); }
     yield {type:'delta',text:'Verified on the home PC.'};
@@ -92,6 +94,24 @@ async function exercise(t, publicRoute) {
   await rpc('chat.forceStop',{chatId:second.id},randomUUID());
   const stopped = await rpc('chat.read',{chatId:second.id}); assert.equal(stopped.runs.at(-1).status,'canceled');
   if (!publicRoute) {
+    await runtime.startRoutines();jobPhase=1;
+    const routine=await runtime.request('routines.save',{name:'Paired work',projectId:project.id,providerId:'local-ollama',model:'qwen3.5:9b',instructions:'Exercise paired supervision.',inputs:'Fixture',outputs:'One receipt',completion:'Review the result',tools:['fixture_action'],paths:['.'],grants:[]});
+    await runtime.request('routines.enable',{id:routine.id,enabled:true});
+    const job=await runtime.request('routines.run',{id:routine.id});
+    const step=await until(()=>rpc('work.read',{jobId:job.id}),j=>j.approvals.length,'Remote routine approval missing');
+    assert.ok((await rpc('work.list')).jobs.some(j=>j.id===job.id));
+    await laptop.close();await relay.close();relay=createRelayServer({port:relayPort,allowedRouteFile:routeFile});await relay.start();
+    laptop=await createRemoteService(clientOptions);
+    await until(()=>home.request('remote.status'),s=>s.hosting.state==='online','Host failed to register at its retained relay address');
+    const same=await until(()=>rpc('work.read',{jobId:job.id}),j=>j.approvals.length,'Could not recover the same job approval');
+    assert.equal(same.approvals[0].id,step.approvals[0].id);
+    const decision=randomUUID(),approval={jobId:job.id,runId:same.approvals[0].runId,id:same.approvals[0].id,allow:true};
+    await rpc('work.approve',approval,decision);await rpc('work.approve',approval,decision);
+    await until(()=>rpc('work.read',{jobId:job.id}),j=>j.outputs.length,'Missing remote output receipt');
+    assert.equal(effects,2);
+    await rpc('work.steer',{jobId:job.id,runId:step.runId,correctionId:randomUUID(),text:'Use the existing receipt.'},randomUUID());
+    await rpc('work.stop',{jobId:job.id,runId:step.runId},randomUUID());
+    assert.equal((await rpc('work.read',{jobId:job.id})).status,'canceled');assert.equal(effects,2);jobPhase=0;
     const targets = [];
     for (let i=0;i<6;i++) targets.push((await runtime.request('chat.create',{projectId:project.id,title:'Switch '+i})).id);
     const outstanding = [];

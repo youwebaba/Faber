@@ -19,4 +19,7 @@ module.exports=async context=>{
   await verifyNativeRuntime(context.packager.projectDir);
   const {verifyPreviewAssets}=await import('../desktop/media-preview.mjs');
   await verifyPreviewAssets(context.packager.projectDir);
+  const {verifyTimedMediaAssets}=await import('../desktop/media-preview.mjs');
+  await verifyTimedMediaAssets(context.packager.projectDir);
+  const {verifySceneAssets}=await import('../desktop/scene-assets.mjs');await verifySceneAssets(context.packager.projectDir);
 };

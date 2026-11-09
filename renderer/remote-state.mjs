@@ -23,7 +23,7 @@ const streams = value => list(value).filter(item => id(item.runId) && typeof ite
 
 // Remote metadata never becomes a local path, extension action, or provider setting.
 export function remoteCapabilities(value) {
-  return Object.fromEntries(['imageReferences','mediaReferences','steering','liveCapture'].map(name=>[name,value?.[name]===true]));
+  return Object.fromEntries(['imageReferences','mediaReferences','sceneReferences','steering','workInbox','liveCapture'].map(name=>[name,value?.[name]===true]));
 }
 export function remoteWorkspace(value) {
   if (!record(value) || !Array.isArray(value.projects) || !Array.isArray(value.chats)) throw new Error('The host returned an invalid workspace.');

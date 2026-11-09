@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.6 (application version 2.6.0), including
+This contract describes Faber a2.7 (application version 2.7.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -485,3 +485,25 @@ before transport dispatch and unknown bounds are never invented. The daily
 folder report requires an owned local Qwen model, preserves per-input coverage
 and exceptions, and atomically creates one dated report without replacing an
 unexpected destination. See [the scheduler contract](SCHEDULER.md).
+
+## Boot, restore and installer authority (a2.9)
+
+Boot work is a separately reviewed credential-free local tier. It uses an
+ordinary user S4U token at least privilege, admits only bound local CPU/file
+work, and defers session-dependent or approval-dependent steps. A visible launch
+checkpoints the boot owner before reacquiring the same kernel profile lock.
+Portable routine restore stays paused, revokes grants and boot access, requires
+project/account review and cannot replace newer independent effect history.
+Installer-owned helpers checkpoint and version the worker journal before file
+replacement; incomplete migration retains receipts and opens paused. See
+[worker recovery](WORKER-RECOVERY.md) and the [a2.9 evidence](docs/a2.9-worker-verification.md).
+Physical pre-login and prior-installer acceptance remain separate gates.
+
+## Static 3D attachments (a2.9)
+
+GLB/glTF/STL outputs publish one immutable root and only explicitly supplied,
+individually authorized buffer/texture references. Graph and file hashes bind
+the validated dependencies. The isolated viewer cannot fetch arbitrary project,
+app or network resources. Stop, disconnect and disposal revoke pending transfers;
+Save As preserves original bytes and verifies revisions before replacement. See
+[3D attachment contracts and evidence](docs/a2.9-scenes-verification.md).

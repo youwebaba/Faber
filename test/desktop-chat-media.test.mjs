@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { createChatMedia, mediaRange } from '../desktop/chat-media.mjs';
 import { mediaChunkLimit } from '../core/media.mjs';
 import { validateRequestPayload } from '../desktop/request-payload.mjs';
@@ -68,6 +68,14 @@ test('native save writes exact streamed bytes atomically; cancellation or retrie
   let choose;const h=await fixture(t,{chooseSave:()=>new Promise(resolve=>{choose=resolve;})}),destination=path.join(h.directory,'original.wav');await fs.writeFile(destination,'original');
   const pending=h.manager.request('media.save',{chatId:'chat',mediaId:h.media.id});await new Promise(resolve=>setImmediate(resolve));
   await h.manager.request('media.release',{chatId:'chat'});choose(destination);await assert.rejects(()=>pending,/abort/i);assert.equal(await fs.readFile(destination,'utf8'),'original');
+});
+
+test('revisioned Save As verifies streamed content before replacing a destination',async t=>{
+  const f=await fixture(t),destination=path.join(f.directory,'saved.wav');f.media.revision=createHash('sha256').update(f.bytes).digest('hex');
+  await f.manager.request('media.save',{chatId:'chat',mediaId:f.media.id});assert.deepEqual(await fs.readFile(destination),f.bytes);
+  await fs.writeFile(destination,'keep existing');f.bytes[0]^=1;
+  await assert.rejects(f.manager.request('media.save',{chatId:'chat',mediaId:f.media.id}),/revision/);
+  assert.equal(await fs.readFile(destination,'utf8'),'keep existing');assert.ok(!(await fs.readdir(f.directory)).some(name=>name.endsWith('.tmp')));
 });
 
 test('save destination comes only from native picker, rejects protected storage and concurrent replacement',async t=>{

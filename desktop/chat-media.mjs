@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { validate } from '../core/registry.mjs';
 import { mediaChunkLimit, mediaIdSchema, validateMediaRef, mediaNotesSchemas } from '../core/media.mjs';
 import { imageBytesLimit, validateChatImages } from '../core/images.mjs';
@@ -32,6 +32,14 @@ export function mediaRange(value, size) {
 
 export function createChatMedia({ readMedia, readImage, mediaNotes, remoteRequest, chooseSave, copyImage, copyText, protectedPaths = [] }) {
   const operations = new Set(); let closed = false;
+  const remoteQueues=new Map();
+  async function remoteMedia(deviceId,method,params,signal){
+    signal.throwIfAborted();
+    const work=(remoteQueues.get(deviceId)||Promise.resolve()).catch(()=>{}).then(()=>{signal.throwIfAborted();return remoteRequest(deviceId,method,params,signal);});
+    remoteQueues.set(deviceId,work);const clear=()=>{if(remoteQueues.get(deviceId)===work)remoteQueues.delete(deviceId);};void work.then(clear,clear);
+    let cancel;const aborted=new Promise((resolve,reject)=>{cancel=()=>reject(signal.reason||new Error('Media request canceled'));signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)cancel();});
+    try{return await Promise.race([work,aborted]);}finally{signal.removeEventListener('abort',cancel);}
+  }
   function operation(owner,signal) {
     if (closed) throw new Error('Chat media is closed');
     const row = {...owner,controller:new AbortController()}; operations.add(row);
@@ -42,7 +50,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
   async function chunk(owner, mediaId, offset, length, signal, expected) {
     signal.throwIfAborted();
     const params = {chatId:owner.chatId,mediaId,offset,length};
-    const result = owner.deviceId ? await remoteRequest(owner.deviceId,'chat.media',params,signal) : await readMedia(params,signal);
+    const result = owner.deviceId ? await remoteMedia(owner.deviceId,'chat.media',params,signal) : await readMedia(params,signal);
     signal.throwIfAborted(); validateMediaRef(result?.media);
     if (result.media.id !== mediaId || result.offset !== offset || expected && JSON.stringify(result.media) !== JSON.stringify(expected) || typeof result.data !== 'string' || result.data.length > Math.ceil(mediaChunkLimit/3)*4) throw new Error('Invalid media response');
     const bytes = Buffer.from(result.data,'base64');
@@ -53,7 +61,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
     let data = params.image;
     if (params.imageId) {
       if (!params.chatId) throw new Error('An image reference requires its owning chat');
-      const result = params.deviceId ? await remoteRequest(params.deviceId,'chat.image',{chatId:params.chatId,imageId:params.imageId},signal) : await readImage({chatId:params.chatId,imageId:params.imageId},signal);
+      const result = params.deviceId ? await remoteMedia(params.deviceId,'chat.image',{chatId:params.chatId,imageId:params.imageId},signal) : await readImage({chatId:params.chatId,imageId:params.imageId},signal);
       signal.throwIfAborted();
       if (result?.imageId !== params.imageId) throw new Error('Invalid image response');
       data = result.image;
@@ -74,14 +82,15 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
     }
     const inspect = async () => { try { const stat = await fs.lstat(destination); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Choose a regular destination file'); return [stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join('/'); } catch(error) { if(error.code === 'ENOENT') return null; throw error; } };
     const before = await inspect(), temporary = path.join(parent,'.'+path.basename(destination)+'.'+randomUUID()+'.tmp');
-    let file;
+    let file;const digest=media.revision?createHash('sha256'):null;
     try {
       file = await fs.open(temporary,'wx',0o600);
       for (let offset = 0; offset < media.bytes;) {
         signal.throwIfAborted(); const bytes = await read(offset,Math.min(mediaChunkLimit,media.bytes-offset));
         signal.throwIfAborted(); if (!bytes.length) throw new Error('Media ended before saving completed');
-        await file.writeFile(bytes); offset += bytes.length;
+        digest?.update(bytes);await file.writeFile(bytes); offset += bytes.length;
       }
+      if(digest&&digest.digest('hex')!==media.revision)throw new Error('Media revision did not match its saved bytes');
       await file.sync(); await file.close(); file = null; signal.throwIfAborted();
       if (await fs.realpath(path.dirname(selected)) !== parent || await inspect() !== before) throw new Error('Destination changed while saving; original file preserved');
       signal.throwIfAborted(); await fs.rename(temporary,destination); return {saved:true};
@@ -99,7 +108,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
       try {
         if (method.startsWith('media.notes.')) {
           const {deviceId,...args} = params, action = method.split('.').at(-1);
-          if (deviceId) return await remoteRequest(deviceId,'chat.mediaNotes.'+action,args,row.signal);
+          if (deviceId) return await remoteMedia(deviceId,'chat.mediaNotes.'+action,args,row.signal);
           if (!mediaNotes) throw new Error('Document annotations unavailable');
           return await mediaNotes(action,args,row.signal);
         }

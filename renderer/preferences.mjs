@@ -1,5 +1,6 @@
 import { providerKindLabel } from './connections.mjs';
 import {mountMcp} from './mcp-settings.mjs';
+import {mountOutlook} from './outlook-settings.mjs';
 import { releaseLabel } from './release.mjs';
 
 // A chat owns a snapshot. Merely reopening a picker must never replace it with
@@ -19,7 +20,7 @@ export function runTimeoutChoice(mode, minutes) {
 }
 
 export function createPreferences({ workspaceControls, remoteConnections, request, refresh, getState, getChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors, showOpenAI }) {
-  const categories = [['ui', 'UI'], ['permissions', 'Permissions'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['upgrades', 'Applied upgrades'], ['profiles', 'Profiles'], ['mcp', 'MCP servers'], ['external', 'External access'], ['about', 'About & support']];
+  const categories = [['ui', 'UI'], ['permissions', 'Permissions'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['upgrades', 'Applied upgrades'], ['profiles', 'Profiles'], ['mcp', 'MCP servers'], ['outlook', 'Outlook & Microsoft 365'], ['external', 'External access'], ['about', 'About & support']];
   function createPromptChoice() {
     const chat = getChat(), presets = getState().promptPresets || [];
     const choice = selectField('System prompt for this chat', [...(chat ? [{ value: '__current__', label: `Keep current · ${presets.find(item => item.id === chat.systemPromptPresetId)?.name || 'Custom'}` }] : []), ...presets.map(item => ({ value: item.id, label: item.name }))], chat ? '__current__' : 'general');
@@ -82,6 +83,8 @@ export function createPreferences({ workspaceControls, remoteConnections, reques
       pane.append(el('h3', '', 'Voice'), el('p', 'hint', 'Activation phrases and spoken replies are set per chat. Use Dictate to add speech to your draft, or Start assistant to listen for the chat’s activation phrase.'), button('Voice controls for this chat', showVoice));
     } else if (category === 'mcp') {
       void mountMcp(pane,{request,getState,el,button,field,selectField,actions}).catch(error=>{if(pane.isConnected)pane.append(el('p','error-text',error.message));});
+    } else if (category === 'outlook') {
+      void mountOutlook(pane,{request,getState,el,button,field,selectField,actions}).catch(error=>{if(pane.isConnected)pane.append(el('p','error-text',error.message));});
     } else if (category === 'upgrades') {
       pane.append(el('h3', '', 'Applied upgrades'));
       void request('upgrades.list').then(rows => {

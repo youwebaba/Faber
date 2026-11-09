@@ -17,10 +17,11 @@ import {createSafetensorsRuntime} from './safetensors-runtime.mjs';
 import {savedNativeQuantization,resolveNativeQuantization,quantizationSchema} from './quantization.mjs';
 import {nativeFit} from './fit.mjs';
 import {processMemory} from './observations.mjs';
+import {speculationSchema,savedSpeculation,resolveSpeculation,prepareSpeculation,inspectSpeculation,speculationTiming} from './speculation.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const id = { type: 'string', minLength: 1, maxLength: 300 };
-const schemas = { 'localModels.list': object({ providerId: id }), 'localModels.start': object({ modelId: id, providerId: id, model: id, contextTokens:contextTokensSchema,quantization:quantizationSchema }), 'localModels.stop': object({ providerId: id, model: id }) };
+const schemas = { 'localModels.list': object({ providerId: id }), 'localModels.start': object({ modelId: id, providerId: id, model: id, contextTokens:contextTokensSchema,quantization:quantizationSchema,speculation:speculationSchema }), 'localModels.stop': object({ providerId: id, model: id }) };
 schemas['localModels.hardware']=object({});schemas['localModels.configure']=configurationSchema;schemas['localModels.delete']=object({modelId:id},['modelId']);
 schemas['localModels.details']=object({modelId:id,quantization:quantizationSchema},['modelId']);
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -47,18 +48,19 @@ export async function killOwnedProcess(child) {
   } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
 }
 
-export async function createLocalModels({ dataDir, runtime, getHubState, emit = () => {}, executable, safetensorsExecutable, safetensorsVerify, backendDirectories,hardwareRunner,trashItem,withModelFiles,fetchImpl = fetch, spawnImpl = spawn, killProcess = killOwnedProcess, loadTimeoutMs = 300000, pollMs = 250 }) {
+export async function createLocalModels({ dataDir, runtime, getHubState, emit = () => {}, executable, safetensorsExecutable, safetensorsVerify, backendDirectories,hardwareRunner,speculationReader,trashItem,withModelFiles,fetchImpl = fetch, spawnImpl = spawn, killProcess = killOwnedProcess, loadTimeoutMs = 300000, pollMs = 250 }) {
   const store = await openStore(path.join(dataDir, 'local-models'), { version: 1, providerId: null });
   if (store.state.version !== 1 || (store.state.providerId !== null && typeof store.state.providerId !== 'string')) throw new Error('Invalid local-model manager state');
   store.state.configuration ||= structuredClone(defaultConfiguration);validate(store.state.configuration,configurationSchema);
   store.state.loadProfiles||={};if(typeof store.state.loadProfiles!=='object'||Array.isArray(store.state.loadProfiles))throw new Error('Invalid native load profiles');
   store.state.precisionProfiles||={};if(typeof store.state.precisionProfiles!=='object'||Array.isArray(store.state.precisionProfiles))throw new Error('Invalid native precision records');
+  store.state.speculationProfiles||={};if(typeof store.state.speculationProfiles!=='object'||Array.isArray(store.state.speculationProfiles))throw new Error('Invalid speculation profiles');
   const executableFile = await executablePath(executable), ollama = createOllamaControl({ runtime, fetchImpl });
   const safetensors = await createSafetensorsRuntime({dataDir,executable:safetensorsExecutable,fetchImpl,verifyImpl:safetensorsVerify});
   const hardware=createHardware({executable:executableFile,backendDirectories,runner:hardwareRunner});
   let library = { directory: '', models: [], warnings: [] }, processState = { status: 'stopped' }, current, closed = false, starting = false, stopping = false, stopPromise, preparing;
   const lifetime = new AbortController();
-  let deleting=false,configuring=false,fileOperation;
+  let deleting=false,configuring=false,fileOperation,preparationController,speculationProbe;const speculationCache=new Map();
   const redact = (value, operation) => String(value).split(operation.key).join('[redacted]');
   const ollamaTransitions = new Map();
   let providers = (await runtime.request('state.get')).providers;
@@ -88,7 +90,8 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       runtime: { available: !!executableFile, safetensors:safetensors.status, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
   };
   function publish() { try { emit({ type: 'localModels', state: snapshot() }); } catch { /* Detached UI does not own the process. */ } }
-  async function scan() { const hub = await getHubState(),scanned=await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads });scanned.models=await Promise.all(scanned.models.map(async model=>model.format==='safetensors'?{...await safetensors.describe(scanned.directory,model),...savedNativeQuantization(store.state.loadProfiles[model.id]),effectivePrecision:store.state.precisionProfiles[model.id]}:model));library=scanned;return library; }
+  async function scan() { const hub = await getHubState(),scanned=await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads });scanned.models=await Promise.all(scanned.models.map(async model=>({...model,...(model.format==='safetensors'?{...await safetensors.describe(scanned.directory,model),...savedNativeQuantization(store.state.loadProfiles[model.id]),effectivePrecision:store.state.precisionProfiles[model.id]}:{}),...savedSpeculation(store.state.speculationProfiles[model.id])})));library=scanned;return library; }
+  async function speculationInfo(model,signal){if(speculationCache.has(model.id))return structuredClone(speculationCache.get(model.id));let capabilities={};if(model.format==='gguf'&&executableFile){speculationProbe||=hardware.inspect(signal).then(value=>value.speculation).catch(error=>{speculationProbe=undefined;throw error;});capabilities=await speculationProbe;}const info=await inspectSpeculation({directory:library.directory,model,capabilities,signal,reader:speculationReader});speculationCache.set(model.id,info);return structuredClone(info);}
   const hardwareState=async signal=>({...await hardware.inspect(signal),configuration:structuredClone(store.state.configuration),observed:processState.observed||null});
   const controlOnly = (run, callerRunId) => run.id === callerRunId && Array.isArray(run.modelCalls) && run.modelCalls.length === 0;
   async function ensureIdle(callerRunId) {
@@ -96,6 +99,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     if (store.state.providerId && state.runs.some(run => active(run) && run.providerId === store.state.providerId && !controlOnly(run, callerRunId))) throw new Error('Stop chats using the downloaded local model before stopping or replacing it.');
   }
   async function dispose(operation) {
+    clearTimeout(operation.statsTimer);
     operation.controller.abort(new Error('Local model stopped'));
     operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
     await killProcess(operation.child);
@@ -144,6 +148,18 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if(current!==operation||operation.didExit)throw new Error('Local model process changed during context inspection');
       const nativeObservation=operation.native?.observed();
       const observed=operation.native?{backend:'cpu',gpuLayers:0,totalLayers:null,devices:[],verified:true,quantization:nativeObservation.quantization,precision:nativeObservation.precision,memory:await processMemory(operation.child?.pid)}:observePlacement(operation.placementLogs+operation.logTails.join('\n'));
+      let speculationObserved={mode:'off',tokens:0,verified:true};
+      if(operation.speculation.mode!=='off'){
+        if(operation.speculationFailure)throw new Error(operation.speculationFailure);
+        const kind=operation.speculation.mode==='native_mtp'?'draft-mtp':'draft-simple';
+        const types=[...operation.speculationLogs.matchAll(/adding speculative implementation ['"]([^'"]+)['"]/g)].map(match=>match[1]);
+        const max=Number([...operation.speculationLogs.matchAll(/- n_max=(\d+),/g)].at(-1)?.[1]);
+        const response=await fetchImpl(`${operation.baseUrl}/slots`,{redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(2000)]),headers:{Authorization:`Bearer ${operation.key}`}});
+        if(!response.ok)throw new Error('Speculative slot monitoring is unavailable; the model was stopped.');
+        let size=0;const chunks=[];for await(const chunk of response.body){size+=chunk.length;if(size>1024*1024)throw new Error('Runtime speculative slots exceed inspection limit');chunks.push(chunk);}const slots=JSON.parse(Buffer.concat(chunks).toString('utf8'));if(!Array.isArray(slots)||!slots.length||slots.some(slot=>slot.speculative!==true)||!types.includes(kind)||max!==operation.speculation.tokens)throw new Error('The runtime did not confirm the selected speculative implementation and token count; the model was stopped.');
+        speculationObserved={mode:operation.speculation.mode,implementation:kind,tokens:max,verified:true,vocabularyVerified:operation.speculation.mode==='draft_model',draft:operation.speculationPlan.draft||null,metrics:operation.speculationMetrics||null};
+      }
+      observed.speculation=speculationObserved;if(!operation.native)observed.memory=await processMemory(operation.child?.pid);
       if(operation.requested.mode==='custom'&&(!observed.verified||!observed.gpuLayers||operation.requested.gpuIds.some(id=>!observed.devices.includes(id))))throw new Error('Selected GPU placement could not be confirmed. The model was stopped instead of silently falling back; inspect runtime compatibility or choose Automatic/CPU mode.');
       const providerId = store.state.providerId || randomUUID();
       if (!store.state.providerId) { store.state.providerId = providerId; await store.save(store.state); }
@@ -151,11 +167,12 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       const saved=await runtime.request('provider.save', { id: providerId, name: operation.native?'Downloaded Safetensors (CPU)':'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
       providers=[...providers.filter(provider=>provider.id!==providerId),saved];
       if(operation.native)store.state.loadProfiles[model.id]=operation.quantization;
+      store.state.speculationProfiles[model.id]=operation.speculation;
       if(operation.native)store.state.precisionProfiles[model.id]={quantization:operation.quantization,precision:nativeObservation.precision,payloadId:nativeObservation.payloadId,checkedAt:new Date().toISOString()};
       store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,displayName:model.label,modelId:model.id,thinkingSupported,format:model.format};await store.save(store.state);
       signal.throwIfAborted();
       operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
-      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,...(operation.native?{quantization:operation.quantization}:{}),contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
+      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,speculation:operation.speculation,...(operation.native?{quantization:operation.quantization}:{}),contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
     } catch (error) {
       if (current !== operation) return;
       const stopped = operation.controller.signal.aborted;
@@ -167,11 +184,11 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       processState = { status: stopped ? 'stopped' : 'failed', operationId: operation.id, modelId: model.id, stage: stopped ? 'Stopped' : 'Unable to load', ...(!stopped ? { error: redact(error.message, operation).slice(-5000) } : {}) }; publish();
     }
   }
-  async function startFile(modelId, originSignal, callerRunId, contextTokens=null,quantization) {
+  async function startFile(modelId, originSignal, callerRunId, contextTokens=null,quantization,speculation) {
     if (closed) throw new Error('Local model manager is closed');
     if (starting || stopping || current ||deleting||configuring|| ['loading', 'stopping'].includes(processState.status)) throw new Error('Stop the current local model and finish pending file/settings actions before starting another.');
     starting = true;
-    originSignal = originSignal ? AbortSignal.any([originSignal, lifetime.signal]) : lifetime.signal;
+    preparationController=new AbortController();originSignal=AbortSignal.any([...(originSignal?[originSignal]:[]),lifetime.signal,preparationController.signal]);
     let prepared; preparing = new Promise(resolve => { prepared = resolve; });
     try {
       originSignal?.throwIfAborted(); await ensureIdle(callerRunId); await scan(); originSignal?.throwIfAborted();
@@ -179,26 +196,30 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if (!model) throw new Error('Model files changed or left the configured folder. Refresh the local model list.');
       if (!model.available || !['gguf','safetensors'].includes(model.format)) throw new Error(model.reason || 'Choose a complete model supported by this runtime');
       const nativeSafe=model.format==='safetensors';
+      speculation=resolveSpeculation(speculation,store.state.speculationProfiles[model.id]);
       if(!nativeSafe&&quantization!==undefined)throw new Error('On-load quantization applies to original Safetensors packages only. Choose a published GGUF encoding or its existing runtime controls.');
       if(nativeSafe)quantization=resolveNativeQuantization(quantization,store.state.loadProfiles[model.id]);
       if(!nativeSafe&&!executableFile)throw new Error(snapshot().runtime.reason);
       const detected=nativeSafe?null:await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=nativeSafe?[]:launchArguments(requested,detected);
+      const speculationPlan=await prepareSpeculation({directory:library.directory,model,models:library.models,profile:speculation,capabilities:detected?.speculation,configuration:requested,signal:originSignal,reader:speculationReader});
+      if(speculation.mode!=='off'){await scan();if(!library.models.some(item=>item.id===model.id)||speculationPlan.draft&&!library.models.some(item=>item.id===speculationPlan.draft.id))throw new Error('Target or draft files changed during validation; refresh the library');}
+      hardwareArgs.push(...speculationPlan.args);
       if(contextTokens!==null){
         if(nativeSafe)throw new Error('This native Safetensors CPU loader currently supports Default context only. Select Default and start again.');
         if(!detected.capabilities.contextSize)throw new Error('This runtime does not support configurable context size; use provider default or update the runtime.');
         // One slot gives each queued request the selected capacity instead of dividing it across slots.
         hardwareArgs.push('--ctx-size',String(contextTokens),'--parallel','1');
       }
-      const files=await Promise.all([...model.files,...(nativeSafe?model.supportFiles||[]:[])].map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
+      const files=await Promise.all([...model.files,...speculationPlan.draftFiles,...(nativeSafe?model.supportFiles||[]:[])].map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
       originSignal.throwIfAborted();
       const operationId = randomUUID(), keyFile = path.join(dataDir, 'local-models', `${operationId}.key`), key = randomBytes(32).toString('hex');
       const port = nativeSafe?null:await freePort(); originSignal?.throwIfAborted();
       try { await fs.writeFile(keyFile, key, { mode: 0o600, flag: 'wx' }); }
       catch (error) { if (error.code !== 'EEXIST') await fs.rm(keyFile, { force: true }).catch(() => {}); throw error; }
       if (originSignal?.aborted) { await fs.rm(keyFile, { force: true }); originSignal.throwIfAborted(); }
-      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',logTails:['',''],requested,files,contextTokens,quantization, didExit: false, originSignal };
+      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',speculationLogs:'',speculation,speculationPlan,logTails:['',''],requested,files,contextTokens,quantization, didExit: false, originSignal };
       current = operation;
-      processState = { status: 'loading', operationId, modelId, stage: nativeSafe?'Loading Safetensors on native CPU runtime':'Loading GGUF into local runtime',requested,contextTokens,...(nativeSafe?{quantization}: {}) }; publish();
+      processState = { status: 'loading', operationId, modelId, stage: nativeSafe?'Loading Safetensors on native CPU runtime':'Loading GGUF into local runtime',requested,contextTokens,speculation,...(nativeSafe?{quantization}: {}) }; publish();
       operation.abortOrigin = () => { operation.controller.abort(originSignal.reason); void Promise.resolve().then(() => stopFile()).catch(() => {}); };
       originSignal?.addEventListener('abort', operation.abortOrigin, { once: true });
       const env = nativeSafe?null:hardware.environment();
@@ -220,17 +241,21 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
         for (const [index,stream] of [operation.native?null:child.stdout, child.stderr].entries()) stream?.setEncoding('utf8').on('data', chunk => {
           operation.logs = redact(operation.logs + chunk, operation).slice(-8000);
           const lines=(operation.logTails[index]+redact(chunk,operation)).split(/\r?\n/);operation.logTails[index]=lines.pop().slice(-2000);
-          for(const line of lines)if(/using device|offloaded\s+\d+\s*\/|n_ctx_slot\s*=/i.test(line))operation.placementLogs=(operation.placementLogs+line+'\n').slice(-16000);
+          for(const line of lines){if(/using device|offloaded\s+\d+\s*\/|n_ctx_slot\s*=/i.test(line))operation.placementLogs=(operation.placementLogs+line+'\n').slice(-16000);
+            if(/spec\s+common_specu.*target and draft vocabs are not compatible/.test(line))operation.speculationFailure='The native runtime rejected incompatible target and draft vocabularies. Choose a compatible draft or Off; this model was stopped.';
+            if(/speculative|spec\s+common_specu|n_max=/.test(line))operation.speculationLogs=(operation.speculationLogs+line+'\n').slice(-16000);
+            const metrics=speculationTiming(line,operation.speculationMetrics);if(metrics){operation.speculationMetrics=metrics;if(current===operation&&processState.status==='ready'){processState.observed.speculation.metrics=metrics;if(!operation.statsTimer)operation.statsTimer=setTimeout(()=>{operation.statsTimer=null;if(current===operation)publish();},100);}}
+          }
         });
       } catch (error) { operation.spawnError = redact(error.message, operation); operation.didExit = true; }
       operation.loading = ready(operation, model);
       if (originSignal?.aborted) operation.abortOrigin();
       return { ...snapshot(), accepted: true };
-    } finally { starting = false; prepared(); preparing = undefined; }
+    } finally { starting = false;preparationController=undefined; prepared(); preparing = undefined; }
   }
   async function stopFile(force = false, callerRunId) {
     if (stopPromise) return stopPromise;
-    if (starting) throw new Error('Local model start is being prepared; retry Stop shortly.');
+    if (starting) {if(!force)await ensureIdle(callerRunId);stopping=true;try{preparationController?.abort(new Error('Local model Start canceled'));await preparing;}finally{stopping=false;}return stopFile(force,callerRunId);}
     stopping = true;
     stopPromise = (async () => {
       if (!force) await ensureIdle(callerRunId);
@@ -296,12 +321,13 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if(args.quantization!==undefined&&model.format!=='safetensors')throw new Error('Native fit profiles apply to Safetensors packages only');
       const hub=await getHubState(),details=await localModelDetails({directory:library.directory,model,downloads:hub.downloads,signal});
       const fit=model.format==='safetensors'?(model.quantizationWarning&&args.quantization===undefined?{available:false,reason:model.quantizationWarning}:await nativeFit(library.directory,model,args.quantization)):undefined;
-      await scan();signal.throwIfAborted();if(!library.models.some(item=>item.id===args.modelId))throw new Error('Model files changed during details inspection');return {...details,...(fit?{nativeFit:fit}: {})};
+      const speculation=await speculationInfo(model,signal);
+      await scan();signal.throwIfAborted();if(!library.models.some(item=>item.id===args.modelId))throw new Error('Model files changed during details inspection');return {...details,speculation,...(fit?{nativeFit:fit}: {})};
     }
     if (method === 'localModels.list') { await scan(); return { ...snapshot(), ...(args.providerId ? await ollama.list(args.providerId) : {}) }; }
     if (method === 'localModels.start') {
-      if (args.modelId && !args.providerId && !args.model) return startFile(args.modelId, signal, callerRunId,args.contextTokens??null,args.quantization);
-      if (!args.modelId && args.providerId && args.model) {if(args.quantization!==undefined)throw new Error('On-load quantization applies to original Safetensors packages managed by Faber. Configure external Ollama separately.');if(args.contextTokens!=null)throw new Error('Configure Ollama context in the chat; local Start only loads the existing model.');return ollamaAction('start', args, signal, callerRunId);}
+      if (args.modelId && !args.providerId && !args.model) return startFile(args.modelId, signal, callerRunId,args.contextTokens??null,args.quantization,args.speculation);
+      if (!args.modelId && args.providerId && args.model) {if(args.speculation!==undefined)throw new Error('Speculation controls apply to owned downloaded models; configure other providers separately.');if(args.quantization!==undefined)throw new Error('On-load quantization applies to original Safetensors packages managed by Faber. Configure external Ollama separately.');if(args.contextTokens!=null)throw new Error('Configure Ollama context in the chat; local Start only loads the existing model.');return ollamaAction('start', args, signal, callerRunId);}
       throw new Error('Choose either a folder modelId or an installed providerId and model');
     }
     if (!args.providerId && !args.model) return stopFile(false, callerRunId);
@@ -322,11 +348,11 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     },
     tools: () => [
       {name:'local_model_hardware',description:'Inspect supported local runtime GPUs, logical CPUs, memory, configured defaults and observed placement. Metadata probes only; no model load. Remote API hardware is excluded.',parameters:schemas['localModels.hardware'],permission:'read',execute:(args,ctx)=>request('localModels.hardware',args,ctx.signal)},
-      {name:'local_model_details',description:'Read bounded offline metadata for one detected model. GGUF reports encoding and parameter counts. Safetensors adds native CPU fit estimates for an optional quantization profile, split across VRAM/RAM/disk and weights/context/workspace with headroom. Actual effective precision is reported after verified Start. Never loads weights or fetches publisher content.',parameters:schemas['localModels.details'],permission:'read',execute:(args,ctx)=>request('localModels.details',args,ctx.signal)},
+      {name:'local_model_details',description:'Read bounded offline metadata for one detected model. GGUF reports encoding, parameter counts and separately validated native-MTP/draft capabilities. Safetensors adds native CPU fit estimates for an optional quantization profile, split across VRAM/RAM/disk and weights/context/workspace with headroom. Actual effective precision is reported after verified Start. Never loads weights or fetches publisher content.',parameters:schemas['localModels.details'],permission:'read',execute:(args,ctx)=>request('localModels.details',args,ctx.signal)},
       {name:'local_model_configure',description:'Save global hardware defaults for the next managed GGUF Start. Stop the managed model first. Does not change external Ollama or API servers. CPU IDs select logical cores; empty means automatic. Memory mapping is disk-backed paging, not extra VRAM.',parameters:schemas['localModels.configure'],permission:'computer',execute:(args,ctx)=>request('localModels.configure',args,ctx.signal)},
       {name:'local_model_delete',description:'Move only the selected detected model files to the Recycle Bin, including existing shards of incomplete or invalid models. Rejects loaded/in-use or actively downloading files. Never guesses missing shards or deletes repository directories, other variants or external Ollama models.',parameters:schemas['localModels.delete'],permission:'files',execute:(args,ctx)=>request('localModels.delete',args,ctx.signal,ctx.runId)},
       { name: 'local_models_list', description: 'List complete local model files from the configured download folder and optionally installed models in a loopback Ollama connection. Does not load models.', parameters: schemas['localModels.list'], permission: 'read', execute: (args, ctx) => request('localModels.list', args, ctx.signal) },
-      { name: 'local_model_start', description: 'Load a supported complete local GGUF or native CPU Safetensors package, or an installed loopback Ollama model. Native modes none/q4_0/q5_0/q8_0/mixed_q4_q8 use Default context and qualified text architectures. Quantized Start uses temporary disk to verify actual formats, then deletes it. Originals stay unchanged. Poll local_models_list for readiness and effective precision. Does not download weights or select a chat model.', parameters: schemas['localModels.start'], permission: 'computer', execute: (args, ctx) => request('localModels.start', args, ctx.signal, ctx.runId) },
+      { name: 'local_model_start', description: 'Load a supported complete local GGUF or native CPU Safetensors package, or an installed loopback Ollama model. Native modes none/q4_0/q5_0/q8_0/mixed_q4_q8 use Default context and qualified text architectures. Quantized Start uses temporary disk to verify actual formats, then deletes it. Originals stay unchanged. Speculation defaults to the last successful per-model profile (initially Off); native_mtp requires qualified actual heads, draft_model requires distinct compatible GGUF weights and saved CPU hardware. tokens is 1..16. Poll local_models_list for verified effective speculation, completed-request acceptance counters and precision. Does not download weights or select a chat model.', parameters: schemas['localModels.start'], permission: 'computer', execute: (args, ctx) => request('localModels.start', args, ctx.signal, ctx.runId) },
       { name: 'local_model_stop', description: 'Unload the owned local model process, or a specified installed Ollama model. Stop its active chats first. Does not delete model files.', parameters: schemas['localModels.stop'], permission: 'computer', execute: (args, ctx) => request('localModels.stop', args, ctx.signal, ctx.runId) },
     ],
     async close() { if (closed) return; closed = true; unsubscribe?.(); lifetime.abort(new Error('App shutting down')); await preparing;await fileOperation?.catch(()=>{}); for (const transition of ollamaTransitions.values()) transition.controller.abort(new Error('App shutting down')); await Promise.allSettled([...ollamaTransitions.values()].map(item => item.done)); await stopFile(true); await store.flush(); },

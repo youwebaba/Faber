@@ -131,3 +131,7 @@ It uses the actual local relay listener and Node's native WebSocket client.
 Windows additionally exercises generated ephemeral TLS identity, pairing,
 concurrent authenticated requests and revocation through the composed transport,
 and checks that binary relay frames contain no application plaintext or tokens.
+
+## Permanent operator address
+
+For a stable Windows-hosted relay behind an operator-controlled TLS endpoint, run `Start-FaberRelay.ps1 -PublicUrl wss://relay.example.org -StartAtSignIn`. The optional login task restarts a failed relay. `-Stop` preserves the address and allowlist. `-DisableStartup` removes the task. The public hostname must forward WebSockets to the selected loopback port.
