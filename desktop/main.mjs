@@ -158,7 +158,7 @@ worker=await createBackgroundWorker({dataDir,sourceDir,profileId:profiles.curren
 desktopLocked=!['active','idle'].includes(powerMonitor.getSystemIdleState(1));
 powerMonitor.on('lock-screen',()=>{desktopLocked=true;});powerMonitor.on('unlock-screen',()=>{desktopLocked=false;});
 media=createChatMedia({readMedia:runtime.readMedia,mediaNotes:runtime.mediaNotes,readImage:params=>runtime.remoteRequest('chat.image',params),remoteRequest:(deviceId,method,params,signal)=>{if(!remote)throw new Error('Remote connections unavailable');return remote.request('remote.request',{deviceId,method,params},{signal});},protectedPaths:[dataDir,...profiles.privatePaths],
-  chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':'video'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
+  chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':mimeType.startsWith('video/')?'video':'document'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
   copyText:text=>clipboard.writeText(text),copyImage:data=>{const value=nativeImage.createFromDataURL(data);if(value.isEmpty())throw new Error('This image could not be copied');clipboard.writeImage(value);}
 });
 browserChats=(await runtime.request('state.get')).chats;
@@ -216,12 +216,13 @@ window.on('blur',()=>{browserViewRequest++;browser.hideView({keepMonitoring:true
 for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();});
 window.on('close',()=>{browser.hideView();});
 window.on('closed',()=>{if(window===ownedWindow)window=null;media.cancel();if(!worker.enabled&&!quitting)app.quit();});
-window.webContents.on('did-start-navigation',()=>{browserViewRequest++;browser.hideView();media.cancel();});
+window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){browserViewRequest++;browser.hideView();media.cancel();}});
 window.on('focus',()=>{emit({type:'browserViewHidden'});void browser.request('browser.state').then(state=>emit({type:'browser',state})).catch(()=>{});});
 window.webContents.on('blur',()=>{browserChromeFocus=null;});
 window.webContents.on('before-input-event',(event,input)=>{if(!browserChromeFocus||input.type!=='keyDown'||(!input.control&&!input.meta)||input.alt)return;const key=input.key.length===1?input.key.toLowerCase():input.key;const action={l:'address',t:'newTab',w:'closeTab',f:'find',Tab:input.shift?'previousTab':'nextTab','+':'zoomIn','=':'zoomIn','-':'zoomOut','0':'zoomReset'}[key];if(action){event.preventDefault();emit({type:'browserShortcut',...browserChromeFocus,action});}});
 window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
 window.webContents.on('will-navigate',event=>event.preventDefault());
+window.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&event.url!=='about:blank'&&!event.url.startsWith('faber-preview://viewer/'))event.preventDefault();});
 window.webContents.on('will-attach-webview',event=>event.preventDefault());
 window.webContents.on('render-process-gone',(_event,details)=>{console.error(`The interface process stopped: ${details.reason}; background work remains owned by this worker.`);clearTimeout(bootTimer);browser.hideView();ownedWindow.destroy();});
 bootTimer=setTimeout(()=>{if(!uiReady){if(worker.enabled){console.error('The interface did not become ready; reopen Faber from the tray.');ownedWindow.destroy();}else void startupFailure(new Error('The interface did not finish startup within one minute.'));}},60000);

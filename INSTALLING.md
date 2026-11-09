@@ -1,6 +1,6 @@
-# Installing Faber a2.5
+# Installing Faber a2.6
 
-Run `Faber-Setup-a2.5-x64.exe`. This is a per-user Windows x64 installation with
+Run `Faber-Setup-a2.6-x64.exe`. This is a per-user Windows x64 installation with
 Desktop/Start menu shortcuts and a normal `Faber.exe`; no terminal needs to stay
 open. Electron and the local model runtime are included. Node.js, npm and Ollama
 are not required to use the installed app's managed GGUF path. The compiled Rust
@@ -22,30 +22,30 @@ it after browser sessions are idle. WSL2 must already be available; local chat a
 model controls do not require WSL. The addon can be disabled or uninstalled in Addons. Online addon
 sharing and over-the-air updates are not included.
 
-The a2.5 installer is unsigned. Windows may display an
+The a2.6 installer is unsigned. Windows may display an
 unknown-publisher warning.
 Only use the artifact from the trusted project source; signing is not configured.
 
-## a2.5 release identity and workbench
+## a2.6 release identity and workbench
 
-The interface/release name is **a2.5**. The package/app version is `2.5.0` and
-the Windows build version is `2.5.0.0`. The installer upgrades an a2.4 installation.
+The interface/release name is **a2.6**. The package/app version is `2.6.0` and
+the Windows build version is `2.6.0.0`. The installer upgrades an a2.5 installation.
 Download the current installer from
 [GitHub Releases](https://github.com/youwebaba/Faber/releases). Source/application
 checks and release history are recorded in
 [VERIFICATION.md](VERIFICATION.md); installer checksums and publication records
 accompany the release assets.
 
-a2.5 seeds its stock workbench at `%LOCALAPPDATA%\FaberWorkbench\2.5.0`.
+a2.6 seeds its stock workbench at `%LOCALAPPDATA%\FaberWorkbench\2.6.0`.
 Profiles, credentials, addons and configured model folders carry over. Custom
 core edits belong to the workbench for their original version. Reinstalling
-a2.5 reuses its own workbench.
+a2.6 reuses its own workbench.
 
 Previous full releases remain available for rollback. Close Faber
 before running a previous installer to select its retained workbench.
 Rollback shares existing profile data; retain a profile backup before upgrading.
 
-For the latest remote chat controls, install a2.5 on both PCs. The separate `Faber-Relay-a2.5.zip`
+For the latest remote chat controls, install a2.6 on both PCs. The separate `Faber-Relay-a2.6.zip`
 operator kit contains only the relay source, locked dependency metadata, operator
 launcher and instructions; Node.js 24+ is required on the relay PC. Extract it,
 run `relay\Start-FaberRelay.ps1`, then pair through Settings. The desktop installer
@@ -218,7 +218,7 @@ source, minimal Linux root filesystem and certificate bundle identified in
 After deliberately editing a bundled addon's source, review the change and run
 `npm run prepare:addons` to update its shipped approval digest before packaging.
 
-Output is `release\Faber-Setup-a2.5-x64.exe`; the unpacked executable is
+Output is `release\Faber-Setup-a2.6-x64.exe`; the unpacked executable is
 `release\win-unpacked\Faber.exe`. Installer revision, appId and versioned workbench
 semantics are tested separately from deterministic unit fixtures. The optional
 live GPU proof requires an existing model and explicit command-line flags; it is

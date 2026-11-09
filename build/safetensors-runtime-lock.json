@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "protocol": 2,
+  "executable": "faber-safetensors.exe",
+  "engine": "mistralrs",
+  "engineVersion": "0.9.5",
+  "engineCommit": "465191d0b0a7e2432d327b0de06204ab3f94d3a2",
+  "sourceHash": "fd4564961bab9ffc2b8204d3a5b81c7d38f8de5e710bcb9ed172c49f39f51591",
+  "platform": "windows-x64",
+  "backends": [
+    "cpu"
+  ],
+  "transport": "inherited-stdio-only",
+  "files": [
+    {
+      "path": "faber-safetensors.exe",
+      "size": 65885696,
+      "sha256": "e27601011ddcbd0fb9dcc43d9d086788a65802449005c7b32998c7a3f781e809"
+    },
+    {
+      "path": "licenses/MICROSOFT-VS18-REDIST.txt",
+      "size": 187,
+      "sha256": "eea534b04c6e4e16d213a28478df552d98e44bd4cdcf486e2bfb2dcac164828d"
+    },
+    {
+      "path": "licenses/MISTRALRS-LICENSE.txt",
+      "size": 1088,
+      "sha256": "4a38cfd90339cdb89f75011a7f786bf78eae00f68e030984165ab36f4cb3d546"
+    },
+    {
+      "path": "licenses/safetensors-dependencies.json",
+      "size": 319218,
+      "sha256": "a823756f1bf5cd653df1b686c6dd1d2ff250022aed6f6c2d642190a84c5f31d1"
+    },
+    {
+      "path": "licenses/SAFETENSORS-THIRD-PARTY-NOTICES.txt",
+      "size": 1077555,
+      "sha256": "4e919bdab60c266c9d23d9bd12b00adf2752bad1b295529ad379f0296a23552e"
+    },
+    {
+      "path": "vcruntime140.dll",
+      "size": 178616,
+      "sha256": "d1f4225df2cd877dbf130d5668a021dce3f94118455ff5ec952061c30afc9ce7"
+    }
+  ]
+}

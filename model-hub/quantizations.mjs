@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto';
 
 // Names from ggml-org/llama.cpp/tools/quantize/quantize.cpp and ggml/docs/gguf.md.
 const encodingSuffixes = 'Q1_0 Q2_0 Q2_K Q2_K_S Q3_K Q3_K_S Q3_K_M Q3_K_L Q4_0 Q4_1 Q4_K Q4_K_S Q4_K_M Q5_0 Q5_1 Q5_K Q5_K_S Q5_K_M Q6_K Q8_0 Q8_1 Q8_K IQ1_S IQ1_M IQ2_XXS IQ2_XS IQ2_S IQ2_M IQ3_XXS IQ3_XS IQ3_S IQ3_M IQ4_NL IQ4_XS TQ1_0 TQ2_0 MXFP4 MXFP4_MOE F16 BF16 F32'.split(' ').sort((a, b) => b.length - a.length);
-export const auxiliaryGGUF = file => /(?:^|[\/_.-])(mmproj|mtp|adapter|projector|lora|vocab)(?:[\/_.-]|$)/i.test(file);
+export function auxiliaryGGUF(file) {
+  const parts=file.split(/[\\/]/),name=parts.pop();
+  // Repository/folder names may describe a main model's capabilities (for example
+  // Qwen-MTP-GGUF). Only the filename or an explicit auxiliary directory classifies it.
+  return /(?:^|[_.-])(mmproj|mtp|adapter|projector|lora|vocab)(?:[_.-]|$)/i.test(name)||parts.some(part=>/^(?:mmproj|mtp|adapters?|projectors?|lora|vocab)$/i.test(part));
+}
 
 export function quantizationCatalog(files, estimateVram) {
   const groups = new Map();

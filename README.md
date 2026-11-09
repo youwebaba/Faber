@@ -1,4 +1,4 @@
-# Faber a2.5
+# Faber a2.6
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -6,7 +6,16 @@ Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
 
-**a2.5 adds model packages, music generation and in-flight chat controls.**
+**a2.6 can keep a reviewed routine running after its window closes.**
+Open Routines, select a project and the tools it may use, then preview and enable
+it. Reopening Faber reconnects to the worker. Interrupted actions appear for
+review when their outcome cannot be verified. [Worker and routines](WORKER.md)
+
+Chat previews support PDF, DOCX, SVG and animated images. Highlights and notes
+belong to the specific document revision and page. Settings → Applied upgrades
+shows self-upgrade titles, changed files and rollback information.
+
+**a2.5 added model packages, music generation and in-flight chat controls.**
 Choose a complete Safetensors package in Models, or select the five components
 for MiniMax Music3. A chat can generate a WAV using the bundled Windows CPU
 runner and return it to local or paired playback. [Music setup](MUSIC.md)

@@ -206,5 +206,5 @@ export async function prepareWorkbench({ bundledSource, workbenchRoot, version }
 
 export function packagedRuntime(resourcesPath) {
   const directory = path.join(resourcesPath, 'local-runtime');
-  return { executable: path.join(directory, 'llama-server.exe'), backendDirectories: [path.join(directory, 'cuda_v13'), path.join(directory, 'vulkan')] };
+  return { executable: path.join(directory, 'llama-server.exe'), safetensorsExecutable:path.join(resourcesPath,'safetensors-runtime','faber-safetensors.exe'), backendDirectories: [path.join(directory, 'cuda_v13'), path.join(directory, 'vulkan')] };
 }

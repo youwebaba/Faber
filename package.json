@@ -2,7 +2,7 @@
   "name": "faber",
   "productName": "Faber",
   "description": "Faber desktop AI workspace",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -18,7 +18,9 @@
     "smoke:b201": "electron . --smoke-b201",
     "smoke:media": "electron . --smoke-media",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "prepare:safetensors": "node scripts/prepare-safetensors.mjs",
     "prepare:music": "node scripts/prepare-music.mjs",
+    "prepare:media": "node scripts/prepare-media.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
@@ -42,7 +44,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "2.5.0.0",
+    "buildVersion": "2.6.0.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -55,6 +57,9 @@
       "extensions/**",
       "model-hub/**",
       "local-models/**",
+      "native-safetensors/Cargo.toml",
+      "native-safetensors/Cargo.lock",
+      "native-safetensors/src/**",
       "local-music/**",
       "native/**",
       "!native/target/**",
@@ -87,6 +92,10 @@
       {
         "from": ".runtime/music-runtime",
         "to": "music-runtime"
+      },
+      {
+        "from": ".runtime/safetensors-runtime",
+        "to": "safetensors-runtime"
       }
     ],
     "npmRebuild": false,
@@ -106,7 +115,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a2.5-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a2.6-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

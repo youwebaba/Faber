@@ -106,7 +106,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   let closed = false;
   const mediaOwners=new Map();
   let mediaRevision=-1;
-  const mediaStore = createMediaStore({ dataDir, findReference(chatId,mediaId) {
+  const mediaStore = createMediaStore({ dataDir, assertAnnotations(chatId) { const chat=state.chats.find(chat=>chat.id===chatId);if(closed||!chat||chat.archived||chat.externalSessionId||state.projects.find(project=>project.id===chat.projectId)?.archived)throw new Error('This chat is read-only'); }, findReference(chatId,mediaId) {
     if(mediaRevision!==stateRevision){mediaOwners.clear();mediaRevision=stateRevision;}
     if(!mediaOwners.has(chatId)){
       const chat=state.chats.find(item=>item.id===chatId),refs=new Map();
