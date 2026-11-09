@@ -118,11 +118,14 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
     return;
   }
   const connection = new AbortController();
-  const timer = setTimeout(() => connection.abort(new Error('Provider connection timed out')), 30000);
+  const baseUrl=validateBaseUrl(provider.baseUrl);
+  // Local engines may load weights and process the prompt before sending headers.
+  const loopback=['localhost','127.0.0.1','[::1]'].includes(new URL(baseUrl).hostname);
+  const timer=loopback?undefined:setTimeout(()=>connection.abort(new Error('Provider connection timed out')),30000);
   const requestSignal = signal ? AbortSignal.any([signal, connection.signal]) : connection.signal;
   let response;
   try {
-  try { response = await fetchImpl(`${validateBaseUrl(provider.baseUrl)}${ollama ? '/api/chat' : responses ? '/responses' : '/chat/completions'}`, {
+  try { response = await fetchImpl(`${baseUrl}${ollama ? '/api/chat' : responses ? '/responses' : '/chat/completions'}`, {
     method: 'POST', signal: requestSignal, redirect: 'error',
     headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
     body: JSON.stringify(providerBody({provider,messages,tools})),
