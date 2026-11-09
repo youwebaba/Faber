@@ -1,4 +1,4 @@
-# Faber a2.8
+# Faber a3.0
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,6 +7,43 @@ with a Codex-style interface, shared tools, agent delegation, voice, and upgrade
 the agents can author. It has its own source, launchers and release lifecycle.
 
 Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
+
+**a3.0 adds consented live video and brings the media and worker workflows together.**
+Choose a camera, screen or window and review the selected source and paired
+viewer before starting. A visible Live indicator and Stop control stay available
+while you return to chat. Disconnecting, hiding Faber or locking Windows ends
+the share; reconnecting requires fresh host approval. Live video has no audio
+or recording. [Live sharing](LIVE_MEDIA.md) · [a3.0 notes](docs/a3.0-release-notes.md)
+
+This closed release retains project-scoped jobs, approvals, action receipts and
+recovery, plus local and encrypted remote previews for documents, music,
+interactive outputs and static 3D models. Extended hardware, WAN, pre-login and
+seven-day acceptance remain separately tracked. [Acceptance status](docs/a3.0-acceptance.md)
+
+**a2.9 adds reviewed Outlook work, stronger recovery and 3D chat previews.**
+Connect an Outlook account to one project, page through unread messages, prepare
+reply drafts and review calendar changes. Sending and invitations retain their
+separate approval. Paired computers can inspect the host Work Inbox, approve a
+named step, steer or stop a job, and reconnect through a configured relay address.
+[Outlook](MICROSOFT365.md) · [Paired work supervision](docs/a2.9-remote-work.md)
+
+Boot-eligible local routines have a separate opt-in and a credential-free
+headless worker. Signed-in headless generation and handoff to the visible app
+passed; an actual reboot before sign-in remains pending during closed use.
+Routine backups restore paused and require renewed scope review. Independent
+action receipts and installer-owned recovery helpers preserve completed work.
+[Boot and recovery](WORKER-RECOVERY.md)
+
+Open static GLB, glTF or STL models in chat to orbit, pan and zoom. Supply and
+authorize external buffers/textures explicitly; Save As keeps their original
+bytes. The same previews work through the paired encrypted connection.
+[3D previews](docs/a2.9-scenes-verification.md)
+
+The local model picker adds verified native MTP or a compatible separate GGUF
+draft and its speculative-token limit. Tested CPU output matched Off; the
+tested GPU native-MTP output differed from Off, so choose Off when reproducing
+that baseline matters. Native Safetensors precision remains CPU-qualified in
+this release. [Model options and observed limits](docs/a2.9-speculation.md)
 
 **a2.8 connects approved MCP tools to a project.** Chats can read or edit a specific Excel range, and compatible Safetensors models have a pre-Start precision slider with memory estimates and an observed precision report. [MCP and workbooks](MCP.md) · [Safetensors precision and fit](docs/a2.8-native-precision-fit.md)
 

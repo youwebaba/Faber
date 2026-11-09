@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.8 (application version 2.8.0), including
+This contract describes Faber a3.0 (application version 3.0.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -507,3 +507,18 @@ the validated dependencies. The isolated viewer cannot fetch arbitrary project,
 app or network resources. Stop, disconnect and disposal revoke pending transfers;
 Save As preserves original bytes and verifies revisions before replacement. See
 [3D attachment contracts and evidence](docs/a2.9-scenes-verification.md).
+
+## Live capture (a3.0)
+
+Capture is a user-only desktop operation. The trusted top frame requests a
+specific source and optional paired viewer, obtains a native confirmation and
+consumes a short-lived permission when Start sharing invokes the browser API.
+Other frames and audio capture are denied. Models, tools and controllers cannot
+grant or start capture. The host owns the source, viewer, lifetime and Stop.
+
+The paired transport exposes only capture status, join, bounded-frame read and
+leave for the approved device/view identity. It keeps one JPEG frame in memory,
+records no media and never converts a reconnect into permission. Window hiding,
+reload, lock, suspend, stale heartbeats or a changed viewing session ends sharing.
+The sidebar keeps live viewing, scene support and Host Work Inbox capabilities
+conditional across initial and unchanged directory responses. See [live media](LIVE_MEDIA.md).

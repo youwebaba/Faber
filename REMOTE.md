@@ -1,8 +1,15 @@
 # Remote sessions
 
-Install Faber a2.8 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
+Install Faber a3.0 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
 
 ## Pair the laptop
+
+Both PCs need a3.0 for live viewing. The host chooses **Share video**, reviews a
+source and one paired viewer, approves the native confirmation and chooses
+**Start sharing**. The selected controller can then choose **Watch live** in the
+host workspace. It cannot start host capture. Stopping the viewer or losing its
+session ends the share; reconnection needs fresh host approval.
+[Live video details](LIVE_MEDIA.md)
 
 1. On the home PC, open **Edit → Settings → Connections → Control this PC**. If you run the relay on this PC, start it first using the instructions below. Otherwise enter the relay address supplied by your operator and give the operator the public host route ID to authorize.
 2. Turn on **Allow connections**. When the host is online, create an invitation. Send it privately to your laptop. A new invitation replaces the previous one.
