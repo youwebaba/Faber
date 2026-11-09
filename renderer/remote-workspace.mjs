@@ -218,6 +218,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
       }
       if (!nodes.length) { const welcome = el('div', 'welcome'); welcome.append(el('h1', '', selectedChatId ? selectedDetail ? 'Start a conversation.' : 'Loading chat…' : 'Your host workspace'), el('p', '', selectedChatId ? 'Messages and tool activity appear here.' : 'Choose a project and chat, or start a new chat on this host.')); nodes.push(welcome); }
       reconcileTranscript(transcript, nodes);
+      activity.prune(transcript);
       mediaOutputs.prune();
     });
   }

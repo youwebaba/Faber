@@ -88,6 +88,11 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
       if (focus?.isConnected) focus.focus({ preventScroll: true });
       return node;
     },
+    prune(parent) {
+      for (const [key, entry] of cards) if (!parent.contains(entry.node)) { cards.delete(key); expanded.delete(`activity:${key}`); }
+      for (const [key, entry] of tools) if (!parent.contains(entry.node)) { tools.delete(key); expanded.delete(`tool:${key}`); }
+      for (const [key, node] of summaries) if (!parent.contains(node)) summaries.delete(key);
+    },
     reset() { for (const [key, entry] of cards) { if (entry.node.open) expanded.add(`activity:${key}`); } for (const [key, entry] of tools) if (entry.node.open) expanded.add(`tool:${key}`); cards.clear(); tools.clear(); summaries.clear(); },
   };
 }

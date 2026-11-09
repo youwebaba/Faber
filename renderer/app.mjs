@@ -261,6 +261,7 @@ function renderTranscript() {
     if (note.childNodes.length) nodes.push(note);
   }
   reconcileTranscript(transcript, nodes);
+  runActivity.prune(transcript);
   mediaOutputs.prune();
   });
 }
