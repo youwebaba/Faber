@@ -12,18 +12,31 @@ export async function rememberSessionCookies(session, key, { read, write, onErro
     const host = cookie.domain.replace(/^\./, '');
     await session.cookies.set({ url: `${secure ? 'https' : 'http'}://${host}${path}`, name, value, path, secure, httpOnly, sameSite, ...(!cookie.hostOnly ? { domain: cookie.domain } : {}) });
   }
-  let queue = Promise.resolve(), closed = false;
+  let pending, dirty = false, closing, lastEncoded = saved;
   function save() {
-    const operation = queue.catch(() => {}).then(async () => {
-      const cookies = await session.cookies.get({ session: true });
-      values = cookies.map(({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite }) => ({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite }));
-      const encoded = JSON.stringify(values);
-      if (values.length > 2000 || encoded.length > 2 * 1024 * 1024) throw new Error('Browser session-cookie storage limit exceeded.');
-      await write(key, encoded);
-    });
-    queue = operation; operation.catch(() => onError(new Error('Browser session sign-ins could not be saved securely.'))); return operation;
+    dirty = true;
+    if (!pending) {
+      pending = Promise.resolve().then(async () => {
+        while (dirty) {
+          dirty = false;
+          const cookies = await session.cookies.get({ session: true });
+          values = cookies.map(({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite }) => ({ name, value, domain, hostOnly, path, secure, httpOnly, sameSite }));
+          const encoded = JSON.stringify(values);
+          if (values.length > 2000 || encoded.length > 2 * 1024 * 1024) throw new Error('Browser session-cookie storage limit exceeded.');
+          if (encoded !== lastEncoded) { await write(key, encoded); lastEncoded = encoded; }
+        }
+      }).finally(() => { pending = undefined; if (dirty) save(); });
+      pending.catch(() => onError(new Error('Browser session sign-ins could not be saved securely.')));
+    }
+    return pending;
   }
-  const changed = () => { if (!closed) void save(); };
+  const changed = () => { void save(); };
   session.cookies.on('changed', changed);
-  return { async close() { if (closed) return queue; closed = true; session.cookies.removeListener('changed', changed); await save(); } };
+  return { close() {
+    if (!closing) {
+      session.cookies.removeListener('changed', changed);
+      closing = (async () => { await save(); while (pending) await pending; })();
+    }
+    return closing;
+  } };
 }

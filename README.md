@@ -1,10 +1,14 @@
-# Faber a2.7
+# Faber a2.8
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
 Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
+
+Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
+
+**a2.8 connects approved MCP tools to a project.** Chats can read or edit a specific Excel range, and compatible Safetensors models have a pre-Start precision slider with memory estimates and an observed precision report. [MCP and workbooks](MCP.md) · [Safetensors precision and fit](docs/a2.8-native-precision-fit.md)
 
 **a2.7 adds scheduled work to the Work Inbox.** Choose a time or a stable new file as a trigger, set limits, and review the inputs and outputs of each job. The daily folder report can run with the window closed. [Schedules and the Work Inbox](SCHEDULER.md)
 

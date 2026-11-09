@@ -3,7 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const directory=process.argv[2];
-const quantization=JSON.parse(process.argv[3]);assert.ok(['none','q4_0','q8_0'].includes(quantization.mode));
+const quantization=JSON.parse(process.argv[3]);assert.ok(['none','q4_0','q5_0','q8_0','mixed_q4_q8'].includes(quantization.mode));
 assert.equal(JSON.parse(await fs.readFile(path.join(directory,'config.json'),'utf8')).model_type,'llama');
 assert.ok(!(await fs.readdir(directory)).some(name=>name.endsWith('.gguf')));
 function frame(value){const body=Buffer.from(JSON.stringify(value)),header=Buffer.alloc(4);header.writeUInt32LE(body.length);process.stdout.write(Buffer.concat([header,body]));}
@@ -19,4 +19,4 @@ process.stdin.on('data',bytes=>{
   }
 });
 process.stdin.on('end',()=>process.exit(0));
-setTimeout(()=>frame({kind:'ready',protocol:2,model:'worker-model',backend:'cpu',quantization}),250);
+setTimeout(()=>frame({kind:'ready',protocol:3,model:'worker-model',backend:'cpu',quantization,precision:{verified:true,method:'controlled-fixture',effectiveBitsPerParameter:quantization.mode==='none'?32:quantization.mode==='q5_0'?5.5:4.5,parameters:1024,formats:{[quantization.mode==='none'?'f32':quantization.mode]:1},fallbackCount:0,verificationRemoved:true}}),250);

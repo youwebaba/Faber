@@ -9,12 +9,14 @@ export async function createLocalModelSmoke(dataDir, modelHub) {
   const directory = path.join(path.dirname(dataDir), `${path.basename(dataDir)}-models`); await fs.mkdir(directory);
   const header = Buffer.alloc(24); header.write('GGUF'); header.writeUInt32LE(3, 4);
   for (const name of ['Fixture-Q4_K_M.gguf', 'Failure-Q4_K_M.gguf', 'Split-Q8_0-00001-of-00002.gguf', 'mmproj-Fixture.gguf']) await fs.writeFile(path.join(directory, name), header);
-  await fs.writeFile(path.join(directory, 'model.safetensors'), '{}');
-  await fs.writeFile(path.join(directory,'config.json'),JSON.stringify({model_type:'llama'}));await fs.writeFile(path.join(directory,'tokenizer.json'),'{}');
+  const tensorHeader=Buffer.from(JSON.stringify({'model.layers.0.self_attn.q_proj.weight':{dtype:'F32',shape:[32,32],data_offsets:[0,4096]}})),tensorPrefix=Buffer.alloc(8);tensorPrefix.writeBigUInt64LE(BigInt(tensorHeader.length));
+  await fs.writeFile(path.join(directory,'model.safetensors'),Buffer.concat([tensorPrefix,tensorHeader,Buffer.alloc(4096)]));
+  await fs.writeFile(path.join(directory,'config.json'),JSON.stringify({model_type:'llama',num_hidden_layers:2,hidden_size:32,num_attention_heads:2,num_key_value_heads:2,max_position_embeddings:256}));await fs.writeFile(path.join(directory,'tokenizer.json'),'{}');
   await modelHub.request('models.settings.save', { downloadDirectory: directory });
   const native=(await scanLocalModels({directory})).models.find(model=>model.format==='safetensors');await fs.mkdir(path.join(dataDir,'local-models'),{recursive:true});await fs.writeFile(path.join(dataDir,'local-models','state.json'),JSON.stringify({version:1,providerId:null,loadProfiles:{[native.id]:{mode:'future_fixture_precision',opaque:{keep:true}}}}));
   const children = [], script = fileURLToPath(new URL('./desktop-local-models.fixture.mjs', import.meta.url)),nativeScript=fileURLToPath(new URL('./desktop-safetensors.fixture.mjs',import.meta.url));
-  return { directory, children, options: { executable: process.execPath,safetensorsExecutable:process.execPath,safetensorsVerify:async()=>true, pollMs: 50, loadTimeoutMs: 15000,
+  const fixtureExecutable=await fs.realpath(process.execPath); // Trusted Electron dependency caches may use a junction.
+  return { directory, children, options: { executable: process.execPath,safetensorsExecutable:fixtureExecutable,safetensorsVerify:async()=>true, pollMs: 50, loadTimeoutMs: 15000,
     spawnImpl: (_executable, args, options) => { const child = spawn(process.execPath, [args.length===2?nativeScript:script, ...args], { ...options, env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' } }); children.push(child); return child; },
   } };
 }
@@ -56,10 +58,13 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   await wait(async () => (await state()).process.status === 'failed', 'failure reported');
   await wait(() => evaluate(`document.querySelector('#local-model-status').textContent.includes('Controlled incompatible')`), 'visible runtime failure');
   const failureScreenshot = await capture('local-model-failure.png');
-  const native=(await state()).models.find(item=>item.format==='safetensors');assert.equal(native.available,true);
-  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`document.querySelector('#local-model-start').disabled&&document.querySelector('#local-model-quantization').value===''&&document.querySelector('#local-model-status').textContent.includes('unsupported in this version')`),'unknown profile requires an explicit supported selection');await change('#local-model-quantization','q4_0');await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled after profile choice');await click('#local-model-start');
+  const native=(await state()).models.find(item=>item.format==='safetensors');assert.equal(native.available,true,native.reason);
+  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`document.querySelector('#local-model-start').disabled&&document.querySelector('#local-model-quantization').value===''&&document.querySelector('.native-precision').textContent.includes('unsupported in this version')`),'unknown profile requires supported selection');await change('#local-model-quantization','q4_0');await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled after profile choice');
+  await evaluate(`(()=>{const slider=document.querySelector('#local-model-precision');slider.value='1';slider.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await wait(()=>evaluate(`document.querySelector('#local-model-quantization').value==='q5_0'&&document.querySelectorAll('#local-model-fit tr').length===4`),'precision slider and three resource estimates');
+  assert.equal(await evaluate(`document.querySelector('#local-model-quantization option[value="q10_0"]').disabled`),true);await evaluate(`document.querySelector('.native-precision').scrollIntoView({block:'start'})`);const fitScreenshot=await capture('native-fit-before-start.png');await click('#local-model-start');
   await wait(async()=>(await state()).process.status==='ready','native ready');const nativeReady=(await state()).process;assert.equal(nativeReady.observed.backend,'cpu');
-  assert.deepEqual(nativeReady.quantization,{mode:'q4_0'});assert.equal(nativeReady.observed.quantization.accepted,true);
+  assert.deepEqual(nativeReady.quantization,{mode:'q5_0'});assert.equal(nativeReady.observed.quantization.accepted,true);assert.equal(nativeReady.observed.precision.verified,true);
   assert.notEqual((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).model,nativeReady.model);
   await wait(()=>evaluate(`!document.querySelector('#chat-use-model').disabled`),'native Use enabled');await click('#chat-use-model');
   await runtime.request('chat.send',{chatId:chat.id,text:'Check controlled native transport'});
@@ -67,12 +72,13 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   assert.ok((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).messages.some(message=>message.role==='assistant'&&message.content==='Controlled native reply'));
   await click('#model-picker');await change('#chat-connection','__local_files__');await wait(()=>evaluate(`!!document.querySelector('#chat-local-model option[value="download:${native.id}"]')`),'native model reopened');await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-stop')?.disabled`),'native Stop enabled');await click('#local-model-stop');await wait(async()=>(await state()).process.status==='stopped','native stopped');
   await runtime.request('chat.update',{id:chat.id,grants:['computer']});await runtime.request('tool.run',{chatId:chat.id,name:'local_model_start',args:{modelId:native.id}});await wait(async()=>(await state()).process.status==='ready','agent native Start');
-  assert.deepEqual((await state()).process.quantization,{mode:'q4_0'},'Agent default Start restores the successful per-model profile');
+  assert.deepEqual((await state()).process.quantization,{mode:'q5_0'},'Agent default Start restores the successful per-model profile');
   await runtime.request('tool.run',{chatId:chat.id,name:'local_model_stop',args:{}});await wait(async()=>(await state()).process.status==='stopped','agent native Stop');
   assert.ok(!(await fs.readdir(fixture.directory)).some(name=>name.startsWith('.faber-safetensors-')));
   const nativeScreenshot=await capture('local-safetensors-ready-stop.png');
   assert.ok(fixture.children.every(child => child.exitCode !== null || child.signalCode));
   assert.ok(!(await fs.readdir(path.join(dataDir, 'local-models'))).some(name => name.endsWith('.key')));
   const report = { ok: true, realRenderer: true, controlledChildProcesses: fixture.children.length, registeredTools: 3, explicitSelection: true, startReadyStop: true, cancelLoading: true, incompatibleError: true, keyFilesRemoved: true, nativePickerStartUseStop:true,nativeChatThroughPrivatePipe:true,nativeAgentTools:true,nativeStagingRemoved:true, readyScreenshot, failureScreenshot,nativeScreenshot };
+  report.nativeSlider=true;report.nativeThreeResourceEstimates=true;report.nativeEffectivePrecision=true;report.fitScreenshot=fitScreenshot;
   const reportPath = path.join(dataDir, 'local-model-smoke-report.json'); await fs.writeFile(reportPath, JSON.stringify(report, null, 2)); return { ...report, reportPath };
 }

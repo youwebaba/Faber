@@ -9,7 +9,7 @@ export async function safetensorsSourceHash(root) {
   const hash=createHash('sha256');for(const name of ['Cargo.toml','Cargo.lock','src/main.rs'])hash.update(`${name}\n${(await fs.readFile(path.join(root,'native-safetensors',name),'utf8')).replaceAll('\r\n','\n')}\n`);return hash.digest('hex');
 }
 export async function verifySafetensorsRuntime(directory,manifest) {
-  if(manifest?.schemaVersion!==1||manifest.protocol!==2||manifest.executable!=='faber-safetensors.exe'||manifest.engineCommit!=='465191d0b0a7e2432d327b0de06204ab3f94d3a2'||!Array.isArray(manifest.files)||!manifest.files.length)throw new Error('Invalid pinned native Safetensors manifest');
+  if(manifest?.schemaVersion!==1||manifest.protocol!==3||manifest.executable!=='faber-safetensors.exe'||manifest.engineCommit!=='465191d0b0a7e2432d327b0de06204ab3f94d3a2'||!Array.isArray(manifest.files)||!manifest.files.length)throw new Error('Invalid pinned native Safetensors manifest');
   const seen=new Set();let executable=false;
   for(const file of manifest.files){
     if(typeof file.path!=='string'||seen.has(file.path.toLowerCase())||!Number.isSafeInteger(file.size)||file.size<0||!/^[a-f0-9]{64}$/.test(file.sha256))throw new Error('Invalid native Safetensors file record');seen.add(file.path.toLowerCase());

@@ -46,11 +46,22 @@ export function createRoutines({state,changed,emit,start,createChat,stopChat,reg
   const actions=job=>jobRuns(job).flatMap(run=>run.toolEvents||[]).filter(event=>event.intent);
   const snapshot=()=>structuredClone({routines:state.routines,jobs:state.jobs,notices:state.scheduler?.notices||[],paused:state.workerQueue.paused,safeMode:host.safeMode===true,tools:[...registry.values()].filter(tool=>!admin.test(tool.name)).map(({name,description,permission})=>({name,description,permission}))});
   async function save(){await changed();emit({type:'routines',state:snapshot()});}
+  function mcpGrants(definition){
+    const bindings={};
+    for(const name of definition.tools){
+      const tool=registry.get(name);
+      if(!tool?.mcpGrant&&!Object.hasOwn(definition.mcpGrants||{},name))continue;
+      if(!tool?.mcpGrant||tool.projectId!==definition.projectId)throw new Error('Reconnect and review the MCP tool for this project.');
+      bindings[name]=tool.mcpGrant;
+    }
+    return bindings;
+  }
   function authority(job){
     const routine=find('routines',job.routineId),project=find('projects',job.definition.projectId),provider=find('providers',job.effectiveConnection?.providerId||job.definition.providerId);
     if(project.archived)throw new Error('Routine project is archived');
     if(routine.revokedAt)throw new Error('Routine authorization was revoked');
     if(job.authorization!==routine.authorization)throw new Error('Routine permissions changed; review and enqueue a new run');
+    if(canonical(mcpGrants(job.definition))!==canonical(job.definition.mcpGrants||{}))throw new Error('An MCP tool or grant changed. Review and save this routine again.');
     if(canonical(job.effectiveConnection?.connection||job.definition.connection)!==canonical(connection(provider)))throw new Error('The selected connection or credentials changed; review and save the routine again');
     if(provider.authKind==='chatgpt'&&provider.connected===false)throw new Error('Reconnect the selected account before resuming this routine');
     return {routine,project,provider};
@@ -103,7 +114,9 @@ export function createRoutines({state,changed,emit,start,createChat,stopChat,reg
     if(!job.definition.tools.includes(tool.name)||admin.test(tool.name))throw new Error('Tool is outside this routine’s approved actions');
     if(tool.name==='agent_read'&&state.runs.find(value=>value.id===args.runId)?.jobId!==job.id)throw new Error('Routine agents can inspect only their own job tree');
     job.step={tool:tool.name,eventId:event.id,startedAt:now()};
-    if(job.preview&&tool.permission!=='read'){
+    const resourceApproved=tool.mcpGrant?.effect==='read'&&job.definition.mcpGrants?.[tool.name]?.revision===tool.mcpGrant.revision;
+    const needsReceipt=tool.permission!=='read'&&!resourceApproved;
+    if(job.preview&&needsReceipt){
       const proposal={id:randomUUID(),tool:tool.name,args:structuredClone(args),permission:tool.permission};job.proposals.push(proposal);await save();
       return {result:{preview:true,executed:false,proposedAction:proposal}};
     }
@@ -116,12 +129,12 @@ export function createRoutines({state,changed,emit,start,createChat,stopChat,reg
     }
     job.status='running';
     const key=digest(canonical({name:tool.name,args}));
-    if(tool.permission!=='read'){
+    if(needsReceipt){
       const previous=actions(job).find(action=>action!==event&&action.intent.key===key&&['received','reconciled','reused','operator_verified'].includes(action.intent.phase)&&action.intent.receipt?.verified);
       if(previous){event.intent={id:randomUUID(),key,phase:'reused',receipt:structuredClone(previous.intent.receipt)};await save();return {result:structuredClone(previous.intent.receipt.result)};}
       event.intent={id:randomUUID(),key,phase:'prepared',permission:tool.permission,createdAt:now()};await save();
     }
-    return {forceApproval:['shell','computer','upgrade','network'].includes(tool.permission)||/send|purchase|delete|remove|append/i.test(tool.name)};
+    return {resourceApproved,forceApproval:!resourceApproved&&(['shell','computer','upgrade','network'].includes(tool.permission)||/send|purchase|delete|remove|append/i.test(tool.name))};
   }
   async function dispatchTool(run,event){if(!run.jobId)return;authority(find('jobs',run.jobId));if(event.intent){event.intent.phase='dispatching';event.intent.dispatchedAt=now();await save();}}
   async function toolReceipt(run,event,result,error){
@@ -232,6 +245,7 @@ export function createRoutines({state,changed,emit,start,createChat,stopChat,reg
       if(args.fileTrigger){validate(args.fileTrigger,fileTriggerSchema);const target=await containedPath(project.path,args.fileTrigger.directory);if(!await scope(args,target))throw new Error('Watched folder must be inside the routine’s approved project paths');for(const value of args.fileTrigger.excludePaths)await containedPath(project.path,value,{missing:true});}
       if(args.report){new Intl.DateTimeFormat('en',{timeZone:args.report.timeZone});if(!args.tools.includes('folder_report'))throw new Error('Folder report routines must approve folder_report');for(const name of [args.report.inputDirectory,args.report.outputDirectory]){const target=await containedPath(project.path,name,{missing:true});if(!await scope(args,target))throw new Error('Report folders must be inside the approved routine paths');}}
       let routine=args.id&&find('routines',args.id);const definition=structuredClone(args);delete definition.id;definition.connection=connection(provider);definition.limits??=structuredClone(defaultWorkLimits);
+      const bindings=mcpGrants(definition);if(Object.keys(bindings).length)definition.mcpGrants=structuredClone(bindings);
       if(!routine){routine={id:randomUUID(),revision:0,revisions:[],enabled:false,authorization:randomUUID(),createdAt:now()};state.routines.push(routine);}
       routine.revision++;routine.definition=definition;routine.revisions.push({revision:routine.revision,definition:structuredClone(definition),createdAt:now()});routine.enabled=false;routine.updatedAt=now();delete routine.revokedAt;
       await save();return structuredClone(routine);

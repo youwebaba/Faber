@@ -18,6 +18,21 @@ async function fixture(t,provider,host={}){
 const writing=async function*({messages}){if(messages.at(-1)?.role==='tool')yield {type:'delta',text:'Report written.'};else yield {type:'tool',id:'write-'+messages.length,name:'files_write',args:{path:'report.txt',text:'one report'}};};
 const jobState=async(runtime,id)=> (await runtime.request('routines.state')).jobs.find(job=>job.id===id);
 
+test('a routine binds a reviewed read-only MCP tool to its project and the exact grant',async t=>{
+  let reads=0;
+  const name='mcp_fixture_read',provider=async function*({messages}){if(messages.at(-1)?.role==='tool')yield {type:'delta',text:'Verified.'};else yield {type:'tool',id:'read',name,args:{}};};
+  const f=await fixture(t,provider);
+  const tool={name,parameters:{type:'object',properties:{},additionalProperties:false},permission:'network',description:'Read fixture',projectId:f.definition.projectId,execute:async()=>{reads++;return {value:'marker'};}};
+  const publish=revision=>f.runtime.replaceConnectorTools([{...tool,mcpGrant:{fingerprint:'v1',revision,effect:'read'}}]);publish('original');
+  const routine=await f.runtime.request('routines.save',{...f.definition,tools:[name],grants:[]});await f.runtime.request('routines.enable',{id:routine.id,enabled:true});
+  const job=await f.runtime.request('routines.run',{id:routine.id});await until(async()=>(await jobState(f.runtime,job.id)).status==='completed');assert.equal(reads,1);
+  const project=await f.runtime.request('project.create',{name:'Other project',path:f.sourceDir});
+  await assert.rejects(f.runtime.request('routines.save',{...f.definition,projectId:project.id,tools:[name]}),/this project/);
+  publish('reapproved');const changed=await f.runtime.request('routines.run',{id:routine.id});
+  await until(async()=>(await jobState(f.runtime,changed.id)).status==='needs_attention');
+  assert.match((await jobState(f.runtime,changed.id)).reason,/MCP tool or grant changed/);assert.equal(reads,1);
+});
+
 test('manual routine records an immutable revision, action intent and verified receipt',async t=>{
   const f=await fixture(t,writing),routine=await f.routine(),job=await f.runtime.request('routines.run',{id:routine.id,inputs:'fixed input snapshot'});
   const finished=await until(async()=>{const row=await jobState(f.runtime,job.id);return row.status==='completed'&&row;});

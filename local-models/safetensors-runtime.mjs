@@ -31,16 +31,16 @@ export async function inspectSafetensorsPackage(directory, model) {
   const files = [...new Set([...model.files, ...(model.supportFiles || [])])];
   const tokenizer = folder === '.' ? 'tokenizer.json' : `${folder}/tokenizer.json`;
   if (!files.includes(tokenizer)) throw new Error('This native chat runtime requires tokenizer.json beside config.json and the weights. Download a complete language-model package.');
-  return { folder, files: files.filter(file => folder === '.' ? !file.includes('/') || /^(?:tokenizer|processor)\//.test(file) : file.startsWith(`${folder}/`)), architecture: data.model_type };
+  return { folder,layers:data.num_hidden_layers, files: files.filter(file => folder === '.' ? !file.includes('/') || /^(?:tokenizer|processor)\//.test(file) : file.startsWith(`${folder}/`)), architecture: data.model_type };
 }
 
 export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl = fetch, verifyImpl } = {}) {
   const candidate = executable || fileURLToPath(new URL('../.runtime/safetensors-runtime/faber-safetensors.exe', import.meta.url));
-  let installed = false, reason = 'The native Safetensors CPU runtime is unavailable. Install or repair the full Faber Windows application, or choose a compatible GGUF/external connection.';
-  const verify=async()=>{await noLinks(candidate);if(verifyImpl)return verifyImpl(candidate);const manifest=JSON.parse(await fs.readFile(new URL('../build/safetensors-runtime-lock.json',import.meta.url),'utf8'));return verifySafetensorsRuntime(path.dirname(candidate),manifest);};
+  let installed = false,payloadId, reason = 'The native Safetensors CPU runtime is unavailable. Install or repair the full Faber Windows application, or choose a compatible GGUF/external connection.';
+  const verify=async()=>{await noLinks(candidate);if(verifyImpl)return verifyImpl(candidate);const manifest=JSON.parse(await fs.readFile(new URL('../build/safetensors-runtime-lock.json',import.meta.url),'utf8'));await verifySafetensorsRuntime(path.dirname(candidate),manifest);payloadId=manifest.sourceHash;return true;};
   try {if(await verify())installed=true;else reason='The native Safetensors runtime failed its pinned integrity check. Repair Faber before starting this model.';}catch(error){if(error.code!=='ENOENT')reason=`Native Safetensors runtime unavailable: ${error.message}`;}
   return {
-    status: { available: installed, backend: 'cpu', runtime: 'mistralrs', version: '0.9.5',quantizationModes:['none','q4_0','q8_0'], ...(!installed ? { reason } : {}) },
+    status: { available: installed,payloadId, backend: 'cpu', runtime: 'mistralrs', version: '0.9.5',quantizationModes:['none','q4_0','q5_0','q8_0','mixed_q4_q8'],unsupportedQuantization:[{mode:'q10_0',reason:'The pinned CPU library has no native 10-bit codec. Q5_0 and mixed Q4/Q8 are qualified alternatives.'}], ...(!installed ? { reason } : {}) },
     async describe(directory, model) {
       if (!model.complete) return model;
       try { const info = await inspectSafetensorsPackage(directory, model); return { ...model, available: installed, runtime: 'mistralrs', architecture: info.architecture, reason: installed ? undefined : reason }; }
@@ -52,6 +52,7 @@ export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl 
       if (contextTokens !== null) throw new Error('This native Safetensors CPU loader currently supports Default context only. Select Default and start again, or use a configurable GGUF/external runtime.');
       if (configuration.mode === 'custom' || configuration.cpuIds.length || !configuration.memoryMap) throw new Error('This native CPU loader supports Automatic/CPU mode with automatic cores and disk-backed memory enabled. Change hardware settings before starting, or use GGUF for custom placement.');
       const info = await inspectSafetensorsPackage(directory, model), parent = await outputPath(directory, info.folder === '.' ? path.posix.basename(model.files[0]) : info.folder + '/config.json');
+      if(operation.quantization?.mode==='mixed_q4_q8'&&(!Number.isSafeInteger(info.layers)||info.layers<2||info.layers>8192))throw new Error('Mixed Q4/Q8 requires a supported decoder layer count. Choose another load profile.');
       const stage = await fs.mkdtemp(path.join(path.dirname(parent), '.faber-safetensors-'));
       const quantization=nativeQuantization(operation.quantization);
       let proxy;const transport=createSafetensorsTransport({quantization});
@@ -76,7 +77,7 @@ export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl 
         const env = { ...process.env, HF_HUB_OFFLINE: '1', HF_HOME: path.join(dataDir, 'local-models', 'offline-cache') };
         for (const name of Object.keys(env)) if (/^(?:HF_TOKEN|HUGGING_FACE_HUB_TOKEN|HUGGINGFACE_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|MISTRALRS_.*|MCP_CONFIG_PATH|RAYON_NUM_THREADS)$/i.test(name)) delete env[name];
         if (configuration.threads) env.RAYON_NUM_THREADS = String(configuration.threads);
-        return { executable: candidate, env, args: [stage,JSON.stringify(quantization)], baseUrl: proxy.baseUrl, attach:transport.attach,observed:transport.observed, close };
+        return { executable: candidate, env, args: [stage,JSON.stringify(quantization)], baseUrl: proxy.baseUrl, attach:transport.attach,observed:()=>({...transport.observed(),payloadId}), close };
       } catch (error) { await close(); if (error.code === 'EPERM' || error.code === 'ENOTSUP') throw new Error('This model drive cannot create safe native package hardlinks. Move the package to NTFS or use a compatible external runtime.'); throw error; }
     },
   };

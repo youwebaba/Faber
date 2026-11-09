@@ -12,12 +12,12 @@ import {safetensorsDigest} from '../local-models/safetensors-integrity.mjs';
 const directory=process.env.FABER_SAFETENSORS_MODEL_DIRECTORY;
 const quantization={mode:process.env.FABER_SAFETENSORS_QUANTIZATION||'none'};
 if(!directory||!path.isAbsolute(directory))throw new Error('Set FABER_SAFETENSORS_MODEL_DIRECTORY to an absolute complete local model package');
-const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-safetensors-managed-')),secrets=new Map(),children=[];
+const dataDir=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-safetensors-managed-')),secrets=new Map(),children=[],executables=[];
 let localModels;
 const runtime=await createRuntime({dataDir,sourceDir:path.resolve(import.meta.dirname,'..'),host:{getSecret:async id=>secrets.get(id),setSecret:async(id,value)=>secrets.set(id,value),assertProviderAvailable:(...args)=>localModels?.assertProviderAvailable(...args),providerControls:(...args)=>localModels?.providerControls(...args),modelDisplayName:(...args)=>localModels?.modelDisplayName(...args)}});
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try{
-  localModels=await createLocalModels({dataDir,runtime,getHubState:async()=>({downloadDirectory:directory,downloads:[]}),emit:event=>runtime.emit(event),pollMs:50,loadTimeoutMs:120000,spawnImpl:(executable,args,options)=>{assert.equal(args.length,2,'Native worker receives only a local directory and strict load profile');assert.deepEqual(JSON.parse(args[1]),quantization);assert.equal(options.stdio[0],'pipe');const child=spawn(executable,args,options);children.push(child);return child;}});
+  localModels=await createLocalModels({dataDir,runtime,getHubState:async()=>({downloadDirectory:directory,downloads:[]}),emit:event=>runtime.emit(event),pollMs:50,loadTimeoutMs:120000,spawnImpl:(executable,args,options)=>{assert.equal(args.length,2,'Native worker receives only a local directory and strict load profile');assert.deepEqual(JSON.parse(args[1]),quantization);assert.equal(options.stdio[0],'pipe');const child=spawn(executable,args,options);children.push(child);executables.push(executable);return child;}});
   runtime.registerTools(localModels.tools());
   const project=await runtime.request('project.create',{name:'Native acceptance',path:dataDir}),chat=await runtime.request('chat.create',{projectId:project.id,title:'Native acceptance'});
   await runtime.request('chat.update',{id:chat.id,grants:['computer']});
@@ -28,6 +28,9 @@ try{
   for(let count=0;count<1200;count++){ready=await localModels.request('localModels.list');if(ready.process.status==='ready')break;if(ready.process.status==='failed')throw new Error(ready.process.error);await pause(100);}
   assert.equal(ready.process.status,'ready');assert.equal(ready.process.observed.backend,'cpu');
   assert.deepEqual(ready.process.quantization,quantization);assert.equal(ready.process.observed.quantization.accepted,true);assert.deepEqual(ready.models.find(item=>item.id===model.id).quantization,quantization);
+  const precision=ready.process.observed.precision;assert.equal(precision.verified,true);assert.ok(precision.parameters>0&&precision.effectiveBitsPerParameter>0);
+  const expected=quantization.mode==='mixed_q4_q8'?['q4_0','q8_0']:quantization.mode==='none'?['f32']:[quantization.mode];for(const format of expected)assert.ok(precision.formats[format]>0,'Actual native format must be verified: '+format);
+  assert.deepEqual(ready.models.find(item=>item.id===model.id).effectivePrecision.precision,precision);
   assert.equal((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).providerId,chat.providerId,'Start must preserve explicit chat selection');
   const provider=(await runtime.request('state.get')).providers.find(item=>item.id===ready.process.providerId),key=secrets.get(provider.id),base=provider.baseUrl.replace(/\/v1$/,'');assert.equal(new URL(base).hostname,'127.0.0.1');
   const headers={Authorization:`Bearer ${key}`,'Content-Type':'application/json'};
@@ -48,6 +51,6 @@ try{
   await assert.rejects(fetch(`${base}/v1/models`,{headers}));assert.ok(!(await fs.readdir(directory)).some(name=>name.startsWith('.faber-safetensors-')));
   assert.ok(!(await fs.readdir(path.join(dataDir,'local-models'))).some(name=>name.endsWith('.key')));
   assert.deepEqual(await Promise.all(model.files.map(file=>safetensorsDigest(path.join(directory,file)))),before,'Original weights must stay byte-exact');
-  const report={ok:true,kind:'real-private-native-worker',quantization,originalWeightsUnchanged:true,cpu:true,registeredToolStartStop:true,explicitChatSelectionPreserved:true,authenticatedEndpoint:true,browserOriginRejected:true,privilegedRoutesAbsent:true,realCompletions:true,realStreaming:true,cancelAndReuse:true,workerHasNoListener,processStopped:true,stagingRemoved:true,keyFilesRemoved:true,limits:['Acceptance establishes runtime operation, not production model quality or GPU compatibility; layer precision may differ from requested mode']};
+  const report={ok:true,kind:'real-private-native-worker',nativeExecutableSha256:await safetensorsDigest(executables[0]),quantization,effectivePrecision:precision,originalWeightsUnchanged:true,cpu:true,registeredToolStartStop:true,explicitChatSelectionPreserved:true,authenticatedEndpoint:true,browserOriginRejected:true,privilegedRoutesAbsent:true,realCompletions:true,realStreaming:true,cancelAndReuse:true,workerHasNoListener,processStopped:true,stagingRemoved:true,keyFilesRemoved:true,limits:['Acceptance establishes runtime operation, not production model quality or GPU compatibility; layer precision may differ from requested mode']};
   await fs.writeFile(path.join(dataDir,'safetensors-managed-report.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({...report,reportDirectory:dataDir}));
 }finally{await localModels?.close();await runtime.close();}

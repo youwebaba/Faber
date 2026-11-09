@@ -5,6 +5,20 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.8
+
+The independent MCP reference filesystem server returned the selected disposable file over stdio and authenticated Streamable HTTP. A real local Qwen run selected the permitted MCP read tool. The Windows Excel check changed two cells, reopened the workbook, verified the calculated dependent formula and retained the chart and other worksheet. Repeating the same edit left the bytes intact.
+
+The Windows Settings test saved a project-scoped authenticated HTTP connection, discovered its tools, granted a read tool, revoked it, disabled the server and removed the connection through the normal desktop controls.
+
+Qwen also retrieved the reference marker through an independent Ollama native API connection. The provider test found that a local server could still be evaluating a prompt when the 30-second HTTP response-header timer expired. With the correction, the same delayed loopback request completed in 31.52 seconds. The preceding code canceled it after 30.02 seconds. Stop and the configured run deadline still apply to local inference.
+
+The corrected native Ollama API route also passed on an RTX 5070. Faber preloaded the model through its registered local start tool, the chat read the permitted marker and returned it in its answer, and the owned server unloaded the model. Ollama reported 730,930,871 bytes of model memory in VRAM at an 8,192-token context. This result uses the GGUF/Ollama backend. The a2.8 native Safetensors backend runs on CPU.
+
+The remote media fixture canceled an in-flight transfer during a pinned TLS handshake. a2.7 could open an Electron exception dialog during this cancellation. The a2.8 transport rejects the request once and closes its socket. Eight competing socket closes released every slot, and the full encrypted Electron preview, reconnect, revoke and teardown test passed.
+
+On a disposable 3,000-message history, five background changes produced **20 full history copies in a2.4 and zero in a2.8** for filtered lifecycle subscribers. A hundred cookie changes plus shutdown produced 101 encrypted-write callbacks in a2.4 and one in a2.8. Reading 100 authorized 1 KiB chunks three times took 3.95–7.98 seconds in a2.4 and 0.097–0.120 seconds in a2.8. Each asynchronous read still checked attachment ownership twice. One cancellation reached its provider in 7.76 ms and 0.18 ms respectively. These figures measure the fixture on one PC.
+
 ## a2.7
 
 A Windows CPU Qwen run processed ten files while the interface was closed. Nine received model summaries and the invalid UTF-8 input received an explicit exception. A duplicate trigger produced one report. After a worker crash, the resumed job reused its two saved summaries. [Scheduling and recovery](docs/a2.7-scheduler-verification.md)

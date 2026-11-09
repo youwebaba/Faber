@@ -98,17 +98,28 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   state.approvals = [];
   await store.save(state);
-  const registry = new Map(), extensionNames = new Set(), listeners = new Map(), live = new Map(), pending = new Map(), settling=new Set();
+  const registry = new Map(), extensionNames = new Set(), connectorNames = new Set(), listeners = new Map(), live = new Map(), pending = new Map(), settling=new Set();
+  const projectTools = projectId => [...registry.values()].filter(tool => !tool.projectId || tool.projectId === projectId);
   const providerEdits = new Set(), providerTests = new Map();
   const chatLocks=new Set();
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
   const routines=createRoutines({state,changed,emit,start,createChat,stopChat:chatId=>stopChats(chatTree(chatId),true),registry,host,dataDir,steer:(job,args)=>request('chat.steer',{chatId:job.chatId,runId:job.runId,text:args.text,correctionId:args.correctionId})});
   const recentErrors = [];
   let closed = false;
+  const mediaOwners=new Map();
+  let mediaRevision=-1;
   const mediaStore = createMediaStore({ dataDir, assertAnnotations(chatId) { const chat=state.chats.find(chat=>chat.id===chatId);if(closed||!chat||chat.archived||chat.externalSessionId||state.projects.find(project=>project.id===chat.projectId)?.archived)throw new Error('This chat is read-only'); }, findReference(chatId,mediaId) {
-    const chat = state.chats.find(chat => chat.id === chatId);
-    const sources = [...(chat?.messages || []), ...state.runs.filter(run => run.chatId === chatId).flatMap(run => run.toolEvents)];
-    const media = chat && sources.flatMap(mediaReferenceTree).find(media => media.id === mediaId);
+    if(mediaRevision!==stateRevision){mediaOwners.clear();mediaRevision=stateRevision;}
+    if(!mediaOwners.has(chatId)){
+      const chat=state.chats.find(item=>item.id===chatId),refs=new Map();
+      if(chat){
+        const add=source=>{for(const ref of mediaReferenceTree(source))if(!refs.has(ref.id))refs.set(ref.id,ref);};
+        for(const message of chat.messages)add(message);
+        for(const run of state.runs)if(run.chatId===chatId)for(const event of run.toolEvents)add(event);
+        mediaOwners.set(chatId,refs);
+      }
+    }
+    const media=mediaOwners.get(chatId)?.get(mediaId);
     if (!media) throw new Error('Media is no longer available for this chat');
     return media;
   } });
@@ -340,6 +351,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   async function executeTool(run, name, args, origin = {}) {
     const tool = registry.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
+    if (tool.projectId && tool.projectId !== find('chats', run.chatId).projectId) throw new Error('This connector tool is outside the current project');
     validate(args, tool.parameters);
     const execution = live.get(run.id), signal = execution.controller.signal;
     signal.throwIfAborted(); assertRunAuthority(run);
@@ -353,7 +365,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     try {
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
       const policy=await routines.prepareTool(run,tool,args,event,signal);
-      if (!Object.hasOwn(policy,'result')&&(execution.externalSessionId || run.jobId || host.isAutomaticTool?.(tool, tool.permission) !== true)) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`,policy.forceApproval);
+      if (!Object.hasOwn(policy,'result')&&!policy.resourceApproved&&(execution.externalSessionId || run.jobId || tool.alwaysAsk || host.isAutomaticTool?.(tool, tool.permission) !== true)) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`,policy.forceApproval || tool.alwaysAsk);
       signal.throwIfAborted();
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
       if(!Object.hasOwn(policy,'result'))await routines.dispatchTool(run,event);
@@ -510,7 +522,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const configuration = { ...find('providers', run.providerId), model: run.model, chatOptions: run.chatOptions };
     if (!configuration.model) throw new Error('Select a model in provider settings');
     let estimateScale = 1;
-    const tools = () => [...registry.values()].filter(tool=>!run.jobId||state.jobs.find(job=>job.id===run.jobId)?.definition.tools.includes(tool.name)).map(toolMetadata);
+    const tools = () => projectTools(chat.projectId).filter(tool=>!run.jobId||state.jobs.find(job=>job.id===run.jobId)?.definition.tools.includes(tool.name)).map(toolMetadata);
     const estimate = (messages, withTools = true) => Math.ceil(estimateInputTokens(providerBody({ provider: configuration, messages, tools: withTools ? tools() : [] })) * (withTools ? estimateScale : 1));
     async function compact(force = false) {
       const full = contextMessages(chat, configuration, run.systemPrompt, true);
@@ -739,13 +751,13 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     chat.reasoningEffort = parent?.reasoningEffort ?? null;
     state.chats.push(chat); await changed(); return chat;
   }
-  function install(tools, replace = false) {
+  function install(tools, group) {
     if (!Array.isArray(tools)) throw new Error('Tools must be an array');
     const next = new Map(registry);
-    if (replace) for (const name of extensionNames) next.delete(name);
+    if (group) for (const name of group) next.delete(name);
     for (const tool of tools) { checkTool(tool); if (next.has(tool.name)) throw new Error(`Duplicate tool: ${tool.name}`); next.set(tool.name, { ...tool, parameters: structuredClone(tool.parameters) }); }
     registry.clear(); for (const [name, tool] of next) registry.set(name, tool);
-    if (replace) { extensionNames.clear(); tools.forEach(tool => extensionNames.add(tool.name)); }
+    if (group) { group.clear(); tools.forEach(tool => group.add(tool.name)); }
     stateRevision++;
     refreshUsage(); emit({ type: 'state' });
   }
@@ -828,7 +840,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       }
       case 'chat.controls':{
         const chat=find('chats',params.chatId),selected=controls(chat,false),connection=find('providers',chat.providerId),provider={...connection,model:chat.model||connection.model};
-        const estimatedTokens=estimateInputTokens(providerBody({provider,messages:contextMessages(chat,provider),tools:[...registry.values()].map(toolMetadata)}));
+        const estimatedTokens=estimateInputTokens(providerBody({provider,messages:contextMessages(chat,provider),tools:projectTools(chat.projectId).map(toolMetadata)}));
         return {...selected,context:{...selected.context,estimatedTokens,estimateBasis}};
       }
       case 'chat.compact': {
@@ -998,6 +1010,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     readMedia, mediaNotes,
     publishMedia(args) { if (closed || !state.chats.some(chat => chat.id === args.chatId)) throw new Error('Chat no longer exists'); return mediaStore.publish(args); },
     registerTools(tools) { install(tools); },
+    replaceConnectorTools(tools) { install(tools, connectorNames); },
     startRoutines:()=>routines.ready(),
     async withExternalProvider({ providerId, model }, callback) {
       if (closed) throw new Error('Runtime is closed');
@@ -1067,7 +1080,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       await changed(); return incoming;
     },
     async setExtensions(metadata) { state.extensions = structuredClone(metadata); await changed(); },
-    async replaceExtensionTools(tools, metadata) { const copy = structuredClone(metadata); install(tools, true); state.extensions = copy; await changed(); },
+    async replaceExtensionTools(tools, metadata) { const copy = structuredClone(metadata); install(tools, extensionNames); state.extensions = copy; await changed(); },
     async close() { if (closed) return; closed = true; const closingRoutines = routines.close(); remoteWorkspace.close(); const done = [...settling]; await stopRuns(new Set(live.keys())); await Promise.all([...done, closingRoutines]); await store.flush(); listeners.clear(); },
   };
   const builtin = (name, description, parameters, execute) => ({ name, description, parameters, permission: 'read', execute });
@@ -1142,7 +1155,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       await approveProject(find('runs', ctx.runId), { name: args.name, path: resolve(args.path) }, `Create project ${args.name} at ${resolve(args.path)}`);
       return request('project.create', args);
     }),
-    builtin('harness_inspect', 'Inspect harness source, providers, settings and tool names/permissions. Full tool schemas are already supplied to the model. Never returns credentials.', object({}), () => ({ sourceDir, version: 1, settings: settingsSnapshot(), providers: structuredClone(state.providers), tools: [...registry.values()].map(({ name, permission }) => ({ name, permission })), extensions: structuredClone(state.extensions) })),
+    builtin('harness_inspect', 'Inspect harness source, providers, settings and tool names/permissions. Full tool schemas are already supplied to the model. Never returns credentials.', object({}), (_args,ctx) => ({ sourceDir, version: 1, settings: settingsSnapshot(), providers: structuredClone(state.providers), tools: projectTools(ctx.project.id).map(({ name, permission }) => ({ name, permission })), extensions: structuredClone(state.extensions) })),
     builtin('settings_update', 'Adjust the theme or bounded execution settings. Does not grant permissions or change defaults for future chats.', agentSettingsSchema, args => request('settings.update', args)),
     builtin('chat_configure', 'Configure this chat model/provider, supported context capacity and thinking, or voice preferences for future runs. Context settings are provider parameters, never history trimming. Cannot grant permissions or save credentials.', object({ providerId: idSchema, model: { type: 'string', maxLength: 300 },contextTokens:contextTokensSchema,thinking:thinkingSchema, voice: schemas['chat.update'].properties.voice }, []), async (args, ctx) => {
       if (args.providerId) {
