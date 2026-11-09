@@ -18,7 +18,7 @@ export function runTimeoutChoice(mode, minutes) {
 }
 
 export function createPreferences({ workspaceControls, remoteConnections, request, refresh, getState, getChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors, showOpenAI }) {
-  const categories = [['ui', 'UI'], ['permissions', 'Permissions'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['profiles', 'Profiles'], ['external', 'External access'], ['about', 'About & support']];
+  const categories = [['ui', 'UI'], ['permissions', 'Permissions'], ['prompts', 'System prompts'], ['connections', 'Connections'], ['models', 'Models & hardware'], ['voice', 'Voice'], ['addons', 'Addons'], ['upgrades', 'Applied upgrades'], ['profiles', 'Profiles'], ['external', 'External access'], ['about', 'About & support']];
   function createPromptChoice() {
     const chat = getChat(), presets = getState().promptPresets || [];
     const choice = selectField('System prompt for this chat', [...(chat ? [{ value: '__current__', label: `Keep current · ${presets.find(item => item.id === chat.systemPromptPresetId)?.name || 'Custom'}` }] : []), ...presets.map(item => ({ value: item.id, label: item.name }))], chat ? '__current__' : 'general');
@@ -79,6 +79,22 @@ export function createPreferences({ workspaceControls, remoteConnections, reques
       pane.append(el('h3', '', 'Local hardware'), el('p', 'hint', 'Before starting a local model, select the CPU and GPUs you want it to use. Check disk offloading in its hardware settings if you want to allow memory-mapped model files.'), button('Choose hardware & local model', showHardware)); modelsBrowser.mountSettings(pane);
     } else if (category === 'voice') {
       pane.append(el('h3', '', 'Voice'), el('p', 'hint', 'Activation phrases and spoken replies are set per chat. Use Dictate to add speech to your draft, or Start assistant to listen for the chat’s activation phrase.'), button('Voice controls for this chat', showVoice));
+    } else if (category === 'upgrades') {
+      pane.append(el('h3', '', 'Applied upgrades'));
+      void request('upgrades.list').then(rows => {
+        if (!pane.isConnected) return;
+        if (!rows.length) pane.append(el('p', 'hint', 'No applied self-upgrades are recorded in this profile.'));
+        for (const row of rows) {
+          const details=el('details','upgrade-record'), title=el('summary','',row.title);
+          details.append(title,el('p','hint',`ID ${row.id}`));
+          const status=row.status==='rolledBack'?'Rolled back':row.status==='applying'?'Activation interrupted':'Applied';
+          details.append(el('p','',status+(row.appliedAt?' · '+new Date(row.appliedAt).toLocaleString():'')));
+          details.append(el('p','hint',row.verifiedAt?`Tests passed ${new Date(row.verifiedAt).toLocaleString()}.`:'This earlier record has no verification timestamp.'));
+          const files=el('ul',''); for (const name of row.files) files.append(el('li','',name)); details.append(files);
+          if(row.canRollback)details.append(el('p','hint','This is the latest applied upgrade for this workbench. Ask Faber to roll it back.'));
+          pane.append(details);
+        }
+      }).catch(error=>{if(pane.isConnected)pane.append(el('p','error-text',error.message));});
     } else if (category === 'addons') {
       pane.append(el('h3', '', 'Local addons'), el('p', 'hint', 'Enable, disable, or remove addons installed on this computer.'), button('Manage addons', () => addonManager.show()));
     } else if (category === 'profiles' || category === 'external') {

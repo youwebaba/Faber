@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {containedPath} from '../tools/files.mjs';
 import {runProcess} from '../tools/process.mjs';
-import {validUpgradePath,atomicWrite,writeRecoveryRecord,readRecoveryRecord,restoreUpgrade,recoveryProfilePath} from './recovery.mjs';
+import {validUpgradePath,atomicWrite,writeRecoveryRecord,readRecoveryRecord,restoreUpgrade,recoveryProfilePath,appliedUpgrades} from './recovery.mjs';
 import {buildNative} from '../native/build.mjs';
 import {parseNativeManifest,verifyNativeRuntime} from '../native/integrity.mjs';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -136,9 +136,11 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       stages.clear();
       await expireStages();
     },
+    list(){return appliedUpgrades(dataDir,sourceDir);},
     backupCore(reason='shell',signal){return coreSnapshot(reason,signal);},
-    async stage(changes,signal){
+    async stage(changes,signal,title){
       signal?.throwIfAborted();
+      if(title!==undefined&&(typeof title!=='string'||!title.trim()||title.length>160))throw new Error('Use an upgrade title of 1 to 160 characters');
       if(!Array.isArray(changes)||!changes.length||changes.length>100)throw new Error('Provide 1–100 changed files');
       const seen=new Set();
       for(const item of changes){if(!validUpgradePath(item.path)||seen.has(item.path)||typeof item.content!=='string'||item.content.length>2*1024*1024)throw new Error('Invalid upgrade path/content; recovery, package and dependencies are protected');seen.add(item.path);}
@@ -170,7 +172,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
           files.push({path:item.path,digest:hash(item.content),base:original===null?null:hash(original)});
         }
         const snapshot=new Map();for(const relative of await inventory(directory))snapshot.set(relative,hash(await fs.readFile(path.join(directory,relative))));
-        signal?.throwIfAborted();stages.set(id,{id,directory,files,snapshot,baseline,hasNative,needsNative,nativeBuilt:false,verified:false});
+        signal?.throwIfAborted();stages.set(id,{id,title:title?.trim(),directory,files,snapshot,baseline,hasNative,needsNative,nativeBuilt:false,verified:false});
         return {id,files:files.map(f=>({path:f.path,sha256:f.digest})),status:'staged',message:'Staged only. Verify, then explicitly apply. Stages expire when this app closes.'};
       }catch(error){await removeScratch(id,'stage');throw error;}
     },
@@ -197,6 +199,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       const env={...process.env,ELECTRON_RUN_AS_NODE:'1'};delete env.NODE_TEST_CONTEXT;
       const result=await runner(process.execPath,['--test',...tests],{cwd:stage.directory,signal,timeout:120000,env});
       await verifyIntegrity(stage);stage.verified=result.code===0;
+      stage.verifiedAt=stage.verified?new Date().toISOString():null;
       return {id,verified:stage.verified,...result,...(compiled?{stdout:[compiled.stdout,result.stdout].filter(Boolean).join('\n'),stderr:[compiled.stderr,result.stderr].filter(Boolean).join('\n')}: {})};
     },
     async apply(id,signal){
@@ -209,7 +212,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       for(const file of stage.files){const bytes=await readOrNull(await containedPath(sourceDir,file.path,{missing:true}));if((bytes===null?null:hash(bytes))!==file.base)throw new Error(`Source changed during backup: ${file.path}`);}
       const {backupDir}=await coreSnapshot('upgrade',signal,{id:stage.id,reuse:false});
       if(stage.nativeBuilt){signal?.throwIfAborted();await publishNativeBinary(sourceDir,await verifyNativeRuntime(stage.directory));}
-      const record={version:stage.nativeBuilt?2:1,id,sourceDir,files:stage.files,status:'applying'};
+      const record={version:stage.nativeBuilt?2:1,id,sourceDir,files:stage.files,status:'applying',title:stage.title,verifiedAt:stage.verifiedAt,appliedAt:new Date().toISOString()};
       signal?.throwIfAborted();await writeRecoveryRecord(dataDir,record);
       try{for(const file of stage.files){signal?.throwIfAborted();const target=await containedPath(sourceDir,file.path,{missing:true});const bytes=await fs.readFile(path.join(stage.directory,file.path));if(hash(bytes)!==file.digest)throw new Error(`Stage changed during activation: ${file.path}`);signal?.throwIfAborted();await atomicWrite(target,bytes);}signal?.throwIfAborted();await writeRecoveryRecord(dataDir,{...record,status:'applied'});}
       catch(error){await restoreUpgrade({dataDir,sourceDir,record});throw error;}
@@ -230,7 +233,8 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
   return {activationStatus:async()=>activationStatus(),...Object.fromEntries(Object.entries(api).map(([name,method])=>[name,(...args)=>{const result=queue.catch(()=>{}).then(async()=>{if(name==='apply'||name==='rollback')mutating=true;try{return await method.apply(api,args);}finally{mutating=false;}});queue=result;return result;} ]))};
 }
 export function upgradeTools(manager){return [
-  {name:'upgrade_stage',description:'Stage source changes separately. Allowed source/test files only; recovery, dependencies and user data are protected.',permission:'upgrade',parameters:{type:'object',properties:{changes:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}},required:['changes'],additionalProperties:false},execute:(args,ctx)=>manager.stage(args.changes,ctx.signal)},
+  {name:'upgrade_list',description:'List applied self-upgrades, their titles, changed files, verification and rollback availability.',permission:'read',parameters:{type:'object',properties:{},additionalProperties:false},execute:()=>manager.list()},
+  {name:'upgrade_stage',description:'Stage source changes with a short feature title for Settings → Upgrades. Allowed source/test files only.',permission:'upgrade',parameters:{type:'object',properties:{title:{type:'string',minLength:1,maxLength:160},changes:{type:'array',items:{type:'object',properties:{path:{type:'string'},content:{type:'string'}},required:['path','content'],additionalProperties:false}}},required:['changes'],additionalProperties:false},execute:(args,ctx)=>manager.stage(args.changes,ctx.signal,args.title)},
   ...['verify','apply'].map(action=>({name:`upgrade_${action}`,description:action==='verify'?'Compile and test staged Rust changes when present, then run the staged Node test suite; reject tampered stages.':'Apply a verified upgrade after native confirmation, with backups. UI-only changes request a UI refresh; backend/mixed changes require restart. Returns pending activation status, never restarts automatically.',permission:'upgrade',parameters:{type:'object',properties:{id:{type:'string'}},required:['id'],additionalProperties:false},execute:(args,ctx)=>manager[action](args.id,ctx.signal)})),
   {name:'upgrade_rollback',description:'Roll back the last saved upgrade after native confirmation, including after restart.',permission:'upgrade',parameters:{type:'object',properties:{},additionalProperties:false},execute:(args,ctx)=>manager.rollback(ctx.signal)}
 ];}

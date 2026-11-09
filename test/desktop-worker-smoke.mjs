@@ -1,0 +1,81 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {BrowserWindow} from 'electron';
+import {fileTools} from '../tools/files.mjs';
+
+const writes=[],pending=[];
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const crashBefore=process.argv.includes('--worker-crash-before'),crashAfter=process.argv.includes('--worker-crash-after'),crashExternal=process.argv.includes('--worker-crash-external');
+export async function* workerProvider({messages}){
+  if(messages.at(-1)?.role==='tool'){yield {type:'delta',text:'Controlled worker fixture completed.'};return;}
+  const task=messages.findLast(message=>message.role==='user')?.content||'';
+  const name=crashBefore||crashAfter?'files_write':crashExternal?'fixture_external_effect':'fixture_hold_write';
+  yield {type:'tool',id:'fixture-'+messages.length,name,args:{path:task.includes('renderer-crash')?'renderer-report.txt':task.includes('approval-reopen')?'approval-report.txt':'worker-report.txt',text:'Controlled worker result\n'}};
+}
+export function workerFileTools(tools){
+  if(!crashBefore&&!crashAfter)return tools;
+  return tools.map(tool=>tool.name!=='files_write'?tool:{...tool,async execute(args,ctx){if(crashBefore)process.exit(86);const result=await tool.execute(args,ctx);process.exit(87);return result;}});
+}
+function heldWrite(){
+  const tool=fileTools().find(tool=>tool.name==='files_write');
+  return {...tool,name:'fixture_hold_write',description:'Controlled opt-in worker lifecycle fixture',async execute(args,ctx){
+    await new Promise((resolve,reject)=>{const abort=()=>reject(ctx.signal.reason);ctx.signal.addEventListener('abort',abort,{once:true});pending.push(()=>{ctx.signal.removeEventListener('abort',abort);resolve();});if(ctx.signal.aborted)abort();});
+    const result=await tool.execute(args,ctx);writes.push(args.path);return result;
+  }};
+}
+export async function runWorkerSmoke({runtime,worker,getWindow,openWindow,dataDir,sourceDir,app}){
+  const checks=[];
+  async function until(check,label){for(let index=0;index<400;index++){const result=await check();if(result)return result;await pause(25);}let detail='';try{detail=await getWindow()?.webContents.executeJavaScript(`JSON.stringify({notice:document.querySelector('#notice-text')?.textContent,modal:document.querySelector('#modal-title')?.textContent,body:document.querySelector('#modal-body')?.innerText})`);}catch{}throw new Error('Worker smoke timeout: '+label+' '+detail);}
+  const js=code=>getWindow().webContents.executeJavaScript(code,true),bridge=(method,args={})=>js(`window.faber.request(${JSON.stringify(method)},${JSON.stringify(args)})`),click=selector=>js(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  const jobs=()=>runtime.request('routines.state');
+  if(process.argv.includes('--worker-hidden-probe')){
+    assert.equal(worker.hiddenStart,true);assert.equal(getWindow(),undefined);assert.equal(BrowserWindow.getAllWindows().length,0);
+    const child=spawn(process.execPath,[sourceDir,'--smoke-worker','--smoke-profile',dataDir,'--worker-reopen-probe'],{windowsHide:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(new Error('Visible launch failed')));});
+    await until(()=>getWindow()&&!getWindow().isDestroyed(),'normal launch creates UI');await until(()=>js(`document.documentElement.dataset.uiReady==='true'`),'normal visible renderer ready');assert.equal(getWindow().isVisible(),true);assert.equal((await bridge('worker.state')).pid,process.pid);
+    const report={ok:true,hiddenSignInMode:true,normalLaunchVisible:true,sameWorker:true,loginRegistrationChanged:false};await fs.writeFile(path.join(dataDir,'worker-hidden-report.json'),JSON.stringify(report,null,2));return report;
+  }
+  await until(()=>getWindow()&&!getWindow().isDestroyed(),'initial window');await until(()=>js(`document.documentElement.dataset.uiReady==='true'`),'initial renderer ready');
+  const recovery=process.argv.includes('--worker-recovery-probe');
+  if(recovery){
+    const state=await jobs(),job=state.jobs[0];assert.ok(state.paused,'Safe Mode pauses admission');assert.equal(job.status,'needs_attention');assert.equal(job.attempts,1);
+    const scenario=process.argv[process.argv.indexOf('--worker-expect')+1];
+    const recoveredProject=path.join(path.dirname(dataDir),path.basename(dataDir)+'-worker-project');
+    if(scenario==='after'){assert.equal(job.reviewRequired,false);assert.equal(job.outputs[0].result.reconciled,true);assert.equal(await fs.readFile(path.join(recoveredProject,'worker-report.txt'),'utf8'),'Controlled worker result\n');}
+    else{assert.equal(job.reviewRequired,true);assert.equal(job.outputs.length,0);}
+    if(scenario==='external')assert.equal(await fs.readFile(path.join(recoveredProject,'external-effects.txt'),'utf8'),'once\n');
+    await pause(300);assert.equal((await jobs()).jobs[0].attempts,1,'Recovery does not replay writes');
+    const report={ok:true,scenario,safeModePaused:true,jobId:job.id,status:job.status,reviewRequired:job.reviewRequired,outputs:job.outputs.length,attempts:job.attempts};await fs.writeFile(path.join(dataDir,'worker-recovery-report.json'),JSON.stringify(report,null,2));return report;
+  }
+  const projectPath=path.join(path.dirname(dataDir),path.basename(dataDir)+'-worker-project');await fs.mkdir(projectPath,{recursive:true});const project=await runtime.request('project.create',{name:'Worker verification project',path:projectPath});
+  if(crashBefore||crashAfter||crashExternal){
+    if(crashExternal)runtime.registerTools([{name:'fixture_external_effect',permission:'network',description:'Controlled local stand-in for an irreversible external effect',parameters:{type:'object',properties:{path:{type:'string'},text:{type:'string'}},required:['path','text'],additionalProperties:false},async execute(_args,ctx){await fs.appendFile(path.join(ctx.project.path,'external-effects.txt'),'once\n');process.exit(88);}}]);
+    await worker.request('worker.configure',{enabled:true,startAtLogin:false});const routine=await runtime.request('routines.save',{name:'Crash reconciliation',projectId:project.id,providerId:'local-ollama',model:'fixture',instructions:'Controlled interruption around one write.',inputs:'Fixture input',outputs:'One output',completion:'Output is verified',tools:[crashExternal?'fixture_external_effect':'files_write'],paths:['.'],grants:['files']});await runtime.request('routines.enable',{id:routine.id,enabled:true});await runtime.request('routines.run',{id:routine.id});
+    if(crashExternal){await until(async()=> (await runtime.request('state.get')).approvals[0],'external approval');const approval=(await runtime.request('state.get')).approvals[0];await runtime.request('approval.resolve',{id:approval.id,allow:true});}
+    await pause(15000);throw new Error('Controlled crash did not occur');
+  }
+  runtime.registerTools([heldWrite()]);
+  await click('#open-routines');await until(()=>js(`!!document.querySelector('#worker-enabled')`),'background settings');
+  await js(`(()=>{const c=document.querySelector('#worker-enabled');c.checked=true;c.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#worker-login').checked=false;document.querySelector('#worker-save').click();})()`);await until(async()=> (await worker.request('worker.state')).enabled,'background opt-in');
+  await js(`[...document.querySelectorAll('#modal button')].find(button=>button.textContent==='Create routine').click()`);
+  await until(()=>js(`!!document.querySelector('#routine-name')`),'routine form');
+  await js(`(()=>{for(const [id,value]of Object.entries({'routine-name':'Lifecycle report','routine-instructions':'Write the controlled report once.','routine-inputs':'Fixture inputs','routine-outputs':'One verified report','routine-completion':'One output receipt','routine-model':'fixture'})){const e=document.getElementById(id);e.value=value;e.dispatchEvent(new Event('input',{bubbles:true}));}document.querySelector('#routine-grant-files').checked=true;document.querySelector('[data-routine-tool="fixture_hold_write"]').checked=true;document.querySelector('#routine-save').click();})()`);
+  await until(async()=> (await jobs()).routines[0],'saved routine');const routine=(await jobs()).routines[0];
+  await until(()=>js(`!!document.querySelector('[data-routine-id="${routine.id}"]')`),'routine row');
+  await js(`[...document.querySelectorAll('[data-routine-id="${routine.id}"] button')].find(button=>button.textContent==='Preview').click()`);await until(()=>js(`!!document.querySelector('#routine-run-submit')`),'preview form');await click('#routine-run-submit');
+  await until(async()=> (await jobs()).jobs.some(job=>job.preview&&job.status==='completed'),'preview complete');assert.equal((await jobs()).jobs[0].proposals.length,1);assert.equal(pending.length,0);await assert.rejects(fs.stat(path.join(projectPath,'worker-report.txt')),/ENOENT/);checks.push('normal form saves a revision; preview proposes a write without executing it');
+  await click('#close-modal');await click('#open-routines');await until(()=>js(`!!document.querySelector('[data-routine-id="${routine.id}"]')`),'review saved routine');await js(`[...document.querySelectorAll('[data-routine-id="${routine.id}"] button')].find(button=>button.textContent==='Enable').click()`);await until(async()=> (await jobs()).routines[0].enabled,'explicit enable');
+  await until(()=>js(`!!document.querySelector('[data-run-routine="${routine.id}"]:not(:disabled)')`),'manual run button');await click(`[data-run-routine="${routine.id}"]`);await until(()=>js(`!!document.querySelector('#routine-run-submit')`),'manual form');await click('#routine-run-submit');await until(()=>pending.length===1,'write waiting at controlled gate');
+  const job=(await jobs()).jobs.find(job=>!job.preview),runId=job.runId,pid=process.pid,old=getWindow();old.close();await until(()=>old.isDestroyed(),'all UI windows closed');assert.equal(BrowserWindow.getAllWindows().length,0);assert.equal((await worker.request('worker.state')).attached,false);pending.shift()();
+  await until(async()=> (await jobs()).jobs.find(value=>value.id===job.id)?.status==='completed','work completed while UI closed');assert.equal(writes.filter(value=>value==='worker-report.txt').length,1);checks.push('closing every window keeps the same worker and run alive; one output commits while detached');
+  const child=spawn(process.execPath,[sourceDir,'--smoke-worker','--smoke-profile',dataDir,'--worker-reopen-probe'],{windowsHide:true,stdio:'ignore'});await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(new Error('Second launch exited '+code)));});
+  await until(()=>getWindow()&&!getWindow().isDestroyed(),'second launch reconnects UI');await until(()=>js(`document.documentElement.dataset.uiReady==='true'`),'reopened renderer ready');assert.equal((await bridge('worker.state')).pid,pid);assert.equal((await jobs()).jobs.find(value=>value.id===job.id).runId,runId);checks.push('second Faber launch reuses the existing profile worker and reconnects a fresh renderer');
+  await runtime.request('routines.run',{id:routine.id,inputs:'renderer-crash'});await until(()=>pending.length===1,'second write waiting');const crashed=getWindow();crashed.webContents.forcefullyCrashRenderer();await until(()=>crashed.isDestroyed(),'renderer crash detaches UI');pending.shift()();await until(async()=> (await jobs()).jobs.filter(job=>!job.preview&&job.status==='completed').length===2,'work survives renderer crash');await openWindow();await until(()=>js(`!!document.querySelector('#open-routines')`),'renderer reopens after crash');assert.equal(writes.filter(value=>value==='renderer-report.txt').length,1);checks.push('actual renderer crash and fresh UI do not interrupt or duplicate the owned job');
+  await until(()=>js(`document.documentElement.dataset.uiReady==='true'`),'renderer ready for approval probe');
+  const {connection:approvedConnection,...approvalDefinition}=routine.definition;
+  const approvalRoutine=await runtime.request('routines.save',{...approvalDefinition,name:'Approve after reopening',grants:[]});await runtime.request('routines.enable',{id:approvalRoutine.id,enabled:true});const approvalJob=await runtime.request('routines.run',{id:approvalRoutine.id,inputs:'approval-reopen'});
+  await until(async()=> (await runtime.request('state.get')).approvals.some(approval=>approval.routineJobId===approvalJob.id),'approval pending');const waiting=getWindow();waiting.close();await until(()=>waiting.isDestroyed(),'approval UI closed');assert.equal(pending.length,0);await assert.rejects(fs.stat(path.join(projectPath,'approval-report.txt')),/ENOENT/);
+  await openWindow();await until(()=>js(`document.documentElement.dataset.uiReady==='true'`),'approval UI reopened');await click('#open-routines');await until(()=>js(`!!document.querySelector('[data-routine-job="${approvalJob.id}"]')`),'pending job visible');await click(`[data-routine-job="${approvalJob.id}"]`);await until(()=>js(`[...document.querySelectorAll('#modal button')].some(button=>button.textContent==='Allow once')`),'approval visible after reopen');await js(`[...document.querySelectorAll('#modal button')].find(button=>button.textContent==='Allow once').click()`);await until(()=>pending.length===1,'approved write gate');pending.shift()();await until(async()=> (await jobs()).jobs.find(job=>job.id===approvalJob.id).status==='completed','approved job complete');assert.equal(writes.filter(name=>name==='approval-report.txt').length,1);checks.push('pending approval survives UI closure and executes once only after explicit approval in the reopened UI');
+  const report={ok:true,syntheticProvider:true,providerNetworkCalls:0,checks,workerPid:pid,completedJobs:(await jobs()).jobs.filter(job=>job.status==='completed').length,writeCounts:Object.fromEntries([...new Set(writes)].map(name=>[name,writes.filter(value=>value===name).length])),loginRegistrationChanged:false};await fs.writeFile(path.join(dataDir,'worker-smoke-report.json'),JSON.stringify(report,null,2));return report;
+}

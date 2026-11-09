@@ -7,10 +7,13 @@ const {spawn}=require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const appRoot = path.resolve(__dirname, '..');
 const smokeModes = new Set(['--smoke','--smoke-live','--smoke-models','--smoke-features','--smoke-local-models','--smoke-ui-reload','--smoke-package','--smoke-faber','--smoke-installed','--smoke-b11','--smoke-b12','--smoke-b201','--smoke-thinking','--smoke-browser','--smoke-media']);
+smokeModes.add('--smoke-worker');
 const smoke = process.argv.some(value => smokeModes.has(value));
 const profileIndex = process.argv.indexOf('--smoke-profile');
+const workerProfileIndex=process.argv.indexOf('--worker-profile');
+const workerProfileId=workerProfileIndex<0?null:process.argv[workerProfileIndex+1];
 let dataDir;
-try {
+void (async()=>{try {
   const {createProfiles}=require('./profile-path.cjs');
   const {beginBoot,updateBoot}=require('./boot-state.cjs');
   const localAppData=process.env.LOCALAPPDATA||app.getPath('appData');
@@ -21,15 +24,19 @@ try {
     const temporaryRelative = path.relative(path.resolve(os.tmpdir()), dataDir);
     if (!temporaryRelative || temporaryRelative === '..' || temporaryRelative.startsWith(`..${path.sep}`) || path.isAbsolute(temporaryRelative)) throw new Error('Smoke profiles must be isolated children of the system temporary directory');
   } else if(smoke)dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'Faber-smoke-'));
-  else{profiles=createProfiles(localAppData);dataDir=profiles.directory(profiles.currentId);}
+  else{profiles=createProfiles(localAppData);dataDir=profiles.directory(workerProfileId||profiles.currentId);}
   fs.mkdirSync(dataDir, { recursive: true });
   if(smoke)profiles=createProfiles(path.join(dataDir,'profile-registry'),{defaultDirectory:dataDir});
+  if(workerProfileIndex>=0&&(!process.argv.includes('--background-worker')||!workerProfileId))throw new Error('A worker profile requires the background sign-in launch mode');
   // Old releases lock the default profile; keep that identity across all profiles.
   const lockDirectory=profiles.directory('default');
   fs.mkdirSync(lockDirectory,{recursive:true});app.setPath('userData',lockDirectory);
   app.setAppUserModelId('ai.clocal.faber');
-  protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }]);
+  protocol.registerSchemesAsPrivileged([{ scheme: 'faber', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },{scheme:'faber-preview',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}}]);
   if (!app.requestSingleInstanceLock()) { if (process.argv.includes('--rollback-last')) { console.error('Close Faber before running recovery.'); app.quit(); process.exit(1); } app.quit(); process.exit(0); }
+  const profileOwner=await require('./profile-owner.cjs').acquireProfileOwner(dataDir);
+  if(workerProfileId&&profiles.currentId!==workerProfileId)profiles.select(workerProfileId);
+  app.on('will-quit',()=>{void profileOwner.close();});
   app.setPath('userData',dataDir);app.setPath('sessionData',dataDir);
   const boot=beginBoot(dataDir,{safeMode:process.argv.includes('--safe-mode')});let ready=false,cleanShutdown=false,recovering=false,sourceDir=appRoot;
   app.on('quit',(_event,code)=>{if(code===0&&ready&&cleanShutdown)updateBoot(dataDir,boot.id,'clean');});
@@ -71,4 +78,4 @@ try {
 } catch (error) {
   console.error(error);
   void app.whenReady().then(()=>{if(!smoke)dialog.showErrorBox('Faber startup recovery',`${error.message}\n\nStartup stopped before selecting a usable profile. Existing profiles and their data were preserved; Faber did not choose a different profile. Review the profile registry at ${path.join(process.env.LOCALAPPDATA||app.getPath('appData'),'FaberProfiles','profiles.json')} or restore the installer-owned startup files.`);}).finally(()=>app.exit(1));
-}
+}})();

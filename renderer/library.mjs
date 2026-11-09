@@ -44,21 +44,24 @@ export function createDiskLibrary({ request, el, button, actions, notify, inspec
         const card = el('article', 'library-model-card'); card.dataset.libraryId = entry.id;
         const choose = el('button', 'model-card-main'); choose.type = 'button'; const title = el('strong', 'model-repo'); const subtitle = el('span', 'model-tags model-job-status'); const size = el('span', 'model-card-size'); choose.append(title, subtitle, size); choose.addEventListener('click', () => { nextMetadata(); readingMetadata = undefined; selectedId = entry.id; render(); detail.scrollIntoView({ block: 'nearest' }); const current = libraryEntries(local, hub.downloads).find(item => item.id === entry.id); if (current?.model && !metadata.has(current.model.id)) readMetadata(current.model.id, entry.id); });
         const progress = el('progress', 'model-job-progress'); progress.max = 1; const numbers = el('div', 'model-job-numbers model-card-transfer'); const bytes = el('span', 'model-job-bytes'); const speed = el('span', 'model-job-speed'); const percent = el('span'); numbers.append(bytes, speed, percent);
-        const cancel = button('Cancel download', async () => { await request('models.cancel', { id: entry.id.slice(4) }); await refresh(); }); cancel.dataset.action = 'cancel-download';
-        const remove = el('button', 'button danger', 'Move to Recycle Bin'); remove.type = 'button'; remove.dataset.action = 'recycle-model'; remove.addEventListener('click', () => recycle(entry.id));
-        const explanation = el('p', 'hint model-card-reason'); card.append(choose, progress, numbers, explanation, actions(cancel, remove));
-        row = { root: card, choose, title, subtitle, size, progress, numbers, bytes, speed, percent, cancel, remove, explanation }; nodes.set(entry.id, row); grid.append(card);
+        const transferring = entry.kind === 'transfer';
+        const action = transferring
+          ? button('Cancel download', async () => { await request('models.cancel', {id:entry.job.id}); await refresh(); })
+          : button('Move to Recycle Bin', () => recycle(entry.id), 'button danger');
+        action.dataset.action = transferring ? 'cancel-download' : 'recycle-model';
+        const explanation = el('p', 'hint model-card-reason'); card.append(choose, progress, numbers, explanation, actions(action));
+        row = { root: card, choose, title, subtitle, size, progress, numbers, bytes, speed, percent, action, explanation }; nodes.set(entry.id, row); grid.append(card);
       }
       row.title.textContent = entry.label; row.choose.setAttribute('aria-pressed', String(entry.id === selectedId)); row.root.dataset.modelId = entry.model?.id || ''; row.root.dataset.jobId = entry.kind === 'transfer' ? entry.job.id : '';
       row.root.classList.toggle('model-job', entry.kind === 'transfer'); row.root.dataset.id = entry.kind === 'transfer' ? entry.job.id : '';
-      row.progress.hidden = row.numbers.hidden = row.cancel.hidden = entry.kind !== 'transfer'; row.remove.hidden = entry.kind !== 'disk';
+      row.progress.hidden = row.numbers.hidden = entry.kind !== 'transfer';
       if (entry.kind === 'transfer') {
         const info = downloadProgress(entry.job); row.subtitle.textContent = `${entry.job.status === 'queued' ? 'Queued' : 'Downloading'} · ${entry.job.repoId}`; row.size.textContent = `Download size ${formatBytes(entry.job.totalBytes)}`;
         if (info.progress === null) row.progress.removeAttribute('value'); else row.progress.value = info.progress;
         row.progress.setAttribute('aria-label', `Downloading ${entry.label}`); row.bytes.textContent = info.bytes; row.speed.textContent = info.speed; row.percent.textContent = info.percent; row.explanation.textContent = '';
       } else {
         row.subtitle.textContent = `${entry.model.format.toUpperCase()} · ${entry.status}`; row.size.textContent = `File size ${formatBytes(entry.model.sizeBytes)}`;
-        row.remove.disabled = Boolean(deleting) || !entry.canDelete; row.remove.title = entry.deleteReason || 'Move this exact model file set to the Windows Recycle Bin'; row.explanation.textContent = entry.deleteReason || entry.model.reason || '';
+        row.action.disabled = Boolean(deleting) || !entry.canDelete; row.action.title = entry.deleteReason || 'Move this exact model file set to the Windows Recycle Bin'; row.explanation.textContent = entry.deleteReason || entry.model.reason || '';
       }
     }
     renderDetail();
