@@ -97,6 +97,10 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
     } finally { await file?.close(); await fs.rm(temporary,{force:true}); }
   }
   return {
+    async readAttachment(owner,mediaId,offset,length,signal){
+      validate(owner,object({chatId:id,deviceId:id},['chatId']));validate(mediaId,mediaIdSchema);
+      const row=operation(owner,signal);try{return await chunk(owner,mediaId,offset,length,row.signal);}finally{row.done();}
+    },
     async request(method,params={}) {
       if (!schemas[method]) throw new Error('Unknown chat media action'); validate(params,schemas[method]);
       if (closed) throw new Error('Chat media is closed');

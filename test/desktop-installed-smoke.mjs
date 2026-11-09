@@ -3,7 +3,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import {bugReportDraft,releaseLabel} from '../core/bug-report.mjs';
 import {dialog} from 'electron';
-export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window}) {
+export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window,interactive}) {
   assert.equal(JSON.parse(await fs.readFile(path.join(dataDir,'boot-state.json'),'utf8')).phase,'ready','Installed smoke must wait for the real renderer readiness handshake');
   const {version}=globalThis.__FABER_BOOTSTRAP__,marker=path.join(dataDir,'installer-fixture.json');let prior;
   assert.equal(releaseLabel,'a'+version.replace(/\.0$/,''));
@@ -40,7 +40,7 @@ export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDi
     await js(`document.querySelector('#close-modal').click()`);await until(()=>js(`Boolean(document.querySelector('#local-projects [data-chat-id="${chat.id}"]'))`),'media chat');await js(`document.querySelector('#local-projects [data-chat-id="${chat.id}"]').click()`);
     let chosen;const original=dialog.showSaveDialog;dialog.showSaveDialog=async()=>({canceled:false,filePath:chosen});
     try{
-      const save=async(params,bytes,name)=>{chosen=path.join(project.path,name);await bridge('media.save',params);assert.deepEqual(await fs.readFile(chosen),bytes);},capture=async name=>{await fs.writeFile(path.join(dataDir,'installed-'+name+'.png'),(await window.webContents.capturePage()).toPNG());screenshots.push('installed-'+name+'.png');};
+      const save=async(params,bytes,name)=>{chosen=path.join(project.path,name);await bridge('media.save',params);assert.deepEqual(await fs.readFile(chosen),bytes);},capture=async(name,contents=window.webContents)=>{await fs.writeFile(path.join(dataDir,'installed-'+name+'.png'),(await contents.capturePage()).toPNG());screenshots.push('installed-'+name+'.png');};
       const documents=await prepareDocumentMedia({window,runtime,chat,project,bridge,until,save,checks,capture});await documents.run('#transcript');prior.mediaFirstRefs??=documents.refs;
       let timedProbe;
       if(major>2||major===2&&minor>=7){
@@ -48,7 +48,19 @@ export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDi
         if(prior.mediaTimedFirstRefs){for(const ref of prior.mediaTimedFirstRefs)for(const member of mediaReferenceTree({result:{media:ref}})){const result=await runtime.readMedia({chatId:chat.id,mediaId:member.id,length:Math.min(member.bytes,262144)});assert.equal(result.media.revision,member.revision);assert.equal(Buffer.from(result.data,'base64').length,Math.min(member.bytes,262144));}priorTimedMembersRetained=true;}
         const timed=await prepareTimedMedia({window,runtime,chat,project,bridge,until,save,checks,capture,videoBytes:await webmFixture(window)});await timed.run('#transcript');prior.mediaTimedFirstRefs??=timed.refs;timedProbe={ok:true,priorTimedMembersRetained};
       }
-      await fs.writeFile(marker,JSON.stringify(prior));mediaProbe={ok:true,formats:documents.refs.map(ref=>ref.name),checks,screenshots,priorPreviewBytesAndNotesRetained:retained,...(timedProbe?{timedProbe}:{})};
+      let interactiveProbe;
+      if(major>2||major===2&&minor>=8){
+        const {prepareInteractiveMedia}=await import('./desktop-interactive-media.fixture.mjs'),{mediaReferenceTree}=await import('../core/media.mjs');let priorInteractiveMembersRetained=false;
+        if(prior.mediaInteractiveFirstRefs){for(const ref of prior.mediaInteractiveFirstRefs)for(const member of mediaReferenceTree({result:{media:ref}})){const result=await runtime.readMedia({chatId:chat.id,mediaId:member.id,length:Math.min(member.bytes,262144)});assert.equal(result.media.revision,member.revision);assert.equal(Buffer.from(result.data,'base64').length,Math.min(member.bytes,262144));}priorInteractiveMembersRetained=true;}
+        const output=await prepareInteractiveMedia({window,runtime,chat,project,bridge,until,save,checks,capture,interactive});await output.run('#transcript');prior.mediaInteractiveFirstRefs??=output.refs;interactiveProbe={ok:true,priorInteractiveMembersRetained};
+      }
+      let sceneProbe;
+      if(major>2||major===2&&minor>=9){
+        const {prepareSceneMedia}=await import('./desktop-scene-media.fixture.mjs'),{mediaReferenceTree}=await import('../core/media.mjs');let priorSceneMembersRetained=false;
+        if(prior.mediaSceneFirstRefs){for(const ref of prior.mediaSceneFirstRefs)for(const member of mediaReferenceTree({result:{media:ref}})){const result=await runtime.readMedia({chatId:chat.id,mediaId:member.id,length:Math.min(member.bytes,262144)});assert.equal(result.media.revision,member.revision);assert.equal(Buffer.from(result.data,'base64').length,Math.min(member.bytes,262144));}priorSceneMembersRetained=true;}
+        const output=await prepareSceneMedia({window,chat,project,bridge,until,save,checks,capture});await output.run('#transcript',undefined,{pointer:false});prior.mediaSceneFirstRefs??=output.refs;sceneProbe={ok:true,priorSceneMembersRetained};
+      }
+      await fs.writeFile(marker,JSON.stringify(prior));mediaProbe={ok:true,formats:documents.refs.map(ref=>ref.name),checks,screenshots,priorPreviewBytesAndNotesRetained:retained,...(timedProbe?{timedProbe}:{}),...(interactiveProbe?{interactiveProbe}:{}),...(sceneProbe?{sceneProbe}:{})};
     }
     finally{dialog.showSaveDialog=original;}
   }

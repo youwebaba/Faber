@@ -32,6 +32,7 @@ import {mediaTools} from '../tools/media.mjs';
 import {createLocalMusic} from '../local-music/index.mjs';
 import {createChatMedia,mediaMethods} from './chat-media.mjs';
 import {previewScheme,previewProtocol} from './media-preview.mjs';
+import {artifactScheme,createInteractivePreviews,interactiveMethods} from './interactive-preview.mjs';
 import {createBrowserManager,browserMethods} from './browser.mjs';
 import {createBackgroundWorker,workerMethods} from './background.mjs';
 import {routineSchemas} from '../core/routines.mjs';
@@ -53,12 +54,13 @@ const smokeB201=process.argv.includes('--smoke-b201');
 const smokeThinking=process.argv.includes('--smoke-thinking');
 const smokeBrowser=process.argv.includes('--smoke-browser');
 const smokeMedia=process.argv.includes('--smoke-media');
+const smokeInteractive=process.argv.includes('--smoke-interactive-media');
 const smokeWorker=process.argv.includes('--smoke-worker');
 const smokeSchedules=process.argv.includes('--smoke-schedules');
 const smokeInstalled=process.argv.includes('--smoke-installed');
 const smokeFaber=process.argv.includes('--smoke-faber');
 const smokePackage=process.argv.includes('--smoke-package');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia||smokeWorker||smokeSchedules;
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia||smokeInteractive||smokeWorker||smokeSchedules;
 const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):getProfileDirectory(process.env.LOCALAPPDATA??app.getPath('appData')));
 const profiles=bootstrap?.profiles||createProfiles(smoke?path.join(dataDir,'profile-registry'):process.env.LOCALAPPDATA??app.getPath('appData'),smoke?{defaultDirectory:dataDir}:{});
 const recoveryStatus={safeMode:bootstrap?.safeMode===true,reason:bootstrap?.recoveryReason||''};
@@ -67,7 +69,7 @@ app.setPath('userData',dataDir);
 app.setPath('sessionData',dataDir);
 if(!bootstrap?.hasLock&&!app.requestSingleInstanceLock()){app.quit();process.exit(0);}
 app.on('second-instance',(_event,args)=>{if(args.includes('--background-worker'))return;showRequested=true;void openWindow?.().catch(error=>console.error('Could not reopen interface:',error));});
-if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}},previewScheme]);
+if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}},previewScheme,artifactScheme]);
 const modelMethods=new Set(['models.state','models.search','models.inspect','models.download','models.cancel','models.settings.save','models.chooseDirectory','models.openDirectory','models.openPage']);
 const localMethods=new Set(['localModels.list','localModels.start','localModels.stop','localModels.details','localModels.hardware','localModels.configure','localModels.delete']);
 const addonMethods=new Set(['addons.list','addons.import','addons.enable','addons.disable','addons.uninstall','addons.reset','addons.rollback','addons.openDirectory']);
@@ -80,9 +82,10 @@ methods.add('upgrades.list');
 for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods,...outlookMethods])methods.add(method);
 let mcp,mcpError,outlook,outlookError;
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
-let worker,tray,openWindow,showRequested=false,desktopLocked=false,routineBackups,bootControl,workerControl,installerQuiescing=false;
+let worker,tray,openWindow,showRequested=false,desktopLocked=false,routineBackups,bootControl,workerControl,installerQuiescing=false,interactive;
 for(const method of backupMethods)methods.add(method);
 for(const method of bootMethods)methods.add(method);
+for(const method of interactiveMethods)methods.add(method);
 const visibleLaunchArgs=()=>process.argv.slice(1).filter((value,index,args)=>!['--background-worker','--worker-profile'].includes(value)&&args[index-1]!=='--worker-profile');
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
@@ -134,6 +137,7 @@ const host={
 app.on('window-all-closed',()=>{if(!worker?.enabled||quitting)app.quit();});
 async function shutdown(){
   try{await workerControl?.close();}catch(error){console.error('Worker control close failed:',error.message);}
+  await interactive?.dispose();
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
@@ -188,6 +192,7 @@ media=createChatMedia({readMedia:runtime.readMedia,mediaNotes:runtime.mediaNotes
   chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':mimeType.startsWith('video/')?'video':'document'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
   copyText:text=>clipboard.writeText(text),copyImage:data=>{const value=nativeImage.createFromDataURL(data);if(value.isEmpty())throw new Error('This image could not be copied');clipboard.writeImage(value);}
 });
+interactive=createInteractivePreviews({readAttachment:media.readAttachment,getWindow:()=>window,createView:webPreferences=>new WebContentsView({webPreferences}),sessionFor:partition=>session.fromPartition(partition,{cache:false}),chromiumVersion:process.versions.chrome,memoryUsage:()=>app.getAppMetrics()});
 browserChats=(await runtime.request('state.get')).chats;
 browser=createBrowserManager({dataDir,createView:options=>new WebContentsView(options),createSession:(partition,options)=>session.fromPartition(partition,options),emit:event=>runtime.emit(event),getChat:id=>browserChats.find(chat=>chat.id===id),
   readSessionCookies:key=>host.getSecret('browser-session-'+key),writeSessionCookies:(key,value)=>host.setSecret('browser-session-'+key,value),
@@ -249,10 +254,10 @@ window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title
 const ownedWindow=window;
 if(smokeWorker)window.webContents.on('console-message',event=>{if(event.level==='error'||event.level>=2)console.error('Worker renderer:',event.message);});
 window.on('blur',()=>{browserViewRequest++;browser.hideView({keepMonitoring:true});});
-for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();});
-window.on('close',()=>{browser.hideView();});
-window.on('closed',()=>{if(window===ownedWindow)window=null;media.cancel();if(!worker.enabled&&!quitting)app.quit();});
-window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){browserViewRequest++;browser.hideView();media.cancel();}});
+for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();void interactive.hide().catch(()=>{});});
+window.on('close',()=>{browser.hideView();void interactive.stopAll().catch(()=>{});});
+window.on('closed',()=>{if(window===ownedWindow)window=null;media.cancel();void interactive.stopAll();if(!worker.enabled&&!quitting)app.quit();});
+window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){browserViewRequest++;browser.hideView();media.cancel();void interactive.stopAll().catch(()=>{});}});
 window.on('focus',()=>{emit({type:'browserViewHidden'});void browser.request('browser.state').then(state=>emit({type:'browser',state})).catch(()=>{});});
 window.webContents.on('blur',()=>{browserChromeFocus=null;});
 window.webContents.on('before-input-event',(event,input)=>{if(!browserChromeFocus||input.type!=='keyDown'||(!input.control&&!input.meta)||input.alt)return;const key=input.key.length===1?input.key.toLowerCase():input.key;const action={l:'address',t:'newTab',w:'closeTab',f:'find',Tab:input.shift?'previousTab':'nextTab','+':'zoomIn','=':'zoomIn','-':'zoomOut','0':'zoomReset'}[key];if(action){event.preventDefault();emit({type:'browserShortcut',...browserChromeFocus,action});}});
@@ -264,7 +269,7 @@ window.webContents.on('render-process-gone',(_event,details)=>{console.error(`Th
 bootTimer=setTimeout(()=>{if(!uiReady){if(worker.enabled){console.error('The interface did not become ready; reopen Faber from the tray.');ownedWindow.destroy();}else void startupFailure(new Error('The interface did not finish startup within one minute.'));}},60000);
 await window.loadURL('faber://app/index.html');applyZoom((await runtime.request('state.get')).settings.uiScale);if(showRequested){window.show();window.focus();}return window;
 };
-Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[{label:'Close window',accelerator:'Alt+F4',click:()=>window?.close()},{label:'Pause work',click:()=>void worker.request('worker.pause')},{type:'separator'},{label:'Quit Faber',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Settings',accelerator:'CmdOrCtrl+,',click:()=>{browser.hideView();emit({type:'openSettings'});}}]},{role:'viewMenu'},{role:'windowMenu'}]));
+Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[{label:'Close window',accelerator:'Alt+F4',click:()=>window?.close()},{label:'Pause work',click:()=>void worker.request('worker.pause')},{type:'separator'},{label:'Quit Faber',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Settings',accelerator:'CmdOrCtrl+,',click:()=>{browser.hideView();void interactive.hide().catch(()=>{});emit({type:'openSettings'});}}]},{role:'viewMenu'},{role:'windowMenu'}]));
 function syncTray(){if(!worker.enabled){tray?.destroy();tray=null;return;}if(tray)return;tray=new Tray(path.join(sourceDir,'build','faber.ico'));tray.setToolTip('Faber background worker');tray.on('double-click',()=>void openWindow());tray.setContextMenu(Menu.buildFromTemplate([{label:'Open Faber',click:()=>void openWindow()},{label:'Pause work',click:()=>void worker.request('worker.pause')},{label:'Resume routine queue',click:()=>void runtime.request('routines.pause',{paused:false})},{type:'separator'},{label:'Quit Faber',click:()=>app.quit()}]));}
 syncTray();
 ipcMain.handle('faber:request',async(event,method,params={})=>{
@@ -272,7 +277,9 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   if(!methods.has(method))throw new Error('Invalid bridge request');
   validateRequestPayload(method,params);
   if((switchingProfile||quitting||installerQuiescing)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
-  if(mediaMethods.includes(method))return media.request(method,params);
+
+  if(interactiveMethods.includes(method)){if(method==='media.preview.open')browser.hideView();return interactive.request(method,params);}
+  if(mediaMethods.includes(method)){if(method==='media.release')await interactive.release(params);return media.request(method,params);}
   if(method==='upgrades.list'){validate(params,{type:'object',properties:{},additionalProperties:false});return upgrades.list();}
   if(workerMethods.includes(method))return worker.request(method,params);
   if(backupMethods.includes(method))return routineBackups.request(method,params);
@@ -303,6 +310,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
     const viewRequest=method==='browser.view'?++browserViewRequest:null;
     if(method==='browser.chromeFocus'){const result=await browser.request(method,params);browserChromeFocus=params.active?{chatId:params.chatId,tabId:params.tabId}:null;return result;}
     if(method==='browser.view'&&params.visible){
+      await interactive.hide();
       const bounds=await window.webContents.executeJavaScript(`(()=>{const slot=document.querySelector('#browser-page-slot'),chatId=document.querySelector('#browser-session')?.value,tabId=document.querySelector('[data-browser-tab][aria-selected=\"true\"]')?.dataset.browserTab;if(!slot||slot.closest('[hidden]')||document.querySelector('#modal')?.open||document.body.matches('.models-open,.browser-resizing,[aria-busy=\"true\"]')||document.body.inert||[...document.querySelectorAll('[data-browser-occludes]')].some(node=>!node.hidden&&node.getClientRects().length))return null;const r=slot.getBoundingClientRect();if(r.x<-.5||r.y<-.5||r.right>innerWidth+.5||r.bottom>innerHeight+.5||r.width<10||r.height<10)return null;for(let node=slot.parentElement;node;node=node.parentElement){const s=getComputedStyle(node);if(/auto|scroll|hidden|clip/.test(s.overflow+s.overflowX+s.overflowY)){const p=node.getBoundingClientRect();if(r.left<p.left-1||r.top<p.top-1||r.right>p.right+1||r.bottom>p.bottom+1)return null;}}return {x:r.x,y:r.y,width:r.width,height:r.height,chatId,tabId};})()`);
       if(viewRequest!==browserViewRequest)return {visible:false,superseded:true};
       if(!bounds||!bounds.tabId||bounds.chatId!==params.chatId||params.tabId&&bounds.tabId!==params.tabId||['x','y','width','height'].some(key=>!Number.isFinite(params[key])||Math.abs(params[key]-bounds[key])>2)){browser.hideView();return {visible:false};}
@@ -331,7 +339,7 @@ if(smokeInstalled){
       if(Date.now()>=deadline)throw new Error('Installed smoke interface did not become ready within ten seconds.');
       await new Promise(resolve=>setTimeout(resolve,25));
     }
-    console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window})));app.quit();
+    console.log(JSON.stringify(await(await import('../test/desktop-installed-smoke.mjs')).runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window,interactive})));app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}return;
 }
 if(smokePackage){try{const result=await(await import('../test/desktop-packaged-smoke.mjs')).runPackagedSmoke({window,runtime,localModels,dataDir,sourceDir});console.log(JSON.stringify(result));window.close();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
@@ -344,7 +352,7 @@ if(smoke){
     if(!result.bridge||!result.projects||!result.chats||result.nodeExposed)throw new Error('Smoke bridge check failed');
     await new Promise(resolve=>setTimeout(resolve,500));
     const screenshot=path.join(dataDir,'smoke.png');await fs.writeFile(screenshot,(await window.webContents.capturePage()).toPNG());
-    const flows=smokeMedia?await(await import('../test/desktop-media-smoke.mjs')).runMediaSmoke({window,runtime,dataDir,sourceDir,media,remote,host,chat}):smokeBrowser?await(await import('../test/desktop-browser-smoke.mjs')).runBrowserSmoke({window,runtime,browser,chat,dataDir,sourceDir}):smokeThinking?await(await import('../test/desktop-thinking-smoke.mjs')).runThinkingSmoke({window,runtime,chat,dataDir}):smokeB201?await(await import('../test/desktop-b201-smoke.mjs')).runB201Smoke({window,runtime,chat,dataDir}):smokeB12?await(await import('../test/desktop-b12-smoke.mjs')).runB12Smoke({window,runtime,chat,dataDir,localModels,fixture:localFixture}):smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir,host}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
+    const flows=smokeInteractive?await(await import('../test/desktop-interactive-media-smoke.mjs')).runInteractiveMediaSmoke({window,runtime,dataDir,interactive,remote,chat}):smokeMedia?await(await import('../test/desktop-media-smoke.mjs')).runMediaSmoke({window,runtime,dataDir,sourceDir,media,remote,host,chat}):smokeBrowser?await(await import('../test/desktop-browser-smoke.mjs')).runBrowserSmoke({window,runtime,browser,chat,dataDir,sourceDir}):smokeThinking?await(await import('../test/desktop-thinking-smoke.mjs')).runThinkingSmoke({window,runtime,chat,dataDir}):smokeB201?await(await import('../test/desktop-b201-smoke.mjs')).runB201Smoke({window,runtime,chat,dataDir}):smokeB12?await(await import('../test/desktop-b12-smoke.mjs')).runB12Smoke({window,runtime,chat,dataDir,localModels,fixture:localFixture}):smokeB11?await(await import('../test/desktop-b11-smoke.mjs')).runB11Smoke({window,runtime,chat,dataDir,host}):smokeFaber?await(await import('../test/desktop-faber-smoke.mjs')).runFaberSmoke({window,runtime,modelHub,localModels,chat,dataDir,fixture:localFixture}):smokeUIReload?await reloadSmoke.runUIReloadSmoke({window,runtime,modelHub,localModels,upgrades,uiReload,chat,dataDir,fixture:reloadFixture,localFixture}):smokeLocalModels?await localSmoke.runLocalModelSmoke({window,runtime,localModels,chat,dataDir,fixture:localFixture}):smokeFeatures?await featureSmoke.runFeatureSmoke({window,modelHub,runtime,chat,dataDir,fixture:featureFixture}):smokeModels?await modelSmoke.runModelHubSmoke({window,modelHub,runtime,chat,dataDir}):await (await import('../test/desktop-smoke.mjs')).runDesktopSmoke({window,runtime,chat,dataDir,live:process.argv.includes('--smoke-live')});
     console.log(JSON.stringify({ok:true,dataDir,screenshot,...result,...flows}));
     app.quit();
   }catch(error){console.error(error);await shutdown();app.exit(1);}

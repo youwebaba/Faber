@@ -91,6 +91,38 @@ automatically fetch arbitrary media URLs. Playback support does not itself
 connect a music/video generation service. A configured tool or model integration
 must first produce the file.
 
+## Interactive outputs in a2.8
+
+Use `media_show {path}` for `.chart.json` charts, `.geojson` maps or
+`.diagram.json` diagrams. Hover or select an item to inspect its values or full
+label, drag to pan, and use Zoom in/out or Ctrl+wheel. Chart series can be hidden
+with their legend buttons. Maps display supplied geographic data with a latitude
+and longitude grid; external map tiles and data are not fetched. Save original
+retains the complete data or diagram description.
+
+An `.html` or `.htm` demo opens when you choose **Run demo**. Optional
+`assets:[{path,name?}]` supplies its local JavaScript, CSS, images, fonts or data;
+`name` is the relative virtual name referenced by the HTML. The inspector lists
+each saved asset and provides Save asset. Every supplied file requires the same
+project authorization as the main HTML and becomes an immutable chat attachment.
+
+HTML runs in a separate sandboxed process without Faber or Node APIs, credentials,
+parent-page access, external network, devices, file selection, popups, forms or
+nested frames. A blocked document navigation stops the preview. Demo errors
+appear beside its controls. **Pause** freezes its JavaScript and animation;
+**Resume** continues it. **Stop**, Escape, switching chats or losing the paired
+connection discards the running process. Another Run starts a fresh origin and
+fresh demo state. Reconnecting does not start an HTML demo automatically.
+
+Charts support bar, line and scatter series with up to 5,000 points total.
+GeoJSON supports up to 1,000 features and 20,000 positions. Diagrams support up
+to 200 labeled nodes and 600 directed edges, with supplied positions or automatic
+layout. Source limits are 2 MiB for a chart or HTML, 4 MiB for a map and 1 MiB for
+a diagram. HTML accepts up to 32 assets, 8 MiB each and 16 MiB including the HTML.
+It pauses after one minute of running time. A process memory watchdog stops
+previews above 256 MiB; this is a sampled safeguard rather than a hard OS quota.
+See [formats and verification](docs/a2.8-media.md).
+
 ## Remote playback
 
 Install a2.4 or later on both PCs for remote audio/video playback. The host retains the
