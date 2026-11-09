@@ -1,10 +1,17 @@
 use anyhow::{Context, Result, bail, ensure};
-use mistralrs::{CalledFunction, Model, ModelDType, RequestBuilder, Response, StopTokens, TextMessageRole, TextModelBuilder, TokenSource, Tool, ToolCallResponse, ToolCallType, ToolChoice};
+use mistralrs::{CalledFunction, IsqType, Model, ModelDType, RequestBuilder, Response, StopTokens, TextMessageRole, TextModelBuilder, TokenSource, Tool, ToolCallResponse, ToolCallType, ToolChoice};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const LIMIT: usize = 16 * 1024 * 1024;
+
+#[derive(Deserialize,serde::Serialize,Clone,Copy)]
+#[serde(rename_all="snake_case")]
+enum QuantizationMode { None, Q4_0, Q8_0 }
+#[derive(Deserialize,serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct LoadProfile { mode: QuantizationMode }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -98,11 +105,17 @@ async fn generate(model: &Model, command: Command, input: &mut tokio::sync::mpsc
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model_path = std::env::args().nth(1).context("Supply one validated local model directory")?;
+    let mut args=std::env::args().skip(1);
+    let model_path = args.next().context("Supply one validated local model directory")?;
+    let profile=args.next().context("Supply a validated native load profile")?;
+    ensure!(profile.len()<=1024&&args.next().is_none(),"Invalid native launch profile");
+    let profile:LoadProfile=serde_json::from_str(&profile)?;
     ensure!(std::path::Path::new(&model_path).is_absolute() && std::path::Path::new(&model_path).join("config.json").is_file(), "Supply an existing local model package");
     ensure!(std::env::var("HF_HUB_OFFLINE").as_deref() == Ok("1"), "The worker requires offline mode");
-    let model = TextModelBuilder::new(model_path).with_force_cpu().with_dtype(ModelDType::F32).with_token_source(TokenSource::None).with_max_num_seqs(1).without_paged_attn().build().await?;
-    write(json!({"kind":"ready","protocol":1,"model":"worker-model","backend":"cpu"})).await?;
+    let mut builder=TextModelBuilder::new(model_path).with_force_cpu().with_dtype(ModelDType::F32).with_token_source(TokenSource::None).with_max_num_seqs(1).without_paged_attn();
+    builder=match profile.mode { QuantizationMode::None=>builder,QuantizationMode::Q4_0=>builder.with_isq(IsqType::Q4_0),QuantizationMode::Q8_0=>builder.with_isq(IsqType::Q8_0) };
+    let model=builder.build().await?;
+    write(json!({"kind":"ready","protocol":2,"model":"worker-model","backend":"cpu","quantization":profile})).await?;
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
     tokio::spawn(async move {
         let mut input = tokio::io::stdin();
@@ -129,6 +142,8 @@ mod tests {
     use super::*;
     #[test]
     fn untrusted_request_cannot_enable_host_tools_or_media() {
+        assert!(serde_json::from_value::<LoadProfile>(json!({"mode":"q4_0","shell":true})).is_err());
+        assert!(serde_json::from_value::<LoadProfile>(json!({"mode":"unknown"})).is_err());
         assert!(serde_json::from_value::<Body>(json!({"model":"worker-model","messages":[],"enable_shell":true})).is_err());
         let body: Body = serde_json::from_value(json!({"model":"worker-model","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"http://remote"}}]}]})).unwrap(); assert!(request(body).is_err());
         let body: Body = serde_json::from_value(json!({"model":"worker-model","messages":[{"role":"tool","content":"value"}]})).unwrap(); assert!(request(body).is_err());

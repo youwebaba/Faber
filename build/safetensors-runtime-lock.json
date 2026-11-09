@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "protocol": 1,
+  "protocol": 2,
   "executable": "faber-safetensors.exe",
   "engine": "mistralrs",
   "engineVersion": "0.9.5",
   "engineCommit": "465191d0b0a7e2432d327b0de06204ab3f94d3a2",
-  "sourceHash": "163fe5a175423b8162f43584c1df2ef9262a528270c71a1449d05a4cecd06eab",
+  "sourceHash": "fd4564961bab9ffc2b8204d3a5b81c7d38f8de5e710bcb9ed172c49f39f51591",
   "platform": "windows-x64",
   "backends": [
     "cpu"
@@ -14,8 +14,8 @@
   "files": [
     {
       "path": "faber-safetensors.exe",
-      "size": 65875968,
-      "sha256": "d6e284466d2d92ab6cc2b09d927a16311252011a80add813b9f02d1fe28e775d"
+      "size": 65885696,
+      "sha256": "e27601011ddcbd0fb9dcc43d9d086788a65802449005c7b32998c7a3f781e809"
     },
     {
       "path": "licenses/MICROSOFT-VS18-REDIST.txt",

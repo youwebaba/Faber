@@ -111,3 +111,11 @@ test('repository names do not hide completed base models while repository-relati
   assert.ok(found.models.every(model => model.available));
   assert.deepEqual(found.warnings, []);
 });
+
+test('untracked Qwen main GGUF stays discoverable from a library root containing an MTP repository name',async t=>{
+  const {directory,write}=await fixture(t),repository='unsloth/Qwen3.5-0.8B-MTP-GGUF/'+'a'.repeat(40),base='Qwen3.5-0.8B-Q4_K_M.gguf';
+  await write(`${repository}/${base}`);
+  for(const name of ['model-MTP.gguf','mtp/draft.gguf','mmproj-model.gguf','adapters/draft.gguf'])await write(`${repository}/${name}`);
+  const root=await scanLocalModels({directory}),revision=await scanLocalModels({directory:path.join(directory,...repository.split('/'))});
+  assert.deepEqual(root.models.map(model=>model.relativePath),[`${repository}/${base}`]);assert.deepEqual(revision.models.map(model=>model.relativePath),[base]);assert.ok(root.models[0].available&&revision.models[0].available);
+});

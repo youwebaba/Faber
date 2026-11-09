@@ -13,7 +13,7 @@ export async function createLocalModelSmoke(dataDir, modelHub) {
   await modelHub.request('models.settings.save', { downloadDirectory: directory });
   const children = [], script = fileURLToPath(new URL('./desktop-local-models.fixture.mjs', import.meta.url)),nativeScript=fileURLToPath(new URL('./desktop-safetensors.fixture.mjs',import.meta.url));
   return { directory, children, options: { executable: process.execPath,safetensorsExecutable:process.execPath,safetensorsVerify:async()=>true, pollMs: 50, loadTimeoutMs: 15000,
-    spawnImpl: (_executable, args, options) => { const child = spawn(process.execPath, [args.length===1?nativeScript:script, ...args], { ...options, env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' } }); children.push(child); return child; },
+    spawnImpl: (_executable, args, options) => { const child = spawn(process.execPath, [args.length===2?nativeScript:script, ...args], { ...options, env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' } }); children.push(child); return child; },
   } };
 }
 export async function runLocalModelSmoke({ window, runtime, localModels, chat, dataDir, fixture }) {
@@ -55,8 +55,9 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   await wait(() => evaluate(`document.querySelector('#local-model-status').textContent.includes('Controlled incompatible')`), 'visible runtime failure');
   const failureScreenshot = await capture('local-model-failure.png');
   const native=(await state()).models.find(item=>item.format==='safetensors');assert.equal(native.available,true);
-  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled');await click('#local-model-start');
+  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled');await change('#local-model-quantization','q4_0');await click('#local-model-start');
   await wait(async()=>(await state()).process.status==='ready','native ready');const nativeReady=(await state()).process;assert.equal(nativeReady.observed.backend,'cpu');
+  assert.deepEqual(nativeReady.quantization,{mode:'q4_0'});assert.equal(nativeReady.observed.quantization.accepted,true);
   assert.notEqual((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).model,nativeReady.model);
   await wait(()=>evaluate(`!document.querySelector('#chat-use-model').disabled`),'native Use enabled');await click('#chat-use-model');
   await runtime.request('chat.send',{chatId:chat.id,text:'Check controlled native transport'});
@@ -64,6 +65,7 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   assert.ok((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).messages.some(message=>message.role==='assistant'&&message.content==='Controlled native reply'));
   await click('#model-picker');await change('#chat-connection','__local_files__');await wait(()=>evaluate(`!!document.querySelector('#chat-local-model option[value="download:${native.id}"]')`),'native model reopened');await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-stop')?.disabled`),'native Stop enabled');await click('#local-model-stop');await wait(async()=>(await state()).process.status==='stopped','native stopped');
   await runtime.request('chat.update',{id:chat.id,grants:['computer']});await runtime.request('tool.run',{chatId:chat.id,name:'local_model_start',args:{modelId:native.id}});await wait(async()=>(await state()).process.status==='ready','agent native Start');
+  assert.deepEqual((await state()).process.quantization,{mode:'q4_0'},'Agent default Start restores the successful per-model profile');
   await runtime.request('tool.run',{chatId:chat.id,name:'local_model_stop',args:{}});await wait(async()=>(await state()).process.status==='stopped','agent native Stop');
   assert.ok(!(await fs.readdir(fixture.directory)).some(name=>name.startsWith('.faber-safetensors-')));
   const nativeScreenshot=await capture('local-safetensors-ready-stop.png');

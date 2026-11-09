@@ -58,6 +58,14 @@ test('owned GGUF lifecycle uses validated files, registers only after readiness,
   await f.manager.close(); const reopened = await createLocalModels(f.options); try { assert.equal((await reopened.request('localModels.list')).managedProviderId, ready.managedProviderId); assert.throws(() => reopened.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/); } finally { await reopened.close(); }
 });
 
+test('native load quantization cannot silently affect GGUF or external Ollama routes',async t=>{
+  const f=await fixture(t),model=(await f.manager.request('localModels.list')).models[0];
+  await assert.rejects(f.manager.request('localModels.start',{modelId:model.id,quantization:{mode:'q4_0'}}),/Safetensors packages only/);
+  await assert.rejects(f.manager.request('localModels.start',{providerId:'unrelated',model:'fixture',quantization:{mode:'q8_0'}}),/Configure external Ollama separately/);
+  await assert.rejects(f.manager.request('localModels.start',{modelId:model.id,quantization:{mode:'q4_0',shell:true}}));
+  assert.equal(f.children.length,0);
+});
+
 test('managed model labels retain the scanner name after Stop and restart without changing the API alias',async t=>{
   const f=await fixture(t);const listed=await f.manager.request('localModels.list'),model=listed.models[0];
   assert.deepEqual(listed.modelLabels,[]);assert.equal(f.manager.modelDisplayName('unrelated','unrelated'),null);

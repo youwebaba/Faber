@@ -50,8 +50,19 @@ select **Default** context, then **Start** and **Use in this chat**. The host
 retains the same chat tools, approvals and Stop controls. Unsupported packages
 stay visible with a reason and guidance to use GGUF or an external connection.
 
-This route loads weights as float32; RAM use can substantially exceed download
-size, with additional context and execution buffers. Automatic and CPU modes use
+**Quantization at load** offers original float32 execution, 4-bit Q4_0 or 8-bit
+Q8_0. Select the mode before Start; change a loaded model with Stop and another
+Start. A successful selection is remembered for that model. Published GGUF
+encodings and external connections retain their own settings.
+
+Quantization happens inside the native loader using the original weights. Loading
+can take longer and temporarily require float32 RAM. Norms, embeddings, output
+heads and other layers can retain different precision. The picker reports the
+requested profile and loader acceptance; RAM fit and uniform layer precision
+are not measured. See [a2.7 acceptance](docs/a2.7-safetensors-quantization.md).
+
+RAM use can substantially exceed download size, with additional context and
+execution buffers. Automatic and CPU modes use
 automatic CPU cores; an optional thread count is supported. Custom GPU/core
 placement, custom context capacity, prequantized checkpoints, custom model code,
 vision, diffusion and music packages are unavailable on this chat route.
@@ -59,7 +70,7 @@ vision, diffusion and music packages are unavailable on this chat route.
 Only the selected original weights are hardlinked into a temporary directory
 beside the package; checked support files are copied there. This requires a
 drive supporting hardlinks, normally NTFS. Stop removes the temporary entries
-and preserves the original package. No weights are converted or downloaded by
+and preserves the original package. No model files are rewritten or downloaded by
 Start. The native inference process has no network listener or executable tool
 service; it communicates over private inherited pipes. Faber's separate
 loopback endpoint requires its private API key and rejects browser origins.

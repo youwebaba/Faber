@@ -6,6 +6,7 @@ import { outputPath, noLinks, validFilePath } from '../model-hub/paths.mjs';
 import { createSafetensorsProxy } from './safetensors-proxy.mjs';
 import { createSafetensorsTransport } from './safetensors-transport.mjs';
 import { verifySafetensorsRuntime } from './safetensors-integrity.mjs';
+import {nativeQuantization} from './quantization.mjs';
 
 const supported = new Set(['llama', 'qwen2', 'qwen3', 'qwen3_moe', 'mistral']);
 async function configAt(filename, maximum = 1024 * 1024) {
@@ -39,7 +40,7 @@ export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl 
   const verify=async()=>{await noLinks(candidate);if(verifyImpl)return verifyImpl(candidate);const manifest=JSON.parse(await fs.readFile(new URL('../build/safetensors-runtime-lock.json',import.meta.url),'utf8'));return verifySafetensorsRuntime(path.dirname(candidate),manifest);};
   try {if(await verify())installed=true;else reason='The native Safetensors runtime failed its pinned integrity check. Repair Faber before starting this model.';}catch(error){if(error.code!=='ENOENT')reason=`Native Safetensors runtime unavailable: ${error.message}`;}
   return {
-    status: { available: installed, backend: 'cpu', runtime: 'mistralrs', version: '0.9.5', ...(!installed ? { reason } : {}) },
+    status: { available: installed, backend: 'cpu', runtime: 'mistralrs', version: '0.9.5',quantizationModes:['none','q4_0','q8_0'], ...(!installed ? { reason } : {}) },
     async describe(directory, model) {
       if (!model.complete) return model;
       try { const info = await inspectSafetensorsPackage(directory, model); return { ...model, available: installed, runtime: 'mistralrs', architecture: info.architecture, reason: installed ? undefined : reason }; }
@@ -52,7 +53,8 @@ export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl 
       if (configuration.mode === 'custom' || configuration.cpuIds.length || !configuration.memoryMap) throw new Error('This native CPU loader supports Automatic/CPU mode with automatic cores and disk-backed memory enabled. Change hardware settings before starting, or use GGUF for custom placement.');
       const info = await inspectSafetensorsPackage(directory, model), parent = await outputPath(directory, info.folder === '.' ? path.posix.basename(model.files[0]) : info.folder + '/config.json');
       const stage = await fs.mkdtemp(path.join(path.dirname(parent), '.faber-safetensors-'));
-      let proxy;const transport=createSafetensorsTransport();
+      const quantization=nativeQuantization(operation.quantization);
+      let proxy;const transport=createSafetensorsTransport({quantization});
       const close = async () => { transport.close();await proxy?.close(); await noLinks(stage); if (!path.basename(stage).startsWith('.faber-safetensors-') || path.dirname(stage) !== path.dirname(parent)) throw new Error('Native staging directory identity changed; preserved'); await fs.rm(stage, { recursive: true, force: true }); };
       try {
         for (const relative of info.files) {
@@ -74,7 +76,7 @@ export async function createSafetensorsRuntime({ dataDir, executable, fetchImpl 
         const env = { ...process.env, HF_HUB_OFFLINE: '1', HF_HOME: path.join(dataDir, 'local-models', 'offline-cache') };
         for (const name of Object.keys(env)) if (/^(?:HF_TOKEN|HUGGING_FACE_HUB_TOKEN|HUGGINGFACE_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|MISTRALRS_.*|MCP_CONFIG_PATH|RAYON_NUM_THREADS)$/i.test(name)) delete env[name];
         if (configuration.threads) env.RAYON_NUM_THREADS = String(configuration.threads);
-        return { executable: candidate, env, args: [stage], baseUrl: proxy.baseUrl, attach:transport.attach, close };
+        return { executable: candidate, env, args: [stage,JSON.stringify(quantization)], baseUrl: proxy.baseUrl, attach:transport.attach,observed:transport.observed, close };
       } catch (error) { await close(); if (error.code === 'EPERM' || error.code === 'ENOTSUP') throw new Error('This model drive cannot create safe native package hardlinks. Move the package to NTFS or use a compatible external runtime.'); throw error; }
     },
   };
