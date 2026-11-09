@@ -76,3 +76,20 @@ The verified distribution is included under renderer/vendor/pdfjs. Its LICENSE
 and the font-specific LICENSE_FOXIT and LICENSE_LIBERATION notices are retained.
 The archive integrity and SHA-256 digests for each shipped file are recorded in
 renderer/vendor/pdfjs/manifest.json. PDF rendering uses these local assets only.
+
+SpessaSynth MIDI preview: spessasynth_lib 4.4.7, spessasynth_core 4.4.9 and
+stb-vorbis 0.0.7, Apache License 2.0; fflate 0.8.3, MIT.
+Official sources: https://github.com/spessasus/spessasynth_lib
+https://github.com/spessasus/spessasynth_core
+https://github.com/spessasus/stb-vorbis
+https://github.com/101arrowz/fflate
+Original package integrity, bundled file hashes and per-package licenses are
+retained under renderer/vendor/spessasynth. Packaging changes only local module
+import paths and removes source-map references; synthesis code is unchanged.
+
+FluidR3Mono GM SoundFont 2.312, MIT; original FluidR3 by Frank Wen, mono version
+by Michael Cowgill, with the additional credits retained in LICENSE-FluidR3Mono.md
+under renderer/vendor/spessasynth. The unmodified bank is included in the
+media-runtime resource directory. Its pinned upstream distribution and SHA-256
+are recorded in the synthesizer asset manifest. Source/license:
+https://github.com/musescore/MuseScore/tree/v2.3.2/share/sound

@@ -32,6 +32,14 @@ export function mediaRange(value, size) {
 
 export function createChatMedia({ readMedia, readImage, mediaNotes, remoteRequest, chooseSave, copyImage, copyText, protectedPaths = [] }) {
   const operations = new Set(); let closed = false;
+  const remoteQueues=new Map();
+  async function remoteMedia(deviceId,method,params,signal){
+    signal.throwIfAborted();
+    const work=(remoteQueues.get(deviceId)||Promise.resolve()).catch(()=>{}).then(()=>{signal.throwIfAborted();return remoteRequest(deviceId,method,params,signal);});
+    remoteQueues.set(deviceId,work);const clear=()=>{if(remoteQueues.get(deviceId)===work)remoteQueues.delete(deviceId);};void work.then(clear,clear);
+    let cancel;const aborted=new Promise((resolve,reject)=>{cancel=()=>reject(signal.reason||new Error('Media request canceled'));signal.addEventListener('abort',cancel,{once:true});if(signal.aborted)cancel();});
+    try{return await Promise.race([work,aborted]);}finally{signal.removeEventListener('abort',cancel);}
+  }
   function operation(owner,signal) {
     if (closed) throw new Error('Chat media is closed');
     const row = {...owner,controller:new AbortController()}; operations.add(row);
@@ -42,7 +50,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
   async function chunk(owner, mediaId, offset, length, signal, expected) {
     signal.throwIfAborted();
     const params = {chatId:owner.chatId,mediaId,offset,length};
-    const result = owner.deviceId ? await remoteRequest(owner.deviceId,'chat.media',params,signal) : await readMedia(params,signal);
+    const result = owner.deviceId ? await remoteMedia(owner.deviceId,'chat.media',params,signal) : await readMedia(params,signal);
     signal.throwIfAborted(); validateMediaRef(result?.media);
     if (result.media.id !== mediaId || result.offset !== offset || expected && JSON.stringify(result.media) !== JSON.stringify(expected) || typeof result.data !== 'string' || result.data.length > Math.ceil(mediaChunkLimit/3)*4) throw new Error('Invalid media response');
     const bytes = Buffer.from(result.data,'base64');
@@ -53,7 +61,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
     let data = params.image;
     if (params.imageId) {
       if (!params.chatId) throw new Error('An image reference requires its owning chat');
-      const result = params.deviceId ? await remoteRequest(params.deviceId,'chat.image',{chatId:params.chatId,imageId:params.imageId},signal) : await readImage({chatId:params.chatId,imageId:params.imageId},signal);
+      const result = params.deviceId ? await remoteMedia(params.deviceId,'chat.image',{chatId:params.chatId,imageId:params.imageId},signal) : await readImage({chatId:params.chatId,imageId:params.imageId},signal);
       signal.throwIfAborted();
       if (result?.imageId !== params.imageId) throw new Error('Invalid image response');
       data = result.image;
@@ -99,7 +107,7 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
       try {
         if (method.startsWith('media.notes.')) {
           const {deviceId,...args} = params, action = method.split('.').at(-1);
-          if (deviceId) return await remoteRequest(deviceId,'chat.mediaNotes.'+action,args,row.signal);
+          if (deviceId) return await remoteMedia(deviceId,'chat.mediaNotes.'+action,args,row.signal);
           if (!mediaNotes) throw new Error('Document annotations unavailable');
           return await mediaNotes(action,args,row.signal);
         }
