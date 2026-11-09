@@ -7,6 +7,7 @@ for(const method of ['media.save','media.release','media.notes.read','media.note
 for(const method of ['boot.state','boot.review','boot.register','boot.remove','backups.export','backups.chooseRestore','backups.restore','routines.restoreBind','worker.state','worker.configure','worker.closeWindow','worker.pause','worker.quit','routines.state','routines.save','routines.enable','routines.run','routines.stop','routines.revoke','routines.resume','routines.review','routines.pause','routines.schedulePreview','routines.acknowledge','routines.steer'])allowed.add(method);
 for(const method of ['media.preview.open','media.preview.layout','media.preview.pause','media.preview.resume','media.preview.stop','media.preview.state'])allowed.add(method);
 allowed.add('upgrades.list');
+for(const method of ['capture.sources','capture.state','capture.prepare','capture.started','capture.frame','capture.heartbeat','capture.stop'])allowed.add(method);
 allowed.add('remote.changeRelay');
 for(const method of ['mcp.list','mcp.save','mcp.connect','mcp.refresh','mcp.grant','mcp.disable','mcp.remove'])allowed.add(method);
 for(const method of ['outlook.state','outlook.configure','outlook.signIn','outlook.poll','outlook.disconnect','outlook.remove','outlook.triageRoutine'])allowed.add(method);

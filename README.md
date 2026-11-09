@@ -1,4 +1,4 @@
-# Faber a2.9
+# Faber a3.0
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,6 +7,23 @@ with a Codex-style interface, shared tools, agent delegation, voice, and upgrade
 the agents can author. It has its own source, launchers and release lifecycle.
 
 Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
+
+**a3.0 adds consented live video and brings the media and worker workflows together.**
+Choose a camera, screen or window and review the selected source and paired
+viewer before starting. A visible Live indicator and Stop control stay available
+while you return to chat. Disconnecting, hiding Faber or locking Windows ends
+the share; reconnecting requires fresh host approval. Live video has no audio
+or recording. [Live sharing](LIVE_MEDIA.md) · [a3.0 notes](docs/a3.0-release-notes.md)
+
+This closed release retains project-scoped jobs, approvals, action receipts and
+recovery, plus local and encrypted remote previews for documents, music,
+interactive outputs and static 3D models. Extended hardware, WAN, pre-login and
+seven-day acceptance remain separately tracked. [Acceptance status](docs/a3.0-acceptance.md)
+
+Native Safetensors uses the verified CPU runtime in a3.0. The pinned upstream
+Mistral.rs Windows CUDA candidate could not build because its paged-attention
+CUDA APIs are exposed only on Unix. No engine fork is included. GGUF llama.cpp
+and the separate Ollama GPU route were verified independently.
 
 **a2.9 adds reviewed Outlook work, stronger recovery and 3D chat previews.**
 Connect an Outlook account to one project, page through unread messages, prepare

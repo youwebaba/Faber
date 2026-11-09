@@ -8,7 +8,7 @@ const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const chatRef = object({ chatId: id });
-const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, sceneReferences:true, steering: true, workInbox: true };
+const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, sceneReferences:true, steering: true, workInbox:true, liveCapture:true };
 const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
   ...Object.fromEntries(Object.entries(mediaNotesSchemas).map(([action,schema])=>['chat.mediaNotes.'+action,schema])),

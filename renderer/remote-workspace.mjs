@@ -4,6 +4,7 @@ import { createAttachmentDrafts, attachmentMessage } from './file-attachments.mj
 import { mergeRuntimeStreams } from './ui-refresh.mjs';
 import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createRunActivity } from './run-activity.mjs';
+import {createLiveViewer} from './live-viewer.mjs';
 import { createLiveTranscript, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import {createRemoteWorkInbox} from './remote-work-inbox.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
@@ -15,6 +16,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const root = el('section', 'remote-workspace'); root.id = 'remote-workspace'; root.hidden = true; root.setAttribute('aria-label', 'Remote workspace');
   const header = el('header', 'remote-header'), hostLabel = el('strong'), hostSelect = el('select'); hostSelect.id = 'remote-host'; hostSelect.setAttribute('aria-label', 'Workspace device');
   const connections = button('Connections', () => { close(); showConnections(); });
+  const viewer=createLiveViewer({document,el,rpc,device:()=>deviceId,available:()=>online&&!root.hidden});
+  const watch=button('Watch live',()=>viewer.open());watch.id='remote-watch-live';header.append(watch);
   const showSidebar = button('☰', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); }, 'icon-button remote-show-sidebar'); showSidebar.setAttribute('aria-label', 'Show sidebar');
   const inbox=createRemoteWorkInbox({document,el,rpc,selectChat,device:()=>deviceId,available:()=>!root.hidden&&online});
   const workButton=button('Host Work Inbox',()=>inbox.open());workButton.id='remote-work-inbox';
@@ -124,6 +127,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     } catch (error) { if (token === session && generation === chatGeneration && !root.hidden) { imageCache.set(cacheKey, { error: true }); entry.node.replaceChildren(el('span', 'hint', `Host image unavailable. ${error.message || String(error)}`), button('Retry image', () => { imageCache.delete(cacheKey); queueImage(entry); }, 'text-button')); } }
   }
   function renderStatus() {
+    watch.hidden=!directories.get(deviceId)?.capabilities?.liveCapture;watch.disabled=!online;viewer.connectionChanged();
     workButton.hidden=directories.get(deviceId)?.capabilities?.workInbox!==true;workButton.disabled=!online;
     inbox.connectionChanged();
     const host = currentDevice(), name = host?.name || host?.deviceName || 'Host'; hostLabel.textContent = `Remote · ${name}`;
@@ -214,6 +218,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
       }
       if (!nodes.length) { const welcome = el('div', 'welcome'); welcome.append(el('h1', '', selectedChatId ? selectedDetail ? 'Start a conversation.' : 'Loading chat…' : 'Your host workspace'), el('p', '', selectedChatId ? 'Messages and tool activity appear here.' : 'Choose a project and chat, or start a new chat on this host.')); nodes.push(welcome); }
       reconcileTranscript(transcript, nodes);
+      activity.prune(transcript);
       mediaOutputs.prune();
     });
   }
@@ -294,7 +299,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     const paired = new Set(getDevices().map(device => device.id)); for (const id of directories.keys()) if (!paired.has(id)) directories.delete(id);
     for (const cache of [details, imageCache]) for (const key of cache.keys()) if (!paired.has(JSON.parse(key)[0])) cache.delete(key);
     await Promise.allSettled(getDevices().filter(device => device.online).map(device => loadDirectory(device.id)));
-    if (disposed) return; renderNavigation();
+    if (disposed) return; renderNavigation();if(!root.hidden)renderStatus();
     if (getDevices().length) { directoryTimer = setTimeout(syncDirectories, 8000); directoryTimer.unref?.(); }
   }
   async function reload(token = session, read = true) {

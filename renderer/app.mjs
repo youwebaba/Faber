@@ -10,6 +10,7 @@ import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStre
 import { createNavigationMenu, deletionWarning, orderedChatFamilies } from './chat-navigation.mjs';
 import { createChatControls } from './chat-controls.mjs';
 import { createRunActivity, modelProgress } from './run-activity.mjs';
+import {createCaptureUI} from './live-share.mjs';
 import { createLiveTranscript, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { modelDisplayName } from './model-names.mjs';
 import { createPreferences } from './preferences.mjs';
@@ -260,6 +261,7 @@ function renderTranscript() {
     if (note.childNodes.length) nodes.push(note);
   }
   reconcileTranscript(transcript, nodes);
+  runActivity.prune(transcript);
   mediaOutputs.prune();
   });
 }
@@ -746,6 +748,7 @@ function handleBridgeEvent(event) {
     } else if (event.type === 'error') notify(event.error?.message || event.error || event.message || 'An operation failed.', true);
 }
 if (bridge) {
+  createCaptureUI({document,request,subscribe:bridge.subscribe,el,button});
   bridge.subscribe(event => { if (bootstrapping) startupEvents.push(event); else handleBridgeEvent(event); });
   initializeInterface();
 } else { bootstrapping = false; render(); notify('Open Faber with its desktop launcher to connect this interface to the runtime.', true); }

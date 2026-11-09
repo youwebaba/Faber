@@ -5,6 +5,35 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a3.0 closed integration
+
+The release-labelled a2.9 source was merged with live capture, receipt/recovery
+QA and the activity-retention fix. The labelled a3.0 Windows source suite passed
+796 tests with no failures and one optional native-input skip. Normal Electron
+smoke displayed a3.0 and all 102 registered tools.
+
+The ordinary live-sharing controls denied the first consent request, accepted a
+fresh request for an owned test window, displayed changing red/blue pixels in
+the paired encrypted viewer and released video tracks and the indicator on Stop.
+The native confirmation was intercepted; available display sources were limited
+to the fixture window. No physical camera, other desktop content or paid API was
+used. The combined media fixture passed real local and paired WebGL camera
+buttons, chart/map/diagram interaction, isolated HTML controls and denials,
+96 bounded authenticated media reads, cancellation, reconnect and revocation.
+
+The conditional-capability regression test verifies that initial and unchanged
+directory refreshes retain scene support and update the live-view and Host Work
+Inbox controls. A stale header refresh found during integration was corrected.
+Physical devices/WAN, pre-login reboot, the full hardware matrix and seven actual
+days remain separately pending. See [release notes](docs/a3.0-release-notes.md),
+[live sharing](LIVE_MEDIA.md) and [acceptance status](docs/a3.0-acceptance.md).
+
+The immutable native Safetensors CPU payload is retained. The pinned upstream
+Mistral.rs Windows CUDA candidate failed to compile because paged-attention CUDA
+APIs are gated to Unix while Windows core paths reference them. It supplied no
+native GPU inference proof and no engine fork was made. GGUF llama.cpp and the
+separate Ollama GPU route have independent verification.
+
 ## a2.9
 
 The candidate source suite passed **783 tests, zero failures and one optional

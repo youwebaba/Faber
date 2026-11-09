@@ -1,5 +1,10 @@
 # Chat media
 
+a3.0 also offers consented **Share video** and paired **Watch live** controls.
+Live capture is separate from saved chat attachments: it keeps only the current
+bounded frame in memory and stops on disconnection, hiding Faber, locking Windows
+or Stop. [Sources, consent and observed limits](LIVE_MEDIA.md)
+
 Faber plays saved audio and video in local and remote chats. Audio has
 play/pause, seeking and volume controls. Video has the same controls and a
 Fullscreen action. Playback starts when you choose Play. Switching away from a
