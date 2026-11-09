@@ -21,7 +21,9 @@ export async function runB201UISmoke({ window, runtime, chat, dataDir }) {
   await js(`document.querySelector('#modal').close()`);
   await click(`[data-chat-id="${chat.id}"]`);
   await click('#open-settings');
-  assert.equal(await js(`document.querySelectorAll('.settings-categories button').length`), 10);
+  const categories = await js(`Array.from(document.querySelectorAll('.settings-categories button'),node=>node.dataset.settingsCategory)`);
+  for (const category of ['ui','permissions','prompts','connections','models','voice','addons','upgrades','profiles','external','about']) assert.ok(categories.includes(category),category);
+  assert.equal(new Set(categories).size,categories.length);
   assert.equal(await js(`document.querySelector('#settings-ui-scale').value`), '1');
   await capture('b201-settings');
   await change('#settings-ui-scale', '1.1');

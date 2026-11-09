@@ -42,6 +42,42 @@ on the PC you are using, even when the chat belongs to another PC.
 
 ## Publishing a recording or generated file
 
+a2.7 adds supplied music tracks and timed text. MIDI `.mid`/`.midi` files have
+Play/Pause, seeking, volume and an inspector. Playback uses the bundled
+SpessaSynth synthesizer and MIT-licensed FluidR3Mono sound bank on the PC you
+are using, including when the file belongs to a paired host. It does not send
+MIDI to external hardware. Cancel stops playback/loading; Reopen starts paused.
+
+Group 2–8 supplied PCM WAV stems with `media_show {tracks:[{path,label?}],title?}`.
+They share one audio clock and seek position, with per-track Mute, Solo, volume
+and Save original. This plays supplied stems; it does not separate a recording.
+Grouped stems accept PCM WAV up to 32 MiB each, 64 MiB per group and 128 MiB
+decoded PCM at 48 kHz. Existing individual audio formats remain available.
+
+Attach SRT or VTT files with `captions:[{path,label?}]` alongside an audio/video
+`path` or stem group. The caption picker selects a supplied track or turns
+captions off. Video captions remain available in fullscreen. Timed transcript
+segments highlight during playback and seek when clicked. Long transcripts use
+bounded segment pages with a Follow current segment control. Missing, reversed
+or otherwise invalid timing is displayed as an error; the original subtitle
+can still be saved. No speech-recognition or translation model is run.
+
+For example:
+
+```json
+{"path":"clip.webm","captions":[{"path":"clip.vtt","label":"English"}]}
+```
+
+```json
+{"title":"Supplied stems","tracks":[{"path":"vocals.wav","label":"Vocals"},{"path":"drums.wav","label":"Drums"}],"captions":[{"path":"lyrics.srt","label":"Lyrics"}]}
+```
+
+Each member must be inside an authorized project and is copied independently.
+Saving uses the original file bytes. Paired transfers remain authenticated,
+bounded and cancelable. Reconnect never automatically resumes music playback.
+See [a2.7 media verification](docs/a2.7-media.md) for supported MIDI/timing limits
+and the pinned synthesizer/sound-bank licenses.
+
 An agent uses `media_show {path}` with a project-relative file path. It supports
 WAV, MP3, M4A and Ogg audio, and MP4 and WebM video, up to 512 MiB per file.
 PDF and DOCX have a 64 MiB limit, SVG 4 MiB, and GIF/APNG 16 MiB.

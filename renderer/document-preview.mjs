@@ -1,4 +1,4 @@
-let transfers=Promise.resolve();
+import {queueMediaTransfer} from './media-transfer.mjs';
 export function createDocumentPreview({ref,context,source,request,document=globalThis.document,window=globalThis.window,available=true}) {
   const node=document.createElement('figure');node.className='message-media document-preview';node.dataset.mediaId=ref.id;
   const caption=document.createElement('figcaption');caption.textContent=ref.name;
@@ -6,7 +6,7 @@ export function createDocumentPreview({ref,context,source,request,document=globa
   const status=document.createElement('p');status.className='media-status hint';status.setAttribute('role','status');
   const controls=document.createElement('div');controls.className='document-actions';const button=(text,handler)=>{const button=document.createElement('button');button.type='button';button.className='button';button.textContent=text;button.addEventListener('click',()=>Promise.resolve(handler()).catch(error=>{status.textContent=error.message;}));controls.append(button);return button;};
   const owner={chatId:context.chatId,...(context.deviceId?{deviceId:context.deviceId}:{})},annotationOwner={...owner,mediaId:ref.id,revision:ref.revision};
-  let controller,token,loaded=false,page=1,pages=1,zoom=1,quote='',anchorStart,notes=[],pending,disposed=false,visible=false;
+  let controller,token,loaded=false,page=1,pages=1,zoom=1,quote='',anchorStart,notes=[],pending,disposed=false,visible=false,playbackTime=0,playbackDuration=NaN;
   const post=(type,extra={})=>frame.contentWindow?.postMessage({token,type,...extra},'*');
   const save=button('Save original…',()=>request('media.save',{...owner,mediaId:ref.id}));
   const pageLabel=document.createElement('span');pageLabel.className='preview-page-label';controls.append(pageLabel);
@@ -38,17 +38,20 @@ export function createDocumentPreview({ref,context,source,request,document=globa
   }
   const receive=event=>{
     const value=event.data;if(disposed||event.source!==frame.contentWindow||value?.token!==token)return;
-    if(value.type==='ready'){const active=controller;transfers=transfers.catch(()=>{}).then(()=>{if(controller===active&&!active.signal.aborted)return load();});}
+    if(value.type==='ready'){const active=controller;void queueMediaTransfer(()=>{if(controller===active&&!active.signal.aborted)return load();});}
     if(value.type==='phase'&&typeof value.phase==='string')node.dataset.previewPhase=value.phase;
     if(value.type==='loaded'){loaded=true;node.dataset.previewLoaded='true';status.textContent='';if(value.bridgeAbsent!==true){stop();status.textContent='Preview isolation could not be established';}}
     if(value.type==='state'&&Number.isInteger(value.page)&&value.page>=1&&Number.isInteger(value.pages)&&value.pages>=1&&value.pages<=2000&&Number.isFinite(value.zoom)&&value.zoom>=.25&&value.zoom<=3){if(page!==value.page){quote='';anchorStart=undefined;if(highlight)highlight.disabled=true;}page=value.page;pages=value.pages;zoom=value.zoom;pageLabel.textContent=ref.kind==='document'?`Page ${page} of ${pages}`:`${Math.round(zoom*100)}%`;node.dataset.previewPages=String(pages);node.dataset.previewFrame=String(value.frame||0);node.dataset.previewFrames=String(value.frames||1);}
     if(value.type==='selection'&&value.page===page&&typeof value.quote==='string'&&value.quote.length<=4000&&Number.isInteger(value.anchorStart)&&value.anchorStart>=0&&value.anchorStart<=2_000_000){quote=value.quote;anchorStart=value.anchorStart;if(highlight)highlight.disabled=!quote;}
     if(value.type==='error'&&typeof value.message==='string')status.textContent=value.message.slice(0,500);
+    if(value.type==='playback'&&ref.kind==='midi'&&Number.isFinite(value.time)&&value.time>=0&&Number.isFinite(value.duration)&&value.duration>0&&value.duration<=14400){const changed=playbackDuration!==value.duration;playbackTime=value.time;playbackDuration=value.duration;if(changed)node.dispatchEvent(new Event('loadedmetadata'));node.dispatchEvent(new Event('timeupdate'));}
   };
   window.addEventListener('message',receive);
-  function start(){if(disposed)return;controller=new AbortController();token=crypto.randomUUID();loaded=false;quote='';anchorStart=undefined;if(highlight)highlight.disabled=true;frame.src=`faber-preview://viewer/index.html#${token}`;save.disabled=false;}
+  function start(){if(disposed)return;controller=new AbortController();token=crypto.randomUUID();loaded=false;quote='';anchorStart=undefined;if(highlight)highlight.disabled=true;frame.src=`faber-preview://viewer/${ref.kind==='midi'?'midi':'index'}.html#${token}`;save.disabled=false;}
   function stop(){controller?.abort();post('stop');loaded=false;delete node.dataset.previewLoaded;frame.src='about:blank';if(highlight)highlight.disabled=true;}
   const observer=new window.IntersectionObserver(entries=>{visible=entries[0].isIntersecting;if(visible&&available&&!controller)start();});observer.observe(node);
   if(!available)status.textContent='Connect to the host to open this attachment.';
-  return {node,preview:true,stop,setAvailable(value){available=value;if(value){controller=undefined;if(visible)start();}else{stop();status.textContent='Connect to the host to open this attachment.';}},destroy(){stop();disposed=true;observer.disconnect();window.removeEventListener('message',receive);}};
+  if(ref.kind==='midi'){button('Cancel playback/loading',()=>{stop();status.textContent='MIDI playback canceled.';});button('Reopen MIDI',()=>{if(available)start();});}
+  const transport={get currentTime(){return playbackTime;},set currentTime(time){post('seek',{time});},get duration(){return playbackDuration;},addEventListener:(...args)=>node.addEventListener(...args),removeEventListener:(...args)=>node.removeEventListener(...args)};
+  return {node,transport,preview:true,stop,setAvailable(value){available=value;if(value){controller=undefined;if(visible)start();}else{stop();status.textContent='Connect to the host to open this attachment.';}},destroy(){stop();disposed=true;observer.disconnect();window.removeEventListener('message',receive);}};
 }

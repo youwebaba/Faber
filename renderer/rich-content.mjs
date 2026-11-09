@@ -37,7 +37,7 @@ export function renderOutputImages(images, { document = globalThis.document, alt
   return container;
 }
 
-export function renderRichContent(value, { document = globalThis.document, onOpenLink } = {}) {
+export function renderRichContent(value, { document = globalThis.document, onOpenLink, onLastToken } = {}) {
   const source = typeof value === 'string' ? value : String(value ?? '');
   const root = document.createElement('div'); root.className = 'rich-content';
   let images = 0, imageBytes = 0, rendered = 0;
@@ -121,7 +121,44 @@ export function renderRichContent(value, { document = globalThis.document, onOpe
   try {
     // shortcut: very large replies render as plain text; move lexing to a worker if rich rendering above this size is needed.
     if (source.length > 200000) throw new Error('Rich text exceeds render budget');
-    render(marked.lexer(source, { gfm: true, breaks: true }), root);
+    const tokens = marked.lexer(source, { gfm: true, breaks: true });
+    render(tokens, root); onLastToken?.(tokens.at(-1));
   } catch { root.replaceChildren(document.createTextNode(source)); root.classList.add('rich-content-plain'); }
   return root;
+}
+
+function syncRichNodes(current, next) {
+  if (current.isEqualNode(next)) return;
+  if (current.nodeType === 3 && next.nodeType === 3) {
+    if (next.data.startsWith(current.data)) current.appendData(next.data.slice(current.length));
+    else current.replaceData(0,current.length,next.data);
+    return;
+  }
+  if (current.nodeType !== 1 || next.nodeType !== 1 || !current.cloneNode(false).isEqualNode(next.cloneNode(false))) { current.replaceWith(next); return; }
+  const previous = [...current.childNodes], incoming = [...next.childNodes];
+  for (let i=0; i<incoming.length; i++) { if (previous[i]) syncRichNodes(previous[i],incoming[i]); else current.append(incoming[i]); }
+  for (let i=incoming.length; i<previous.length; i++) previous[i].remove();
+}
+
+// Delimiters and replacements go back through the same bounded, sanitized Markdown renderer.
+export function updateStreamContent(container, source, options = {}) {
+  const prior = container.streamContent;
+  if (source === prior?.text) return;
+  const doc = options.document || container.ownerDocument;
+  const delta = prior && source.startsWith(prior.text) ? source.slice(prior.text.length) : '';
+  if (delta && prior.tail && source.length <= 200000 && (prior.mode === 'plain' ? /^[\p{L}\p{N} ,]+$/u.test(delta) : !/[\r\n`~]/.test(delta))) {
+    prior.tail.appendData(delta); prior.text = source; return;
+  }
+  let last;
+  const fresh = renderRichContent(source, {...options,document:doc,onLastToken:token=>{last=token;}});
+  if (prior) syncRichNodes(container.firstChild,fresh);
+  else { const cursor=doc.createElement('span'); cursor.className='stream-cursor'; container.replaceChildren(fresh,cursor); }
+  const root=container.firstChild, paragraph=root.lastElementChild;
+  let mode, tail;
+  if (last?.type==='paragraph' && last.raw===last.text && /^[\p{L}\p{N} ,]+$/u.test(last.text) && paragraph?.childNodes.length===1 && paragraph.firstChild.nodeType===3) {
+    mode='plain';tail=paragraph.firstChild;
+  } else if (last?.type==='code' && /^(`{3,}|~{3,})[^\n]*\n/.test(last.raw) && !/[\r\n]$/.test(last.raw) && !/\n {0,3}(?:`{3,}|~{3,})\s*$/.test(last.raw) && paragraph?.localName==='pre' && paragraph.firstChild?.firstChild?.nodeType===3) {
+    mode='code';tail=paragraph.firstChild.firstChild;
+  }
+  container.streamContent={text:source,mode,tail};
 }

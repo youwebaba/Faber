@@ -1,13 +1,18 @@
 import { safeOutputImage } from './rich-content.mjs';
 import { createDocumentPreview } from './document-preview.mjs';
+import {createStemOutput,attachTimedCaptions} from './timed-media.mjs';
 
 const formats = { 'audio/wav': ['audio', '.wav'], 'audio/mpeg': ['audio', '.mp3'], 'audio/mp4': ['audio', '.m4a'], 'audio/ogg': ['audio', '.ogg'], 'video/mp4': ['video', '.mp4'], 'video/webm': ['video', '.webm'] };
 Object.assign(formats,{'application/pdf':['document','.pdf'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['document','.docx'],'image/svg+xml':['vector','.svg'],'image/gif':['animation','.gif'],'image/apng':['animation','.apng'],'image/png':['animation','.png']});
+Object.assign(formats,{'audio/midi':['midi','.mid'],'application/x-subrip':['caption','.srt'],'text/vtt':['caption','.vtt']});
 export function mediaReferences(value) {
-  return (Array.isArray(value) ? value : []).filter(ref => {
+  function base(ref){
     const format = Object.hasOwn(formats, ref?.mimeType) ? formats[ref.mimeType] : null;
-    return format && ref.kind === format[0] && typeof ref.id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(ref.id) && Number.isSafeInteger(ref.bytes) && ref.bytes > 0 && ref.bytes <= 512 * 1024 * 1024 && typeof ref.name === 'string' && ref.name.length > 0 && ref.name.length <= 180 && !/[\\/:\u0000-\u001f\u007f]/.test(ref.name) && ref.name.toLowerCase().endsWith(format[1]);
-  }).filter(ref=>!['document','vector','animation'].includes(ref.kind)||typeof ref.revision==='string'&&/^[a-f0-9]{64}$/.test(ref.revision)&&ref.bytes<=({document:64*1024*1024,vector:4*1024*1024,animation:16*1024*1024}[ref.kind])).slice(0, 1).map(({ id, kind, mimeType, bytes, name, revision }) => ({ id, kind, mimeType, bytes, name,...(revision?{revision}:{}) }));
+    const limit={document:64*1024*1024,vector:4*1024*1024,animation:16*1024*1024,midi:4*1024*1024,caption:1024*1024}[ref?.kind];
+    return format && ref.kind === format[0] && typeof ref.id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(ref.id) && Number.isSafeInteger(ref.bytes) && ref.bytes > 0 && ref.bytes <= (limit||512*1024*1024) && typeof ref.name === 'string' && ref.name.length > 0 && ref.name.length <= 180 && !/[\\/:\u0000-\u001f\u007f]/.test(ref.name) && (ref.name.toLowerCase().endsWith(format[1])||ref.kind==='midi'&&ref.name.toLowerCase().endsWith('.midi'))&&(!limit||typeof ref.revision==='string'&&/^[a-f0-9]{64}$/.test(ref.revision));
+  }
+  const pick=({id,kind,mimeType,bytes,name,revision})=>({id,kind,mimeType,bytes,name,...(revision?{revision}:{})}),members=(rows,kind,max)=>Array.isArray(rows)&&rows.length>0&&rows.length<=max&&rows.every(row=>typeof row?.label==='string'&&row.label.length>0&&row.label.length<=100&&base(row.media)&&row.media.kind===kind&&!row.media.tracks&&!row.media.captions);
+  return(Array.isArray(value)?value:[]).filter(ref=>base(ref)&&ref.kind!=='caption'&&(!ref.tracks||members(ref.tracks,'audio',8)&&ref.tracks.length>=2&&ref.tracks[0].media.id===ref.id&&ref.tracks.every(row=>row.media.mimeType==='audio/wav'&&row.media.bytes<=32*1024*1024)&&ref.tracks.reduce((sum,row)=>sum+row.media.bytes,0)<=64*1024*1024)&&(!ref.captions||members(ref.captions,'caption',4))).slice(0,1).map(ref=>({...pick(ref),...(typeof ref.title==='string'&&ref.title.length<=100?{title:ref.title}:{}),...(ref.tracks?{tracks:ref.tracks.map(row=>({label:row.label,media:pick(row.media)}))}:{}),...(ref.captions?{captions:ref.captions.map(row=>({label:row.label,media:pick(row.media)}))}:{})}));
 }
 export function resultMedia(value) {
   try { return mediaReferences([(typeof value === 'string' ? JSON.parse(value) : value)?.media]); } catch { return []; }
@@ -28,10 +33,12 @@ export function createMediaOutputs({ request, contentMenu, document = globalThis
       return mediaReferences(refs).map(ref => {
         const key = JSON.stringify([context.deviceId, context.chatId, ref.id]); let entry = entries.get(key);
         if (entry) return entry.node;
-        if(!['audio','video'].includes(ref.kind)){entry=createDocumentPreview({ref,context,request,document,available,source:mediaSource(context.chatId,ref.id,context.deviceId)});contentMenu?.bind(entry.node,{...context,mediaId:ref.id,text:ref.name});entries.set(key,entry);return entry.node;}
+        const owner={chatId:context.chatId,...(context.deviceId?{deviceId:context.deviceId}:{})},source=media=>mediaSource(context.chatId,media.id,context.deviceId);
+        if(ref.tracks){entry=createStemOutput({ref,context,request,document,available,source});contentMenu?.bind(entry.node,{...context,mediaId:ref.id,text:ref.title||ref.name});entries.set(key,entry);return entry.node;}
+        if(!['audio','video'].includes(ref.kind)){entry=createDocumentPreview({ref,context,request,document,available,source:mediaSource(context.chatId,ref.id,context.deviceId)});if(ref.captions)entry.captions=attachTimedCaptions({ref,node:entry.node,player:entry.transport,request,owner,source,document});contentMenu?.bind(entry.node,{...context,mediaId:ref.id,text:ref.name});entries.set(key,entry);return entry.node;}
         const node = document.createElement('figure'); node.className = 'message-media'; node.dataset.mediaId = ref.id;
         const caption = document.createElement('figcaption'); caption.textContent = ref.name;
-        const player = document.createElement(ref.kind), source = mediaSource(context.chatId, ref.id, context.deviceId); player.controls = true; player.preload = 'metadata'; player.setAttribute('aria-label', ref.name); if (available) player.src = source;
+        const player = document.createElement(ref.kind), playerSource = mediaSource(context.chatId, ref.id, context.deviceId); player.controls = true; player.preload = 'metadata'; player.setAttribute('aria-label', ref.name); if (available) player.src = playerSource;
         const status = document.createElement('p'); status.className = 'media-status hint'; status.setAttribute('role', 'status'); status.hidden = available; if (!available) status.textContent = 'Connect to the host to play this media.';
         player.addEventListener('error', () => { status.textContent = `This ${ref.kind} is unavailable or its format is unsupported. You can try Save As… to open it in another player.`; status.hidden = false; });
         node.append(caption, player);
@@ -42,13 +49,13 @@ export function createMediaOutputs({ request, contentMenu, document = globalThis
           node.append(fullscreen);
         }
         node.append(status); contentMenu?.bind(node, { ...context, mediaId: ref.id, text: ref.name });
-        entry = { node, player, source, status }; entries.set(key, entry); return node;
+        entry = { node, player, source:playerSource, status };if(ref.captions)entry.captions=attachTimedCaptions({ref,node,player,request,owner,source,document});entries.set(key, entry); return node;
       });
     },
-    setAvailable(value) { if (available === value) return; available = value; for (const entry of entries.values()) { if(entry.preview){entry.setAvailable(value);continue;}if (value) { entry.status.hidden = true; entry.player.src = entry.source; } else { stop(entry); entry.status.textContent = 'Connect to the host to play this media.'; entry.status.hidden = false; } } },
-    prune() { for (const [key, entry] of entries) if (!entry.node.isConnected) { entry.preview?entry.destroy():stop(entry); entries.delete(key); } },
+    setAvailable(value) { if (available === value) return; available = value; for (const entry of entries.values()) { entry.captions?.setAvailable(value);if(entry.preview){entry.setAvailable(value);continue;}if (value) { entry.status.hidden = true; entry.player.src = entry.source; } else { stop(entry); entry.status.textContent = 'Connect to the host to play this media.'; entry.status.hidden = false; } } },
+    prune() { for (const [key, entry] of entries) if (!entry.node.isConnected) { entry.captions?.destroy();entry.preview?entry.destroy():stop(entry); entries.delete(key); } },
     clear(context) {
-      track(context); if (entries.size || owners.size) contentMenu?.close(); for (const entry of entries.values()) entry.preview?entry.destroy():stop(entry); entries.clear();
+      track(context); if (entries.size || owners.size) contentMenu?.close(); for (const entry of entries.values()){entry.captions?.destroy();entry.preview?entry.destroy():stop(entry);}entries.clear();
       for (const owner of owners.values()) void request('media.release', owner).catch(() => {});
       owners.clear();
     },

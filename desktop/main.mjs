@@ -160,7 +160,7 @@ protocol.handle('faber',async request=>{
     return new Response(await fs.readFile(target),{headers:{'Content-Type':mime,'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; object-src 'none'; frame-src faber-preview:; base-uri 'none'; form-action 'none'",'X-Content-Type-Options':'nosniff'}});
   }catch{return new Response('Not found',{status:404});}
 });
-protocol.handle('faber-preview',request=>previewProtocol(request,sourceDir));
+protocol.handle('faber-preview',request=>previewProtocol(request,sourceDir,app.isPackaged?path.join(process.resourcesPath,'media-runtime'):undefined));
 const workerSmoke=smokeWorker?await import('../test/desktop-worker-smoke.mjs'):null;
 runtime=await createRuntime({dataDir,sourceDir,host,...(workerSmoke?{provider:workerSmoke.workerProvider}:{})});
 worker=await createBackgroundWorker({dataDir,sourceDir,profileId:profiles.currentId,app,isAttached:()=>!!window&&!window.isDestroyed(),closeWindow:async()=>{window?.close();},pause:async()=>{await runtime.request('routines.pause',{paused:true});const state=await runtime.request('state.get');for(const id of new Set(state.runs.filter(run=>['running','waiting_approval'].includes(run.status)).map(run=>run.chatId)))await runtime.request('chat.forceStop',{chatId:id});},quit:()=>app.quit(),emit:event=>runtime.emit(event),allowLoginMutation:!smoke});

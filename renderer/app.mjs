@@ -1,4 +1,4 @@
-import { PERMISSIONS, isActive, latestRun, safeImage, displayText, parseArguments, statusLabel, extensionActions, streamText, reconcileStreams, sameMessage, chatApprovals } from './ui-helpers.mjs';
+import { PERMISSIONS, isActive, latestRun, safeImage, displayText, parseArguments, statusLabel, extensionActions, reconcileStreams, sameMessage, chatApprovals } from './ui-helpers.mjs';
 import { createModelsBrowser } from './models.mjs';
 import { createBrowserPanel } from './browser.mjs';
 import { createConnections } from './connections.mjs';
@@ -10,7 +10,7 @@ import { composeUISnapshot, validateUISnapshot, refreshBlocker, mergeRuntimeStre
 import { createNavigationMenu, deletionWarning, orderedChatFamilies } from './chat-navigation.mjs';
 import { createChatControls } from './chat-controls.mjs';
 import { createRunActivity, modelProgress } from './run-activity.mjs';
-import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
+import { createLiveTranscript, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { modelDisplayName } from './model-names.mjs';
 import { createPreferences } from './preferences.mjs';
 import { createChatGPTControls } from './chatgpt.mjs';
@@ -41,7 +41,7 @@ const pendingCorrections = new Map();
 const imageDrafts = createAttachmentDrafts({ onChange: key => { if (key === draftKey()) renderImageDrafts(); scheduleUIRefresh(); } });
 let imageDraftRenderKey;
 const messageNodes = new Map();
-const streamNodes = new Map();
+const liveTranscript = createLiveTranscript({el,bindContent,onOpenLink:url=>act(()=>request('app.openLink',{url}))});
 const outputImageNodes = new Map(), recentErrors = [];
 const contentMenu = createContentMenu({ request, onError: error => notify(error.message || String(error), true), onNotice: notify, onOpen: () => navigationMenu.close() });
 const mediaOutputs = createMediaOutputs({ request, contentMenu });
@@ -202,12 +202,12 @@ function renderNavigation() {
 }
 function renderTranscript() {
   const transcript = $('#transcript');
-  if (remoteConnections.workspace.isOpen()) { mediaOutputs.clear(); transcriptChatId = undefined; return; }
+  if (remoteConnections.workspace.isOpen()) { mediaOutputs.clear(); liveTranscript.reset(); transcriptChatId = undefined; return; }
   preserveTranscriptViewport(transcript, () => {
   const chat = currentChat(), pending = pendingUserMessages(chat); const messages = [...(chat?.messages || []).filter(message => message.role !== 'system'), ...pending];
   const identity = chat?.id || `new:${currentProject()?.id || ''}`;
-  if (identity !== transcriptChatId) { mediaOutputs.clear(); transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); outputImageNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
-  const rows = [...transcriptTimeline(state, chat?.id, streams), ...pending.map(message => ({ kind: 'message', key: message.id, message }))], nodes = [];
+  if (identity !== transcriptChatId) { mediaOutputs.clear(); transcript.replaceChildren(); messageNodes.clear(); liveTranscript.reset(); outputImageNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
+  const rows = [...liveTranscript.timeline(state, chat?.id, streams), ...pending.map(message => ({ kind: 'message', key: message.id, message }))], nodes = [];
   const corrections = new Map(state.runs.filter(run => run.chatId === chat?.id).flatMap(run => (run.steering || []).map(item => [item.messageId, item])));
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
@@ -236,9 +236,7 @@ function renderTranscript() {
       continue;
     }
     if (row.kind === 'stream') {
-      let article = streamNodes.get(row.key);
-      if (!article) { article = el('article', 'message assistant streaming'); article.dataset.runId = row.run.id; article.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); streamNodes.set(row.key, article); }
-      if (article.streamText !== row.text) { article.streamText = row.text; article.lastChild.replaceChildren(richContent(row.text), el('span', 'stream-cursor')); bindContent(article, { chatId: chat.id, text: row.text }); } nodes.push(article); continue;
+      nodes.push(liveTranscript.row(row.run,row.text)); continue;
     }
     const message = row.message;
     let entry = messageNodes.get(message.id);
@@ -296,7 +294,8 @@ function createMessageNode(message, correction = '') {
   return article;
 }
 function renderStream() {
-  renderTranscript();
+  if (remoteConnections.workspace.isOpen()) return;
+  if (!liveTranscript.update($('#transcript'),streams,card=>runActivity.get(state,card,streams))) renderTranscript();
 }
 function resultImage(result) { try { return (typeof result === 'string' ? JSON.parse(result) : result)?.image; } catch { return undefined; } }
 function richContent(text) { return renderRichContent(text, { onOpenLink: url => act(() => request('app.openLink', { url })) }); }
@@ -654,7 +653,7 @@ const browserPanel = createBrowserPanel({ request, subscribe: bridge?.subscribe,
 const modelsBrowser = createModelsBrowser({ request, subscribe: bridge?.subscribe, el, button, field, actions, notify, showSettings: () => showSettings('models') });
 const connections = createConnections({ request, refresh, getState: () => state, getChat: currentChat, getModelLabels: () => modelLabels, newChat, modal, closeModal, el, button, field, selectField, checkedRow, actions, showSettings: () => showSettings('connections'), createPromptChoice: () => preferences.createPromptChoice(), mountOpenAI: body => chatgptControls.mount(body) });
 const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe, modal, el, button, actions, notify });
-const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, contentMenu, showConnections: () => showSettings('connections'), suspendLocal: () => { mediaOutputs.clear(); transcriptChatId = undefined; browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: () => { renderNavigation(); if (!remoteConnections.workspace.isOpen()) renderTranscript(); scheduleUIRefresh(); } });
+const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, contentMenu, showConnections: () => showSettings('connections'), suspendLocal: () => { mediaOutputs.clear(); liveTranscript.reset(); transcriptChatId = undefined; browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: () => { renderNavigation(); if (!remoteConnections.workspace.isOpen()) renderTranscript(); scheduleUIRefresh(); } });
 const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => remoteConnections.hasDrafts() || hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
 const preferences = createPreferences({ workspaceControls, remoteConnections, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
 const routineControls=createRoutineControls({request,subscribe:bridge?.subscribe,getState:()=>state,getProject:currentProject,selectChat,modal,closeModal,el,button,field,selectField,checkedRow,actions,notify});
