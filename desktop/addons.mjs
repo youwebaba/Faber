@@ -121,7 +121,7 @@ export function createAddons({dataDir,runtime,confirm,chooseAddon,openPath,emit 
       entry.runs.delete(runId);
       if(entry.automatic&&typeof entry.module.releaseRun==='function')Promise.resolve(entry.module.releaseRun(runId)).catch(error=>{warnings.push(`Lightpanda release: ${error.message}`);});
     }
-  });
+  },{accept:type=>type==='state'&&[...active.values()].some(entry=>entry.runs.size),view:'lifecycle'});
   let rows = [], warnings = [], initialized = false, legacyMigrated = false, registryInitialized = false, queue = Promise.resolve(), restartRequired = false, publishedSnapshot, savedState, automaticPaused=false;
   const snapshot = () => ({directory,addons:structuredClone(rows),warnings:[...warnings],restartRequired,safeMode});
   const publish = () => {const state=snapshot(),serialized=JSON.stringify(state);if(serialized===publishedSnapshot)return;publishedSnapshot=serialized;try {emit({type:'addons',state});} catch { /* UI lifetime is independent of host state. */ }};
