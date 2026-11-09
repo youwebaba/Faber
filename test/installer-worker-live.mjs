@@ -1,0 +1,15 @@
+// Real Electron/Windows-pipe installer helper test; no actual owner installation or registry is changed.
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
+import {fileURLToPath} from 'node:url';
+const sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'Faber-installer-worker-'))),localAppData=path.join(root,'local-app-data'),profile=path.join(localAppData,'Faber');await fs.mkdir(profile,{recursive:true});
+const electron=createRequire(import.meta.url)('electron'),env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
+async function run(file,args,options={}){const child=spawn(file,args,{cwd:sourceDir,windowsHide:true,env,stdio:['ignore','pipe','pipe'],...options});let log='';for(const stream of [child.stdout,child.stderr])stream.on('data',bytes=>log+=bytes.toString());const done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',code=>resolve({code,log}));});return {child,done};}
+const live=await run(electron,[sourceDir,'--smoke-worker','--smoke-profile',profile,'--worker-update-wait']);let finished=false;
+try{for(let i=0;i<400;i++){try{await fs.stat(path.join(profile,'worker-update-ready.json'));finished=true;break;}catch(error){if(error.code!=='ENOENT')throw error;}if(live.child.exitCode!==null)throw new Error((await live.done).log);await new Promise(resolve=>setTimeout(resolve,50));}assert.equal(finished,true,'Worker did not reach its controlled pending action');const helper=await run(process.execPath,[path.join(sourceDir,'desktop','worker-update-cli.cjs'),'--install-root',path.join(root,'fake-install'),'--to-version','2.9.0','--isolated-local-app-data',localAppData]);const checkpoint=await helper.done;assert.equal(checkpoint.code,0,checkpoint.log);const stopped=await live.done;assert.equal(stopped.code,0,stopped.log);await fs.writeFile(path.join(root,'checkpoint.log'),checkpoint.log);await fs.writeFile(path.join(root,'worker.log'),stopped.log);
+  const before=JSON.parse(await fs.readFile(path.join(profile,'state.json'),'utf8'));assert.equal(before.workerQueue.paused,true);assert.equal(before.jobs.find(job=>job.definition.name==='installer-pending').status,'interrupted');const reopen=await run(electron,[sourceDir,'--smoke-worker','--smoke-profile',profile,'--worker-update-reopen']),reopened=await reopen.done;assert.equal(reopened.code,0,reopened.log);await fs.writeFile(path.join(root,'reopen.log'),reopened.log);const report=JSON.parse(await fs.readFile(path.join(profile,'worker-update-reopen.json'),'utf8'));await fs.writeFile(path.join(root,'evidence.json'),JSON.stringify({...report,realWindows:true,realElectron:true,actualInstallerExecuted:false,modelFilesUntouched:true,ownerRegistryUntouched:true},null,2));console.log(JSON.stringify({evidence:path.join(root,'evidence.json'),...report}));
+}finally{if(live.child.exitCode===null)live.child.kill();}

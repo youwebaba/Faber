@@ -18,6 +18,8 @@ import { createMediaStore, sourceMediaRefs, mediaReferenceTree } from './media.m
 import {createRoutines,routineSchemas} from './routines.mjs';
 import {runFolderReport} from './folder-report.mjs';
 import {fileTools} from '../tools/files.mjs';
+import {exportRoutineBackup,restoreRoutineBackup} from './routine-backup.mjs';
+import {reviewBootGrant} from './boot-eligibility.mjs';
 
 const now = () => new Date().toISOString();
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -99,7 +101,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   state.approvals = [];
   await store.save(state);
   const registry = new Map(), extensionNames = new Set(), connectorNames = new Set(), listeners = new Map(), live = new Map(), pending = new Map(), settling=new Set();
-  const projectTools = projectId => [...registry.values()].filter(tool => !tool.projectId || tool.projectId === projectId);
+  const inProject = (tool,projectId) => (!tool.projectId || tool.projectId===projectId) && (!tool.availableFor || tool.availableFor(projectId));
+  const projectTools = projectId => [...registry.values()].filter(tool => inProject(tool,projectId));
   const providerEdits = new Set(), providerTests = new Map();
   const chatLocks=new Set();
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
@@ -351,7 +354,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   async function executeTool(run, name, args, origin = {}) {
     const tool = registry.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
-    if (tool.projectId && tool.projectId !== find('chats', run.chatId).projectId) throw new Error('This connector tool is outside the current project');
+    if (!inProject(tool,find('chats',run.chatId).projectId)) throw new Error('This connector tool is outside the current project');
     validate(args, tool.parameters);
     const execution = live.get(run.id), signal = execution.controller.signal;
     signal.throwIfAborted(); assertRunAuthority(run);
@@ -372,11 +375,11 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       try{signal.throwIfAborted();if(operation.superseded)throw new Error('Action superseded by steering before execution');}
       catch(error){if(event.intent?.phase==='dispatching')event.intent.phase='prepared';throw error;}
       operation.stage = 'running';
-      const value = Object.hasOwn(policy,'result')?policy.result:await abortable(tool.execute(args, { runtime: execution.externalSessionId ? Object.freeze({}) : runtime, chat: structuredClone(chat), project: structuredClone(project), runId: run.id, signal, dataDir, sourceDir, host, authorizePath: (file, summary) => authorizePath(run, file, summary), authorizeProject: (projectId, summary) => approveProject(run, projectId, summary), approve: (permission, summary) => {
+      const value = Object.hasOwn(policy,'result')?policy.result:await abortable(tool.execute(args, { runtime: execution.externalSessionId ? Object.freeze({}) : runtime, chat: structuredClone(chat), project: structuredClone(project), runId: run.id, signal, dataDir, sourceDir, host, authorizePath: (file, summary) => authorizePath(run, file, summary), authorizeProject: (projectId, summary) => approveProject(run, projectId, summary), approve: (permission, summary, force=false) => {
         if (!permissions.includes(permission)) throw new Error('Unknown permission');
         signal.throwIfAborted();
-        if (!execution.externalSessionId && !run.jobId&&host.isAutomaticTool?.(tool, permission) === true) return Promise.resolve(true);
-        return approve(run, permission, summary,!!run.jobId&&['network','computer','shell','upgrade'].includes(permission));
+        if (!force && !execution.externalSessionId && !run.jobId&&host.isAutomaticTool?.(tool, permission) === true) return Promise.resolve(true);
+        return approve(run, permission, summary,force || !!run.jobId&&['network','computer','shell','upgrade'].includes(permission));
       } }), signal);
       signal.throwIfAborted(); assertRunAuthority(run);
       const serialized = JSON.stringify(value ?? null);
@@ -1012,6 +1015,11 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     registerTools(tools) { install(tools); },
     replaceConnectorTools(tools) { install(tools, connectorNames); },
     startRoutines:()=>routines.ready(),
+    workerCheckpointState:()=>structuredClone(state),
+    async reviewBootRoutine({id,eligible,project,model,hardware}){if(eligible&&live.size)throw new Error('Stop active work before changing unattended authority');const routine=find('routines',id);if(eligible){if(project.id!==routine.definition.projectId||await realpath(find('projects',project.id).path)!==project.path)throw new Error('Project identity changed during boot review');routine.bootGrant=reviewBootGrant({routine,project,model,hardware});}else delete routine.bootGrant;await changed();return routines.snapshot();},
+    async checkpointWorker(){const before=structuredClone(state.jobs.filter(job=>['running','waiting_approval','waiting_interaction','loading_model','waiting_resource'].includes(job.status)).map(job=>({id:job.id,status:job.status,step:job.step||null})));await routines.request('routines.pause',{paused:true});await stopRuns(new Set(live.keys()));await Promise.all([...settling]);for(const item of before){const job=state.jobs.find(job=>job.id===item.id);job.status='interrupted';job.checkpoint={...item,at:now()};}await changed();await host.actionLedger?.flush();return snapshot();},
+    async exportRoutineBackup(){if(!host.actionLedger)throw new Error('Independent effect history is unavailable');await host.actionLedger.flush();return exportRoutineBackup({state,namespace:host.actionLedger.namespace||host.actionLedger.snapshot().namespace,watermark:host.actionLedger.snapshot()});},
+    async restoreRoutineBackup(archive){if(live.size)throw new Error('Stop active work before restoring routine evidence');if(!host.actionLedger)throw new Error('Independent effect history is unavailable');await host.actionLedger.flush();const next=restoreRoutineBackup(state,archive,{namespace:host.actionLedger.namespace||host.actionLedger.snapshot().namespace,watermark:host.actionLedger.snapshot()});for(const key of ['routines','jobs','restoreHistory','workerQueue','scheduler'])state[key]=next[key];await routines.restored();return routines.snapshot();},
     async withExternalProvider({ providerId, model }, callback) {
       if (closed) throw new Error('Runtime is closed');
       validate({ providerId, ...(model !== undefined ? { model } : {}) }, object({ providerId: idSchema, model: { type: 'string', minLength: 1, maxLength: 300 } }, ['providerId']));

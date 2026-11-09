@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
+import {sceneAsset} from './scene-assets.mjs';
 
 export const previewScheme = { scheme: 'faber-preview', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } };
 export const previewCSP = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src blob: data:; font-src blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
@@ -14,6 +15,7 @@ export async function verifyTimedMediaAssets(sourceDir,mediaRuntime=path.join(so
 }
 export async function previewProtocol(request, sourceDir,mediaRuntime=path.join(sourceDir,'.runtime/media-runtime')) {
   try {
+    const scene=await sceneAsset(request,sourceDir);if(scene)return scene;
     const url = new URL(request.url), relative = url.pathname.slice(1);
     const music=/^music\/(spessasynth_lib\.js|spessasynth_core\.js|spessasynth_processor\.min\.js|fflate\.js|stb-vorbis\.js|FluidR3Mono_GM\.sf3)$/.exec(relative);
     if (url.protocol !== 'faber-preview:' || url.hostname !== 'viewer' || url.username || url.password || url.search || request.method !== 'GET' || !(/^(index\.html|frame\.mjs|frame\.css|docx\.mjs|timed\.mjs|midi\.html|midi\.mjs|interactive\.html|interactive\.css|interactive\.mjs|interactive-data\.mjs)$/.test(relative) || music || /^pdfjs\/(?:build\/(?:pdf|pdf\.worker)\.mjs|(?:cmaps|standard_fonts|wasm)\/[A-Za-z0-9_.-]+)$/.test(relative))) return new Response('Forbidden',{status:403});

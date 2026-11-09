@@ -6,7 +6,9 @@ import os from 'node:os';
 import {createHash} from 'node:crypto';
 import {createRuntime} from '../core/runtime.mjs';
 import {mediaTools} from '../tools/media.mjs';
-import {mediaReferenceTree,validateMediaRef} from '../core/media.mjs';
+import {mediaReferenceTree,validateMediaRef,sourceMediaRefs,graphRevision,createMediaStore} from '../core/media.mjs';
+import {mediaReferences} from '../renderer/content-media.mjs';
+import {scenes} from './fixtures/scenes.mjs';
 import {validAssetName,mediaGraphRevision} from '../core/media-artifacts.mjs';
 import {parseInteractiveData,validateInteractiveData,diagramPositions} from '../renderer/preview/interactive-data.mjs';
 import {chartFixture,mapFixture,diagramFixture,htmlFixture,scriptFixture,cssFixture,pixelFixture} from './fixtures/interactive-media.mjs';
@@ -32,4 +34,16 @@ test('interactive file suffixes survive a27 pruning, and invalid asset graphs re
   const f=await fixture(t);for(const name of ['../escape.js','a/../b.js','/absolute.js','https://remote.js','a%2fb.js','index.html','wrapper.html'])assert.equal(validAssetName(name),false);assert.equal(validAssetName('assets/script.mjs'),true);
   await assert.rejects(publish(f,{path:'demo.html',assets:[{path:'demo.js',name:'../escape.js'}]}));await assert.rejects(publish(f,{path:'demo.html',assets:[{path:'demo.js',name:'same.js'},{path:'demo.css',name:'same.js'}]}));
   const {media}=await publish(f,{path:'demo.html',assets:[{path:'demo.js'}]}),folder=path.join(f.options.dataDir,'chat-media',createHash('sha256').update(f.chat.id).digest('hex')),files=await fs.readdir(folder),a27=/^([0-9a-f-]{36})(?:\.(?:preview|music))?\.bin(\.tmp|\.notes\.json(?:\.[0-9a-f-]{36}\.tmp)?)?$/;assert.equal(files.length,2);assert.ok(files.every(name=>name.endsWith('.interactive.bin')&&!a27.test(name)));assert.throws(()=>validateMediaRef({...media,graphRevision:'a'.repeat(64)}),/graph revision/);
+});
+
+test('unified HTML and scene manifests reject mixed storage, executable scene assets and wrong-family byte lookup',async t=>{
+  const f=await fixture(t),scene=scenes();for(const [name,content]of [['triangle.gltf',scene.gltf],...scene.assets]){await fs.mkdir(path.dirname(path.join(f.workspace,name)),{recursive:true});await fs.writeFile(path.join(f.workspace,name),content);}
+  const html=(await publish(f,{path:'demo.html',assets:[{path:'demo.js'},{path:'pixel.png'}]})).media,model=(await publish(f,{path:'triangle.gltf',assets:[...scene.assets.keys()].map(name=>({name,path:name}))})).media;
+  assert.equal(graphRevision(html),mediaGraphRevision(html));assert.equal(graphRevision(model),mediaGraphRevision(model));assert.equal(mediaReferences([model])[0].storage,'scene');
+  for(const [root,child]of [[html,model.assets.find(row=>row.media.mimeType==='image/png').media],[model,html.assets.find(row=>row.media.mimeType==='image/png').media]]){const mixed=structuredClone(root);mixed.assets[0].media=child;mixed.graphRevision=mediaGraphRevision(mixed);assert.throws(()=>validateMediaRef(mixed),/mixed-storage/);assert.deepEqual(sourceMediaRefs({result:{media:mixed}}),[]);assert.deepEqual(mediaReferences([mixed]),[]);}
+  const scriptScene=structuredClone(model);scriptScene.assets[0].media={...html.assets[0].media,storage:'scene'};scriptScene.graphRevision=mediaGraphRevision(scriptScene);assert.throws(()=>validateMediaRef(scriptScene),/reference|storage/);assert.deepEqual(mediaReferences([scriptScene]),[]);
+  for(const root of [html,model])assert.throws(()=>validateMediaRef({...root,storage:root.storage==='scene'?'interactive':'scene'}),/storage/);
+  const sceneImage=model.assets.find(row=>row.media.mimeType==='image/png').media,wrongFamily={...sceneImage,storage:'interactive'},store=createMediaStore({dataDir:f.options.dataDir,findReference:()=>wrongFamily});await assert.rejects(store.read({chatId:f.chat.id,mediaId:sceneImage.id,length:1}),/ENOENT/);
+  const old=await f.runtime.remoteRequest('chat.read',{chatId:f.chat.id,mediaMode:'references'}),modern=await f.runtime.remoteRequest('chat.read',{chatId:f.chat.id,mediaMode:'references',sceneMode:'references'}),refs=value=>value.runs.flatMap(run=>run.toolEvents||[]).flatMap(event=>event.mediaRefs||[]);assert.ok(refs(old).some(ref=>ref.kind==='html'));assert.ok(!refs(old).some(ref=>ref.kind==='scene'));assert.ok(refs(modern).some(ref=>ref.kind==='scene'));
+  await f.runtime.close();const restored=await createRuntime(f.options);try{for(const root of [html,model])for(const ref of mediaReferenceTree({result:{media:root}})){const result=await restored.readMedia({chatId:f.chat.id,mediaId:ref.id,length:1});assert.equal(result.media.storage,root.storage);assert.equal(Buffer.from(result.data,'base64').length,1);}}finally{await restored.close();}
 });

@@ -22,6 +22,9 @@ const streams = value => list(value).filter(item => id(item.runId) && typeof ite
 }));
 
 // Remote metadata never becomes a local path, extension action, or provider setting.
+export function remoteCapabilities(value) {
+  return Object.fromEntries(['imageReferences','mediaReferences','sceneReferences','steering','workInbox'].map(name=>[name,value?.[name]===true]));
+}
 export function remoteWorkspace(value) {
   if (!record(value) || !Array.isArray(value.projects) || !Array.isArray(value.chats)) throw new Error('The host returned an invalid workspace.');
   const projects = list(value.projects).filter(item => id(item.id)).map(item => ({ id: item.id, name: text(item.name, 'Project'), archived: item.archived === true }));
@@ -31,7 +34,7 @@ export function remoteWorkspace(value) {
     parentChatId: id(item.parentChatId) ? item.parentChatId : null, archived: item.archived === true, readOnly: item.readOnly === true,
   }));
   return { projects, chats, runs: runs(value.runs), approvals: approvals(value.approvals), streams: streams(value.streams),
-    capabilities: { imageReferences: value.capabilities?.imageReferences === true, mediaReferences: value.capabilities?.mediaReferences === true, steering: value.capabilities?.steering === true },
+    capabilities: remoteCapabilities(value.capabilities),
     ...pick(value, ['streamSequence', 'stateRevision', 'revision', 'nextOffset']) };
 }
 

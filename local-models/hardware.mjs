@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {runProcess} from '../tools/process.mjs';
 import {validate} from '../core/registry.mjs';
+import {speculationCapabilities} from './speculation.mjs';
 
 export const defaultConfiguration = {mode:'auto',gpuIds:[],cpuIds:[],threads:0,memoryMap:true};
 export const configurationSchema = {type:'object',additionalProperties:false,required:Object.keys(defaultConfiguration),properties:{
@@ -66,6 +67,7 @@ export function createHardware({executable,backendDirectories=[],runner=runProce
     const run=(args,backendFile)=>runner(executable,args,{cwd:path.dirname(executable),env:runnerEnvironment(executable,backendFile),signal,timeout:15000,maxOutput:1024*1024});
     if(help===undefined){const result=await run(['--help']);if(result.code!==0)throw new Error('Local runtime capability probe failed');help=result.stdout+'\n'+result.stderr;const info=await run(['--version']);version=(info.stdout+' '+info.stderr).trim().slice(0,300);}
     base.runtime.version=version;
+    base.speculation=speculationCapabilities(help);
     base.loadMode=/--load-mode\b/.test(help);
     base.placementLogging=/--verbosity\b/.test(help);
     base.capabilities={gpuSelection:/--device\b/.test(help)&&/--n-gpu-layers\b/.test(help),cpuAffinity:cpus.length<=64&&/--cpu-mask-batch\b/.test(help)&&/--cpu-strict-batch\b/.test(help),threads:/--threads-batch\b/.test(help),memoryMap:base.loadMode||/--no-mmap\b/.test(help),contextSize:/--ctx-size\b/.test(help)&&/--parallel\b/.test(help)};

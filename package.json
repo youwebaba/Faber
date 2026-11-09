@@ -2,12 +2,13 @@
   "name": "faber",
   "productName": "Faber",
   "description": "Faber desktop AI workspace",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
   "scripts": {
     "prepare:work-tools": "node scripts/prepare-work-tools.mjs",
+    "prepare:scenes": "node scripts/prepare-scenes.mjs",
     "start": "electron .",
     "test": "node --test test/*.test.mjs",
     "smoke": "electron . --smoke",
@@ -40,12 +41,13 @@
     "electron-builder": "26.18.0",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
-    "marked": "18.1.3"
+    "marked": "18.1.3",
+    "three": "0.187.0"
   },
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "2.8.0.0",
+    "buildVersion": "2.9.0.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -105,7 +107,9 @@
     ],
     "npmRebuild": false,
     "asarUnpack": [
-      "native/bin/**"
+      "native/bin/**",
+      "desktop/boot-launch.ps1",
+      "desktop/boot-task.ps1"
     ],
     "beforePack": "build/verify-runtime.cjs",
     "afterPack": "scripts/privacy-after-pack.cjs",
@@ -120,7 +124,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a2.8-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a2.9-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

@@ -5,6 +5,54 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.9
+
+The candidate source suite passed **783 tests, zero failures and one optional
+native-input skip (784 total)**. The normal Electron UI/bridge smoke displayed
+a2.9. The existing integrated media probe passed with supplied synthetic files,
+zero provider calls, local and paired encrypted playback, 3D and interactive
+previews, Work Inbox access, cancellation and revocation.
+
+This is a closed-use candidate. Its core headless boot worker generated with
+real local Qwen and handed the isolated profile to a visible Electron worker
+without a second writer or duplicate output. An actual reboot before Windows
+sign-in remains pending; the temporary S4U registration probe received
+E_ACCESSDENIED. This limitation is accepted for the private candidate rather
+than represented as a physical boot pass. [Worker and installer evidence](docs/a2.9-worker-verification.md)
+
+Sanitized routine restore starts paused, revokes old grants and retains newer
+independent effect receipts. A real Windows helper drained an isolated worker;
+an interrupted migration preserved the completed destination and left an
+unknown action for review. Previous-installer upgrade, downgrade and reopen
+checks use a disposable profile; they never update the active installation.
+
+The Outlook authorization/Graph fixture read 125 unread messages across three
+bounded pages, including older mail. Retries reused the same opaque cursor and
+page; wrong origins/routes, revoked project/account access, expired cursors and
+scan limits remained explicit. Mail draft/send/calendar fixtures retained
+destination IDs across lost acknowledgement and old-backup restore. No actual
+Microsoft account trial is claimed. [Outlook behavior](MICROSOFT365.md)
+
+Paired profiles used a real encrypted loopback relay, reconnected after its
+restart, recovered the same approval and committed one effect after duplicate
+approval. The controller inspected receipts, steered and stopped host work.
+Physical two-PC internet coverage remains pending. [Work supervision](docs/a2.9-remote-work.md)
+
+GLB/glTF/STL previews rendered in isolated WebGL frames locally and through
+paired TLS. Orbit/pan/zoom/reset, original buffers/textures, byte-identical saves,
+pending-transfer cancellation and revocation passed. Existing interactive,
+document, MIDI, stems and captions remain in the integrated media fixture.
+[3D verification](docs/a2.9-scenes-verification.md)
+
+On the declared CPU, native MTP produced the same greedy text and forced tool
+arguments as Off; medians were 37.46 and 30.28 decode tokens/s respectively.
+The separate draft measured 22.16 tokens/s. On RTX 5070, Off and native MTP
+each reproduced their own output across four samples, but first differed from
+each other at token 55; forced tool arguments matched. These are model-specific
+observations. Native Safetensors has five CPU-qualified precision profiles;
+GPU precision qualification is reserved for the next candidate, not claimed
+here. [MTP results](docs/a2.9-speculation.md) · [CPU precision](docs/a2.8-native-precision-fit.md)
+
 ## a2.8
 
 The independent MCP reference filesystem server returned the selected disposable file over stdio and authenticated Streamable HTTP. A real local Qwen run selected the permitted MCP read tool. The Windows Excel check changed two cells, reopened the workbook, verified the calculated dependent formula and retained the chart and other worksheet. Repeating the same edit left the bytes intact.

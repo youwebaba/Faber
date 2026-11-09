@@ -76,7 +76,7 @@ export function previewSchedule(schedule,from,count=5){
 
 export function overlapDecision(policy,jobs,routineId){
   if(!['skip','queue','coalesce'].includes(policy))throw new Error('Choose an overlap policy');
-  const outstanding=jobs.filter(job=>job.routineId===routineId&&['queued','running','waiting_approval','waiting_interaction','waiting_resource','loading_model'].includes(job.status));
+  const outstanding=jobs.filter(job=>job.routineId===routineId&&['queued','running','waiting_approval','waiting_interaction','waiting_resource','loading_model','deferred_interactive'].includes(job.status));
   if(!outstanding.length||policy==='queue')return {action:'enqueue'};
   if(policy==='skip')return {action:'skip'};
   const queued=outstanding.find(job=>job.status==='queued');return queued?{action:'coalesce',jobId:queued.id}:{action:'enqueue'};

@@ -4,6 +4,8 @@ The model selector reads the configured Model downloads folder recursively and
 offers local Start/Stop actions. These controls are separate from stopping a
 chat run. Model selection still requires **Use in this chat**.
 
+Before Start, managed downloads also offer **Off**, qualified embedded **Native MTP**, or a **Separate GGUF draft** plus a speculative-token limit. Successful settings persist per model. Native MTP requires actual validated qwen35 heads; separate drafts require distinct compatible files and saved CPU hardware. Startup confirms the effective runtime mode and refuses incompatible vocabularies or silent fallback. Safetensors CPU and external providers keep their separate capabilities. See [a2.9 qualification and measured limits](docs/a2.9-speculation.md).
+
 ## Downloaded files
 
 Standalone GGUF files and complete, originally named GGUF shard sets are listed.

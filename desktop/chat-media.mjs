@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash,randomUUID } from 'node:crypto';
 import { validate } from '../core/registry.mjs';
 import { mediaChunkLimit, mediaIdSchema, validateMediaRef, mediaNotesSchemas } from '../core/media.mjs';
 import { imageBytesLimit, validateChatImages } from '../core/images.mjs';
@@ -82,14 +82,15 @@ export function createChatMedia({ readMedia, readImage, mediaNotes, remoteReques
     }
     const inspect = async () => { try { const stat = await fs.lstat(destination); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Choose a regular destination file'); return [stat.dev,stat.ino,stat.size,stat.mtimeMs,stat.ctimeMs].join('/'); } catch(error) { if(error.code === 'ENOENT') return null; throw error; } };
     const before = await inspect(), temporary = path.join(parent,'.'+path.basename(destination)+'.'+randomUUID()+'.tmp');
-    let file;
+    let file;const digest=media.revision?createHash('sha256'):null;
     try {
       file = await fs.open(temporary,'wx',0o600);
       for (let offset = 0; offset < media.bytes;) {
         signal.throwIfAborted(); const bytes = await read(offset,Math.min(mediaChunkLimit,media.bytes-offset));
         signal.throwIfAborted(); if (!bytes.length) throw new Error('Media ended before saving completed');
-        await file.writeFile(bytes); offset += bytes.length;
+        digest?.update(bytes);await file.writeFile(bytes); offset += bytes.length;
       }
+      if(digest&&digest.digest('hex')!==media.revision)throw new Error('Media revision did not match its saved bytes');
       await file.sync(); await file.close(); file = null; signal.throwIfAborted();
       if (await fs.realpath(path.dirname(selected)) !== parent || await inspect() !== before) throw new Error('Destination changed while saving; original file preserved');
       signal.throwIfAborted(); await fs.rename(temporary,destination); return {saved:true};

@@ -6,6 +6,7 @@ import { runDesktopSmoke } from './desktop-smoke.mjs';
 import { runB201UISmoke } from './desktop-b201-ui-smoke.mjs';
 import { runRichContentSmoke } from './desktop-rich-content-smoke.mjs';
 import { runB201ContentSmoke } from './desktop-b201-content-smoke.mjs';
+import { runOutlookSettingsSmoke } from './desktop-outlook-settings-smoke.mjs';
 import { runMcpSettingsSmoke } from './desktop-mcp-settings-smoke.mjs';
 
 export async function runB201Smoke(context) {
@@ -18,8 +19,9 @@ export async function runB201Smoke(context) {
   const ui = await runB201UISmoke(context);
   const richContent = await runRichContentSmoke(context);
   const content = await runB201ContentSmoke(context);
+  const outlookSettings=await runOutlookSettingsSmoke(context);
   const mcpSettings=await runMcpSettingsSmoke(context);
-  const result = { ...baseline, ...ui, richContent, content, mcpSettings, nativeSettings: true };
+  const result = { ...baseline, ...ui, richContent, content, outlookSettings, mcpSettings, nativeSettings: true };
   await fs.writeFile(path.join(context.dataDir, 'b201-smoke-report.json'), JSON.stringify(result, null, 2));
   return result;
 }

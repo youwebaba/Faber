@@ -1,0 +1,27 @@
+import {requestGate,formatBytes} from './model-helpers.mjs';
+
+export function createSpeculationControls({request,el,onChange}){
+  const root=el('section','local-speculation');root.hidden=true;
+  const row=el('label','form-row');row.append(el('span','','Speculation before Start'));const mode=el('select');mode.id='local-model-speculation';for(const [value,title]of [['','Choose a supported mode'],['off','Off'],['native_mtp','Native MTP · embedded head'],['draft_model','Separate GGUF draft model']]){const option=el('option','',title);option.value=value;mode.append(option);}row.append(mode);
+  const countRow=el('label','form-row');countRow.append(el('span','','Maximum speculative tokens'));const count=el('input');count.type='number';count.id='local-model-spec-tokens';count.min='1';count.max='16';count.step='1';countRow.append(count);
+  const draftRow=el('label','form-row');draftRow.append(el('span','','Draft weights'));const draft=el('select');draft.id='local-model-draft';draftRow.append(draft);
+  const note=el('p','hint');note.id='local-model-speculation-note';note.setAttribute('role','status');const effective=el('p','hint');effective.id='local-model-speculation-effective';
+  root.append(row,countRow,draftRow,note,effective,el('p','hint','Speculation can use more memory and may be slower. Native MTP requires verified embedded heads. Separate drafts currently require saved CPU hardware and compatible token vocabularies; startup validates them. Stop before changing a loaded model.'));
+  const edits=new Map(),gate=requestGate();let state={},choice,info,lastId,disposed=false;
+  const profile=()=>edits.get(choice?.id)||choice?.speculation||null;
+  function ready(){const value=profile();return !!value&&Number.isInteger(value.tokens)&&value.tokens>=1&&value.tokens<=16&&(value.mode==='off'||value.mode==='native_mtp'&&info?.nativeMtp.supported||value.mode==='draft_model'&&info?.draftModel.supported&&state.models?.some(item=>item.id===value.draftModelId&&item.id!==choice.id&&item.format==='gguf'&&item.available&&item.complete));}
+  function draw(){
+    if(disposed)return;root.hidden=choice?.source!=='download'||!['gguf','safetensors'].includes(choice?.format);if(root.hidden)return;
+    const value=profile(),locked=['loading','ready','stopping'].includes(state.process?.status);mode.value=value?.mode||'';
+    for(const option of mode.options)option.disabled=option.value===''||option.value==='native_mtp'&&!info?.nativeMtp.supported||option.value==='draft_model'&&!info?.draftModel.supported;mode.disabled=locked;
+    count.value=String(value?.tokens??3);count.disabled=locked||value?.mode==='off'||!value;draftRow.hidden=value?.mode!=='draft_model';draft.disabled=locked;draft.replaceChildren();const empty=el('option','','Choose distinct complete GGUF weights');empty.value='';draft.append(empty);
+    for(const item of state.models||[])if(item.id!==choice.id&&item.format==='gguf'&&item.complete&&item.available){const option=el('option','',`${item.label} · ${formatBytes(item.sizeBytes)}`);option.value=item.id;draft.append(option);}draft.value=value?.draftModelId||'';
+    note.textContent=!value?choice.speculationWarning:!info?'Inspecting bounded metadata and runtime capabilities…':value.mode==='native_mtp'?info.nativeMtp.reason||`${info.architecture}: ${info.nativeMtp.heads.length} complete embedded MTP head set(s).`:value.mode==='draft_model'?info.draftModel.reason||'Target architecture checked; draft architecture, file identity and vocabulary are validated at Start.':`Off.${info.nativeMtp.supported?' Native MTP is available.':' '+info.nativeMtp.reason}`;
+    if(value?.mode==='native_mtp'&&state.configuration?.mode!=='cpu')note.textContent+=' GPU generation can produce different text from Off at the same seed.';
+    const observed=state.process?.modelId===choice.id?state.process.observed?.speculation:null,metrics=observed?.metrics;
+    effective.textContent=observed?.verified?`Effective runtime: ${observed.mode==='off'?'Off':`${observed.implementation}, at most ${observed.tokens} draft tokens`}.${observed.vocabularyVerified?' Native vocabulary compatibility passed.':''}${metrics?` Last completed request: ${metrics.draftedTokens??0} drafted / ${metrics.acceptedTokens??0} accepted${Number.isFinite(metrics.tokensPerSecond)?`, ${metrics.tokensPerSecond.toFixed(2)} generated tokens/s`:''}.`:''}`:'Effective settings and acceptance counters appear after a verified Start and completed request.';
+  }
+  function change(){if(!choice)return;const tokens=Number(count.value),value={mode:mode.value,tokens:mode.value==='off'&&(!Number.isInteger(tokens)||tokens<1||tokens>16)?3:tokens};if(value.mode==='draft_model')value.draftModelId=draft.value;edits.set(choice.id,value);draw();onChange();}
+  mode.addEventListener('change',change);count.addEventListener('input',change);draft.addEventListener('change',change);
+  return {root,profile,ready,setContext(next,nextChoice){state=next;choice=nextChoice;if(choice?.source!=='download'){gate();lastId=undefined;info=undefined;draw();return;}const fresh=lastId!==choice.id;if(fresh){lastId=choice.id;info=undefined;}draw();if(!fresh)return;const current=gate();request('localModels.details',{modelId:choice.id}).then(value=>{if(current()&&!disposed){info=value.speculation;draw();onChange();}}).catch(error=>{if(current()&&!disposed){info={nativeMtp:{supported:false,reason:error.message},draftModel:{supported:false,reason:error.message}};draw();onChange();}});},dispose(){disposed=true;gate();}};
+}

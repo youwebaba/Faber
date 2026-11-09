@@ -1,7 +1,11 @@
 [CmdletBinding()]
-param([ValidateRange(1024,65535)][int]$Port = 39372, [switch]$Stop)
+param([ValidateRange(1024,65535)][int]$Port = 39372, [switch]$Stop, [string]$PublicUrl, [switch]$StartAtSignIn, [switch]$DisableStartup)
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:LOCALAPPDATA 'FaberRelay'
+if ($PublicUrl -or $StartAtSignIn -or $DisableStartup -or (Test-Path -LiteralPath (Join-Path $root 'stable.json'))) {
+    & (Join-Path $PSScriptRoot 'Start-FaberStableRelay.ps1') @PSBoundParameters
+    return
+}
 $server = Join-Path $root 'server.mjs'
 $helper = Join-Path $root 'cloudflared-2026.10.7.exe'
 $settingsFile = Join-Path $root 'operator.json'

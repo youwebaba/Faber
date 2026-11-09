@@ -1,0 +1,12 @@
+{
+  "three": "0.187.0",
+  "esbuild": "0.28.2",
+  "files": {
+    "scene-driver.mjs": "3ea4cc2e91acf37d814b65298c038d9df3bade57d4f5fbd0aaeeb91ac64b03fc",
+    "scene-data.mjs": "7b27ebe194d39529d02f25675cb643047fbcc6acf28b4bac7fca09e09e2dc761",
+    "scene-bundled.mjs": "254c2274bf43248c98c210a8df14f710de7386d650d0942dd53aab3ec17c6cc8",
+    "scene.html": "17374b675864d098fe5cabe2bf084fb32f381c64e2919991afa53176f44a4dd6",
+    "scene.css": "7058b37693be62d3c3d8683fd5a9a50e41c4a5f6a89b9b542e84f7293a5e58a1"
+  },
+  "licenseSha256": "8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc"
+}

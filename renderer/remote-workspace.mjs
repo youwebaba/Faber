@@ -1,10 +1,11 @@
-import { remoteWorkspace, remoteChat, remoteLive, remoteChatFamilies, remoteEvent } from './remote-state.mjs';
+import { remoteWorkspace, remoteCapabilities, remoteChat, remoteLive, remoteChatFamilies, remoteEvent } from './remote-state.mjs';
 import { isActive, latestRun, sameMessage, safeImage, displayText, chatApprovals, statusLabel } from './ui-helpers.mjs';
 import { createAttachmentDrafts, attachmentMessage } from './file-attachments.mjs';
 import { mergeRuntimeStreams } from './ui-refresh.mjs';
 import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createRunActivity } from './run-activity.mjs';
 import { createLiveTranscript, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
+import {createRemoteWorkInbox} from './remote-work-inbox.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
 import { createMediaOutputs, resultMedia } from './content-media.mjs';
 import { correctionLabel, correctionRequest } from './prompt-progress.mjs';
@@ -15,7 +16,9 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const header = el('header', 'remote-header'), hostLabel = el('strong'), hostSelect = el('select'); hostSelect.id = 'remote-host'; hostSelect.setAttribute('aria-label', 'Workspace device');
   const connections = button('Connections', () => { close(); showConnections(); });
   const showSidebar = button('☰', () => { document.body.classList.remove('sidebar-hidden'); document.body.classList.add('sidebar-open'); }, 'icon-button remote-show-sidebar'); showSidebar.setAttribute('aria-label', 'Show sidebar');
-  header.append(showSidebar, hostLabel, hostSelect, connections); root.append(header);
+  const inbox=createRemoteWorkInbox({document,el,rpc,selectChat,device:()=>deviceId,available:()=>!root.hidden&&online});
+  const workButton=button('Host Work Inbox',()=>inbox.open());workButton.id='remote-work-inbox';
+  header.append(showSidebar, hostLabel, hostSelect, connections,workButton); root.append(header);
   const layout = el('div', 'remote-layout');
   const newChat = button('＋ New chat', () => createChat()); newChat.id = 'remote-new-chat';
   const archive = el('label', 'remote-archive'), archiveInput = el('input'); archiveInput.type = 'checkbox'; archiveInput.id = 'remote-show-archived'; archive.append(archiveInput, document.createTextNode('Show archived'));
@@ -67,7 +70,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   function resolveApproval(id, allow) { const approval = state.approvals.find(item => item.id === id); if (!approval) throw new Error('This host approval is no longer pending.'); return mutate('approval.resolve', { id, chatId: approval.chatId, allow }); }
 
   async function rpc(method, params = {}, target = deviceId) {
-    const read = ['workspace.list', 'workspace.models', 'chat.read', 'chat.image'].includes(method);
+    const read = ['workspace.list', 'workspace.models', 'chat.read', 'chat.image','work.list','work.read'].includes(method);
     if (!target || target !== deviceId || !online && !(connecting && read)) throw new Error('This host is offline. Reconnect before sending an action.');
     return request('remote.request', { deviceId: target, method, params, ...(!read ? { requestId: globalThis.crypto.randomUUID() } : {}) });
   }
@@ -121,6 +124,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     } catch (error) { if (token === session && generation === chatGeneration && !root.hidden) { imageCache.set(cacheKey, { error: true }); entry.node.replaceChildren(el('span', 'hint', `Host image unavailable. ${error.message || String(error)}`), button('Retry image', () => { imageCache.delete(cacheKey); queueImage(entry); }, 'text-button')); } }
   }
   function renderStatus() {
+    workButton.hidden=directories.get(deviceId)?.capabilities?.workInbox!==true;workButton.disabled=!online;
+    inbox.connectionChanged();
     const host = currentDevice(), name = host?.name || host?.deviceName || 'Host'; hostLabel.textContent = `Remote · ${name}`;
     const choices = [{ id: '', name: 'This PC · local workspace' }, ...getDevices().map(device => ({ id: device.id, name: `${device.name || device.deviceName || 'Host'}${device.online ? '' : ' · offline'}` }))];
     const signature = JSON.stringify(choices); if (hostSelect.choiceSignature !== signature) { hostSelect.choiceSignature = signature; hostSelect.replaceChildren(...choices.map(device => { const option = el('option', '', device.name); option.value = device.id; return option; })); } hostSelect.value = deviceId || '';
@@ -239,7 +244,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   }
   providerSelect.addEventListener('change', renderModelChoices); modelSelect.addEventListener('change', renderStatus);
   function acceptStreams(value) { if (Number.isSafeInteger(value.streamSequence)) streamVersion = mergeRuntimeStreams(streams, value, streamVersion); else if (Array.isArray(value.streams)) { streams.clear(); for (const stream of value.streams) streams.set(stream.runId, stream); } }
-  function referenceModes() { const capabilities = directories.get(deviceId)?.capabilities; return { ...(capabilities?.imageReferences ? { imageMode: 'references' } : {}), ...(capabilities?.mediaReferences ? { mediaMode: 'references' } : {}) }; }
+  function referenceModes() { const capabilities = directories.get(deviceId)?.capabilities; return { ...(capabilities?.imageReferences ? { imageMode: 'references' } : {}), ...(capabilities?.mediaReferences ? { mediaMode: 'references' } : {}),...(capabilities?.sceneReferences?{sceneMode:'references'}:{}) }; }
   function disconnect(error) { online = connecting = false; resetMedia(); mediaOutputs.setAvailable(false); setError(error); renderStatus(); renderTranscript(); }
   async function readChat(token = session, wait = false) {
     const chatId = selectedChatId, sequence = ++readSequence; if (!chatId || !online) return;
@@ -268,7 +273,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     if (!getDevices().some(device => device.id === id && (device.online || force))) return directories.get(id);
     const task = (async () => {
       const cached = directories.get(id), response = await request('remote.request', { deviceId: id, method: 'workspace.list', params: { limit: 200, ...(cached?.revision ? { since: cached.revision } : {}) } });
-      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: { imageReferences: response.capabilities.imageReferences === true, mediaReferences: response.capabilities.mediaReferences === true, steering: response.capabilities.steering === true } } : {}), error: '' }; directories.set(id, value); return value; }
+      if (response?.unchanged === true) { if (!cached) throw new Error('The host returned no saved directory.'); const value = { ...cached, ...(response.capabilities ? { capabilities: remoteCapabilities(response.capabilities) } : {}), error: '' }; directories.set(id, value); return value; }
       const value = remoteWorkspace(response), projects = new Map(value.projects.map(project => [project.id, project])), chats = new Map(value.chats.map(chat => [chat.id, chat])); let offset = value.nextOffset;
       const offsets = new Set();
       while (offset !== null && offset !== undefined) {

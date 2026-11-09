@@ -108,3 +108,8 @@ a2.7 adds timezone-aware schedules, stable-file triggers, shared job budgets,
 the Work Inbox and a local Qwen daily folder report. These retain the same
 profile owner, routine scope and action-receipt rules. See
 [scheduled work](SCHEDULER.md) and [a2.7 verification](docs/a2.7-scheduler-verification.md).
+
+a2.9 adds a separately reviewed credential-free boot tier, an independent
+effect watermark, paused routine-backup restore and installer checkpoints.
+See [worker recovery](WORKER-RECOVERY.md) and the
+[a2.9 evidence and physical-test gaps](docs/a2.9-worker-verification.md).

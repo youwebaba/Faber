@@ -54,7 +54,13 @@ export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDi
         if(prior.mediaInteractiveFirstRefs){for(const ref of prior.mediaInteractiveFirstRefs)for(const member of mediaReferenceTree({result:{media:ref}})){const result=await runtime.readMedia({chatId:chat.id,mediaId:member.id,length:Math.min(member.bytes,262144)});assert.equal(result.media.revision,member.revision);assert.equal(Buffer.from(result.data,'base64').length,Math.min(member.bytes,262144));}priorInteractiveMembersRetained=true;}
         const output=await prepareInteractiveMedia({window,runtime,chat,project,bridge,until,save,checks,capture,interactive});await output.run('#transcript');prior.mediaInteractiveFirstRefs??=output.refs;interactiveProbe={ok:true,priorInteractiveMembersRetained};
       }
-      await fs.writeFile(marker,JSON.stringify(prior));mediaProbe={ok:true,formats:documents.refs.map(ref=>ref.name),checks,screenshots,priorPreviewBytesAndNotesRetained:retained,...(timedProbe?{timedProbe}:{}),...(interactiveProbe?{interactiveProbe}:{})};
+      let sceneProbe;
+      if(major>2||major===2&&minor>=9){
+        const {prepareSceneMedia}=await import('./desktop-scene-media.fixture.mjs'),{mediaReferenceTree}=await import('../core/media.mjs');let priorSceneMembersRetained=false;
+        if(prior.mediaSceneFirstRefs){for(const ref of prior.mediaSceneFirstRefs)for(const member of mediaReferenceTree({result:{media:ref}})){const result=await runtime.readMedia({chatId:chat.id,mediaId:member.id,length:Math.min(member.bytes,262144)});assert.equal(result.media.revision,member.revision);assert.equal(Buffer.from(result.data,'base64').length,Math.min(member.bytes,262144));}priorSceneMembersRetained=true;}
+        const output=await prepareSceneMedia({window,chat,project,bridge,until,save,checks,capture});await output.run('#transcript',undefined,{pointer:false});prior.mediaSceneFirstRefs??=output.refs;sceneProbe={ok:true,priorSceneMembersRetained};
+      }
+      await fs.writeFile(marker,JSON.stringify(prior));mediaProbe={ok:true,formats:documents.refs.map(ref=>ref.name),checks,screenshots,priorPreviewBytesAndNotesRetained:retained,...(timedProbe?{timedProbe}:{}),...(interactiveProbe?{interactiveProbe}:{}),...(sceneProbe?{sceneProbe}:{})};
     }
     finally{dialog.showSaveDialog=original;}
   }
