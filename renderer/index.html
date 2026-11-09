@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; object-src 'none'; frame-src faber-preview:; base-uri 'none'; form-action 'none'">
   <title>Faber</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="models.css">
@@ -26,6 +26,7 @@
       <button id="open-models" class="nav-button" data-icon="models">Models</button>
       <button id="open-addons" class="nav-button" data-icon="addons">Addons</button>
       <button id="open-connections" class="nav-button" data-icon="connections">Connections</button>
+      <button id="open-routines" class="nav-button" data-icon="activity">Routines</button>
       <div class="section-heading"><span>Projects</span><button id="add-project" class="icon-button" title="Add project" aria-label="Add project" data-icon="plus"></button></div>
       <nav id="project-list" class="project-list" aria-label="Local and paired device projects and chats"><div id="local-projects"></div></nav>
       <div class="sidebar-bottom"><button id="profile-switcher" class="nav-button" disabled>Profile: loading…</button><button id="open-settings" class="nav-button" data-icon="settings">Settings</button><div class="app-footnote">Your workspace. Your assistant.</div></div>

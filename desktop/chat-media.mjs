@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validate } from '../core/registry.mjs';
-import { mediaChunkLimit, mediaIdSchema, validateMediaRef } from '../core/media.mjs';
+import { mediaChunkLimit, mediaIdSchema, validateMediaRef, mediaNotesSchemas } from '../core/media.mjs';
 import { imageBytesLimit, validateChatImages } from '../core/images.mjs';
 
 const id = { type:'string', minLength:1, maxLength:256 }, imageId = { type:'string', minLength:1, maxLength:2048 };
@@ -10,6 +10,7 @@ const image = { type:'string', maxLength:imageBytesLimit }, text = { type:'strin
 const object = (properties,required=Object.keys(properties)) => ({type:'object',properties,required,additionalProperties:false});
 const owner = {chatId:id,deviceId:id};
 const schemas = {
+  ...Object.fromEntries(Object.entries(mediaNotesSchemas).map(([action, schema]) => ['media.notes.' + action, { ...schema, properties: { ...schema.properties, deviceId: id } }])),
   'media.save':object({...owner,mediaId:mediaIdSchema,imageId,image},['chatId']),
   'media.release':object(owner,['chatId']),
   'clipboard.copyImage':object({...owner,imageId,image},[]),
@@ -29,7 +30,7 @@ export function mediaRange(value, size) {
   return {start,end,status:206};
 }
 
-export function createChatMedia({ readMedia, readImage, remoteRequest, chooseSave, copyImage, copyText, protectedPaths = [] }) {
+export function createChatMedia({ readMedia, readImage, mediaNotes, remoteRequest, chooseSave, copyImage, copyText, protectedPaths = [] }) {
   const operations = new Set(); let closed = false;
   function operation(owner,signal) {
     if (closed) throw new Error('Chat media is closed');
@@ -96,6 +97,12 @@ export function createChatMedia({ readMedia, readImage, remoteRequest, chooseSav
       if (params.deviceId && params.image) throw new Error('Remote images require a chat-owned image reference');
       const row = operation(params);
       try {
+        if (method.startsWith('media.notes.')) {
+          const {deviceId,...args} = params, action = method.split('.').at(-1);
+          if (deviceId) return await remoteRequest(deviceId,'chat.mediaNotes.'+action,args,row.signal);
+          if (!mediaNotes) throw new Error('Document annotations unavailable');
+          return await mediaNotes(action,args,row.signal);
+        }
         if (params.mediaId) {
           const {media} = await chunk(params,params.mediaId,0,0,row.signal);
           return await save(params,media,async(offset,length)=>(await chunk(params,params.mediaId,offset,length,row.signal,media)).bytes,row.signal);
@@ -116,6 +123,7 @@ export function createChatMedia({ readMedia, readImage, remoteRequest, chooseSav
         const {media} = await chunk(owner,mediaId,0,0,row.signal);
         let range; try { range = mediaRange(request.headers.get('range'),media.bytes); } catch { row.done(); return new Response(null,{status:416,headers:{'Content-Range':`bytes */${media.bytes}`,'Accept-Ranges':'bytes'}}); }
         const headers = {'Content-Type':media.mimeType,'Content-Length':String(range.end-range.start+1),'Accept-Ranges':'bytes','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
+        if (!['audio','video'].includes(media.kind)) headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
         if (range.status === 206) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${media.bytes}`;
         if (request.method === 'HEAD') { row.done(); return new Response(null,{status:range.status,headers}); }
         let offset = range.start;

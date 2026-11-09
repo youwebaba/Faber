@@ -1,11 +1,13 @@
 import { safeOutputImage } from './rich-content.mjs';
+import { createDocumentPreview } from './document-preview.mjs';
 
 const formats = { 'audio/wav': ['audio', '.wav'], 'audio/mpeg': ['audio', '.mp3'], 'audio/mp4': ['audio', '.m4a'], 'audio/ogg': ['audio', '.ogg'], 'video/mp4': ['video', '.mp4'], 'video/webm': ['video', '.webm'] };
+Object.assign(formats,{'application/pdf':['document','.pdf'],'application/vnd.openxmlformats-officedocument.wordprocessingml.document':['document','.docx'],'image/svg+xml':['vector','.svg'],'image/gif':['animation','.gif'],'image/apng':['animation','.apng'],'image/png':['animation','.png']});
 export function mediaReferences(value) {
   return (Array.isArray(value) ? value : []).filter(ref => {
     const format = Object.hasOwn(formats, ref?.mimeType) ? formats[ref.mimeType] : null;
     return format && ref.kind === format[0] && typeof ref.id === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(ref.id) && Number.isSafeInteger(ref.bytes) && ref.bytes > 0 && ref.bytes <= 512 * 1024 * 1024 && typeof ref.name === 'string' && ref.name.length > 0 && ref.name.length <= 180 && !/[\\/:\u0000-\u001f\u007f]/.test(ref.name) && ref.name.toLowerCase().endsWith(format[1]);
-  }).slice(0, 1).map(({ id, kind, mimeType, bytes, name }) => ({ id, kind, mimeType, bytes, name }));
+  }).filter(ref=>!['document','vector','animation'].includes(ref.kind)||typeof ref.revision==='string'&&/^[a-f0-9]{64}$/.test(ref.revision)&&ref.bytes<=({document:64*1024*1024,vector:4*1024*1024,animation:16*1024*1024}[ref.kind])).slice(0, 1).map(({ id, kind, mimeType, bytes, name, revision }) => ({ id, kind, mimeType, bytes, name,...(revision?{revision}:{}) }));
 }
 export function resultMedia(value) {
   try { return mediaReferences([(typeof value === 'string' ? JSON.parse(value) : value)?.media]); } catch { return []; }
@@ -18,7 +20,7 @@ export function createMediaOutputs({ request, contentMenu, document = globalThis
   const entries = new Map(), owners = new Map();
   let available = true;
   const track = context => { if (context?.chatId) owners.set(JSON.stringify([context.deviceId, context.chatId]), { chatId: context.chatId, ...(context.deviceId ? { deviceId: context.deviceId } : {}) }); };
-  const stop = entry => { entry.player.pause(); entry.player.removeAttribute('src'); entry.player.load(); if (document.fullscreenElement === entry.node) void document.exitFullscreen().catch(() => {}); };
+  const stop = entry => { if(entry.preview){entry.stop();return;}entry.player.pause(); entry.player.removeAttribute('src'); entry.player.load(); if (document.fullscreenElement === entry.node) void document.exitFullscreen().catch(() => {}); };
   return {
     track,
     get(refs, context) {
@@ -26,6 +28,7 @@ export function createMediaOutputs({ request, contentMenu, document = globalThis
       return mediaReferences(refs).map(ref => {
         const key = JSON.stringify([context.deviceId, context.chatId, ref.id]); let entry = entries.get(key);
         if (entry) return entry.node;
+        if(!['audio','video'].includes(ref.kind)){entry=createDocumentPreview({ref,context,request,document,available,source:mediaSource(context.chatId,ref.id,context.deviceId)});contentMenu?.bind(entry.node,{...context,mediaId:ref.id,text:ref.name});entries.set(key,entry);return entry.node;}
         const node = document.createElement('figure'); node.className = 'message-media'; node.dataset.mediaId = ref.id;
         const caption = document.createElement('figcaption'); caption.textContent = ref.name;
         const player = document.createElement(ref.kind), source = mediaSource(context.chatId, ref.id, context.deviceId); player.controls = true; player.preload = 'metadata'; player.setAttribute('aria-label', ref.name); if (available) player.src = source;
@@ -42,10 +45,10 @@ export function createMediaOutputs({ request, contentMenu, document = globalThis
         entry = { node, player, source, status }; entries.set(key, entry); return node;
       });
     },
-    setAvailable(value) { if (available === value) return; available = value; for (const entry of entries.values()) { if (value) { entry.status.hidden = true; entry.player.src = entry.source; } else { stop(entry); entry.status.textContent = 'Connect to the host to play this media.'; entry.status.hidden = false; } } },
-    prune() { for (const [key, entry] of entries) if (!entry.node.isConnected) { stop(entry); entries.delete(key); } },
+    setAvailable(value) { if (available === value) return; available = value; for (const entry of entries.values()) { if(entry.preview){entry.setAvailable(value);continue;}if (value) { entry.status.hidden = true; entry.player.src = entry.source; } else { stop(entry); entry.status.textContent = 'Connect to the host to play this media.'; entry.status.hidden = false; } } },
+    prune() { for (const [key, entry] of entries) if (!entry.node.isConnected) { entry.preview?entry.destroy():stop(entry); entries.delete(key); } },
     clear(context) {
-      track(context); if (entries.size || owners.size) contentMenu?.close(); for (const entry of entries.values()) stop(entry); entries.clear();
+      track(context); if (entries.size || owners.size) contentMenu?.close(); for (const entry of entries.values()) entry.preview?entry.destroy():stop(entry); entries.clear();
       for (const owner of owners.values()) void request('media.release', owner).catch(() => {});
       owners.clear();
     },

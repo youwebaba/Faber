@@ -5,6 +5,23 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.6
+
+The integrated Windows source suite passed 672 tests, with one optional skip.
+An opt-in worker finished a job with all windows closed, and a second launch
+reconnected to the same process. Forced process exits exercised interruption
+before and after a real file write, review for an unknown effect, and recovery
+without duplicating a committed output. [Worker checks](docs/a2.6-worker-verification.md)
+
+The managed Safetensors worker generated from a pinned original checkpoint on
+CPU. The worker used private process pipes and opened no listening socket. Its
+final executable passed the binary privacy scan and the real generation,
+cancellation, reuse and Stop checks. [Safetensors checks](docs/a2.6-safetensors.md)
+
+PDF, DOCX, SVG, GIF and APNG previews were exercised in Electron locally and
+through an encrypted relay, including Save As, annotation persistence and
+reconnection. The physical two-PC/WAN trial remains pending. [Media checks](docs/a2.6-media.md)
+
 ## a2.5
 
 The Windows source suite passed 642 tests, with one optional skip. The packaged

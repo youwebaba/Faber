@@ -15,6 +15,7 @@ import {bugReportDraft,redactReport,reportIssueUrl,externalWebUrl} from './bug-r
 
 import { createRemoteWorkspace } from './remote-workspace.mjs';
 import { createMediaStore, sourceMediaRefs } from './media.mjs';
+import {createRoutines,routineSchemas} from './routines.mjs';
 
 const now = () => new Date().toISOString();
 const active = run => ['running', 'waiting_approval'].includes(run.status);
@@ -95,13 +96,14 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   state.approvals = [];
   await store.save(state);
-  const registry = new Map(), extensionNames = new Set(), listeners = new Set(), live = new Map(), pending = new Map();
+  const registry = new Map(), extensionNames = new Set(), listeners = new Set(), live = new Map(), pending = new Map(), settling=new Set();
   const providerEdits = new Set(), providerTests = new Map();
   const chatLocks=new Set();
   const streams = new Map(); let streamSequence = 0, stateRevision = 0;
+  const routines=createRoutines({state,changed,emit,start,createChat,stopChat:chatId=>stopChats(chatTree(chatId),true),registry,host});
   const recentErrors = [];
   let closed = false;
-  const mediaStore = createMediaStore({ dataDir, findReference(chatId,mediaId) {
+  const mediaStore = createMediaStore({ dataDir, assertAnnotations(chatId) { const chat=state.chats.find(chat=>chat.id===chatId);if(closed||!chat||chat.archived||chat.externalSessionId||state.projects.find(project=>project.id===chat.projectId)?.archived)throw new Error('This chat is read-only'); }, findReference(chatId,mediaId) {
     const chat = state.chats.find(chat => chat.id === chatId);
     const sources = [...(chat?.messages || []), ...state.runs.filter(run => run.chatId === chatId).flatMap(run => run.toolEvents)];
     const media = chat && sources.flatMap(sourceMediaRefs).find(media => media.id === mediaId);
@@ -109,8 +111,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     return media;
   } });
   const readMedia = (params,signal) => { if (closed) throw new Error('Runtime is closed'); return mediaStore.read(params,signal); };
+  const mediaNotes = (action,params,signal) => { if (closed) throw new Error('Runtime is closed'); return mediaStore.notes(action,params,signal); };
   await mediaStore.prune(state.chats.map(chat=>chat.id));
-  const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, readMedia, modelDisplayName:host.modelDisplayName });
+  const remoteWorkspace = createRemoteWorkspace({ current: () => ({ state, streams, stateRevision }), request, readMedia, mediaNotes, modelDisplayName:host.modelDisplayName });
   function emit(event) { remoteWorkspace.notify(event); if(event.type === 'error'){recentErrors.push(redactReport(event.message ?? event.error ?? 'Unknown error'));if(recentErrors.length > 10)recentErrors.shift();}for (const listener of listeners) { try { listener(structuredClone(event)); } catch { /* A detached UI must not break execution. */ } } }
   function settingsSnapshot() { return structuredClone({ ...state.settings, defaultGrants: state.defaultChatGrants }); }
   function refreshUsage() {
@@ -182,6 +185,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     return new Set([find('chats', run.chatId).projectId, ...(run.projectGrants || [])].filter(id => state.projects.some(project => project.id === id && !project.archived)));
   }
   function assertRunAuthority(run) {
+    routines.authority(run);
     for (let child = run; child.parentRunId;) {
       const parent = find('runs', child.parentRunId), projectId = find('chats', child.chatId).projectId;
       if (!projectIds(parent).has(projectId)) throw new Error('The parent no longer authorizes this project. Stop or request explicit project access.');
@@ -192,6 +196,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const execution = live.get(run.id), source = find('chats', run.chatId);
     execution.controller.signal.throwIfAborted(); assertRunAuthority(run);
     const target = typeof projectId === 'object' ? projectId : find('projects', projectId), sourceProjectId = source.projectId;
+    if(run.jobId&&target.id!==sourceProjectId)throw new Error('Routine project scope cannot expand during execution');
     projectId = target.id;
     if (target.archived) throw new Error('Project is archived');
     if (execution.externalSessionId && projectId !== sourceProjectId) throw new Error('External tool sessions are restricted to their selected project');
@@ -232,6 +237,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const signal = live.get(run.id).controller.signal; signal.throwIfAborted();
     const canonical = async value => { try { return await realpath(value); } catch (error) { if (error.code !== 'ENOENT') throw error; return resolve(value); } };
     const target = await canonical(file), current = find('chats', run.chatId).projectId;
+    await routines.assertPath(run,target);
     const inside = root => { const rel = relative(root, target); return !rel || rel !== '..' && !rel.startsWith('..\\') && !rel.startsWith('../') && !isAbsolute(rel); };
     const privatePaths = await Promise.all([dataDir, ...(host.privatePaths || [])].map(canonical));
     if (privatePaths.some(inside)) throw new Error('Private Faber profile data is unavailable to scoped file tools');
@@ -285,22 +291,24 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     if (depth > state.settings.maxDepth) throw new Error('Agent depth limit reached');
     if (descendants(run.id).size >= state.settings.maxAgents) throw new Error('Agent tree limit reached');
   }
-  async function approve(run, permission, summary) {
+  async function approve(run, permission, summary,force=false) {
     const execution = live.get(run.id);
     execution.controller.signal.throwIfAborted();
-    if (permission === 'read' || run.grants.includes(permission) || execution.approved.has(permission)) return true;
-    const approval = { id: randomUUID(), chatId: run.chatId, runId: run.id, permission, summary: String(summary).slice(0, 12000), ...(execution.externalSessionId ? { rememberable: false, externalSessionId: execution.externalSessionId } : {}) };
+    if (permission === 'read' || !force&&(run.grants.includes(permission) || execution.approved.has(permission))) return true;
+    const approval = { id: randomUUID(), chatId: run.chatId, runId: run.id, permission, summary: String(summary).slice(0, 12000), ...(execution.externalSessionId ? { rememberable: false, externalSessionId: execution.externalSessionId } : {}),...(run.jobId?{rememberable:false,routineJobId:run.jobId}:{}) };
     const promise = new Promise((resolveApproval, reject) => pending.set(approval.id, { resolve: resolveApproval, reject }));
     promise.catch(() => {}); // Cancellation can arrive while the approval is still being persisted.
     state.approvals.push(approval); run.status = 'waiting_approval';
+    routines.waiting(run);
     try {
       await changed(); emit({ type: 'approval', approval });
       await abortable(promise, execution.controller.signal);
-      execution.approved.add(permission);
+      if(!force)execution.approved.add(permission);
       return true;
     } finally {
       pending.delete(approval.id); state.approvals = state.approvals.filter(item => item.id !== approval.id);
       if (!execution.controller.signal.aborted) run.status = 'running';
+      routines.waiting(run);
       await changed();
     }
   }
@@ -319,22 +327,27 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     await changed();
     try {
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
-      if (execution.externalSessionId || host.isAutomaticTool?.(tool, tool.permission) !== true) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`);
+      const policy=await routines.prepareTool(run,tool,args,event,signal);
+      if (!Object.hasOwn(policy,'result')&&(execution.externalSessionId || run.jobId || host.isAutomaticTool?.(tool, tool.permission) !== true)) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`,policy.forceApproval);
       signal.throwIfAborted();
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
+      if(!Object.hasOwn(policy,'result'))await routines.dispatchTool(run,event);
+      try{signal.throwIfAborted();if(operation.superseded)throw new Error('Action superseded by steering before execution');}
+      catch(error){if(event.intent?.phase==='dispatching')event.intent.phase='prepared';throw error;}
       operation.stage = 'running';
-      const value = await abortable(tool.execute(args, { runtime: execution.externalSessionId ? Object.freeze({}) : runtime, chat: structuredClone(chat), project: structuredClone(project), runId: run.id, signal, dataDir, sourceDir, host, authorizePath: (file, summary) => authorizePath(run, file, summary), authorizeProject: (projectId, summary) => approveProject(run, projectId, summary), approve: (permission, summary) => {
+      const value = Object.hasOwn(policy,'result')?policy.result:await abortable(tool.execute(args, { runtime: execution.externalSessionId ? Object.freeze({}) : runtime, chat: structuredClone(chat), project: structuredClone(project), runId: run.id, signal, dataDir, sourceDir, host, authorizePath: (file, summary) => authorizePath(run, file, summary), authorizeProject: (projectId, summary) => approveProject(run, projectId, summary), approve: (permission, summary) => {
         if (!permissions.includes(permission)) throw new Error('Unknown permission');
         signal.throwIfAborted();
-        if (!execution.externalSessionId && host.isAutomaticTool?.(tool, permission) === true) return Promise.resolve(true);
-        return approve(run, permission, summary);
+        if (!execution.externalSessionId && !run.jobId&&host.isAutomaticTool?.(tool, permission) === true) return Promise.resolve(true);
+        return approve(run, permission, summary,!!run.jobId&&['network','computer','shell','upgrade'].includes(permission));
       } }), signal);
       signal.throwIfAborted(); assertRunAuthority(run);
       const serialized = JSON.stringify(value ?? null);
       if (serialized.length > 16000000) throw new Error('Tool result exceeds 16 MB');
       event.result = JSON.parse(serialized); event.status = 'completed';
+      await routines.toolReceipt(run,event,event.result);
       return event.result;
-    } catch (error) { event.status = signal.aborted ? 'canceled' : operation.superseded ? 'superseded' : 'failed'; event.error = error.message; throw error; }
+    } catch (error) { event.status = signal.aborted ? 'canceled' : operation.superseded ? 'superseded' : 'failed'; event.error = error.message; await routines.toolReceipt(run,event,undefined,error); throw error; }
     finally { if (execution.tool === operation) delete execution.tool; event.endedAt = now(); try { await changed(); } finally { await mediaStore.settle(chat.id); } }
   }
   function contextMessages(chat, provider, prompt = chat.systemPrompt, full = false) {
@@ -469,7 +482,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const configuration = { ...find('providers', run.providerId), model: run.model, chatOptions: run.chatOptions };
     if (!configuration.model) throw new Error('Select a model in provider settings');
     let estimateScale = 1;
-    const tools = () => [...registry.values()].map(toolMetadata);
+    const tools = () => [...registry.values()].filter(tool=>!run.jobId||state.jobs.find(job=>job.id===run.jobId)?.definition.tools.includes(tool.name)).map(toolMetadata);
     const estimate = (messages, withTools = true) => Math.ceil(estimateInputTokens(providerBody({ provider: configuration, messages, tools: withTools ? tools() : [] })) * (withTools ? estimateScale : 1));
     async function compact(force = false) {
       const full = contextMessages(chat, configuration, run.systemPrompt, true);
@@ -591,6 +604,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       if (closed) throw new Error('Runtime is closed');
       if (chat.archived) throw new Error('Chat is archived');
       if (chat.externalSessionId && chat.externalSessionId !== executionOptions.externalSessionId) throw new Error('This chat belongs to an external tool session');
+      if(chat.routineJobId&&chat.routineJobId!==executionOptions.routineJobId)throw new Error('Start or resume this job from Routines; its authority is fixed');
       if(find('projects',chat.projectId).archived)throw new Error('Project is archived');
       if(chatLocks.has(chat.id))throw new Error('Chat is being stopped or changed; wait for the operation to finish.');
       if (state.runs.some(run => run.chatId === chat.id && (active(run) || live.has(run.id)))) throw new Error('Chat already has an active run or is still stopping');
@@ -615,6 +629,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const sameProject = !parent || find('chats', parent.chatId).projectId === chat.projectId;
     const started = performance.now();
     const run = { id: randomUUID(), chatId: chat.id, providerId: chat.providerId, model, ...(parentRunId ? { parentRunId } : {}), status: 'running', startedAt: now(), toolEvents: [], modelCalls: [], grants: parent ? (sameProject ? chat.grants.filter(permission => parent.grants.includes(permission)) : []) : [...chat.grants], projectGrants: parent ? [...projectIds(parent)].filter(id => id !== chat.projectId) : [...chat.projectGrants] };
+    if(executionOptions.routineJobId){run.jobId=executionOptions.routineJobId;run.grants=routines.grants(run.jobId);run.projectGrants=[];}
     if (executionOptions.externalSessionId) { run.grants = []; run.projectGrants = []; run.externalSessionId = executionOptions.externalSessionId; }
     const inboxPromptIds = singleTool ? [] : deliverInbox(chat, run.id);
     const requestMessage = text !== undefined ? addMessage(chat, 'user', text, { runId: run.id, ...(images?.length ? { images: [...images] } : {}) }) : null;
@@ -639,7 +654,8 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
       requestMessageId: parent ? live.get(parent.id)?.requestMessageId || parent.requestMessageId : run.requestMessageId,
     };
     live.set(run.id, execution);
-    try { await changed(); } catch (error) { clearRunTimer(execution); live.delete(run.id); state.runs.splice(state.runs.indexOf(run), 1); finish(); throw error; }
+    settling.add(done);
+    try { await changed(); } catch (error) { clearRunTimer(execution); live.delete(run.id); state.runs.splice(state.runs.indexOf(run), 1); finish();settling.delete(done); throw error; }
     scheduleRunTimer(run, execution);
     setImmediate(async () => {
       let result;
@@ -656,8 +672,10 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
           repairInterruptedTools(chat);
         }
         live.delete(run.id);
+        try{await routines.runEnded(run);}catch(error){emit({type:'error',message:'Routine receipt could not be saved: '+error.message});}
         try { await changed(); } catch (error) { emit({ type: 'error', message: `Could not persist run: ${error.message}` }); }
         finish({ runId: run.id, status: run.status, result, ...(run.error ? { error: run.error } : {}) });
+        settling.delete(done);
       }
     });
     return { runId: run.id };
@@ -723,6 +741,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   };
   async function request(method, params = {}) {
     if (closed) throw new Error('Runtime is closed');
+    if(Object.hasOwn(routineSchemas,method))return routines.request(method,params);
     if (!Object.hasOwn(schemas, method)) throw new Error(`Unknown request: ${method}`);
     validate(params, schemas[method]);
     switch (method) {
@@ -762,6 +781,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         const chat = find('chats', params.id);
         if (params.providerId) find('providers', params.providerId);
         if(chatLocks.has(chat.id))throw new Error('Chat is being stopped or changed');
+        if(chat.routineJobId&&['providerId','model','grants','projectGrants','systemPrompt','systemPromptPresetId'].some(key=>Object.hasOwn(params,key)))throw new Error('Edit the routine definition instead of changing its job chat authority');
         if (chat.externalSessionId && ['providerId','model','grants','projectGrants'].some(key => Object.hasOwn(params, key))) throw new Error('External session authority and provider are fixed when the session is created');
         const { id, voice, projectGrants, ...updates } = params;
         if (projectGrants !== undefined) for (const projectId of projectGrants) if (find('projects', projectId).archived) throw new Error('Project is archived');
@@ -877,7 +897,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         const id = params.id || randomUUID(); const existing = state.providers.find(item => item.id === id);
         if (id.startsWith('chatgpt:') || existing?.authKind === 'chatgpt') throw new Error('Manage this connection in ChatGPT accounts');
         if (providerEdits.has(id) || providerTests.has(id) || state.runs.some(run => run.providerId === id && live.has(run.id))) throw new Error('Provider is in use; stop its active runs or wait for its connection check before editing');
-        const configuration = { id, name: params.name, kind: params.kind, baseUrl: validateBaseUrl(params.baseUrl), model: params.model, hasKey: existing?.hasKey || false };
+        const configuration = { id, name: params.name, kind: params.kind, baseUrl: validateBaseUrl(params.baseUrl), model: params.model, hasKey: existing?.hasKey || false,authorizationVersion:(existing?.authorizationVersion||0)+1 };
         if (existing?.hasKey && new URL(existing.baseUrl).origin !== new URL(configuration.baseUrl).origin && params.apiKey === undefined) throw new Error('Provider origin changed; explicitly replace or remove the saved API key');
         const effort = params.reasoningEffort ?? existing?.reasoningEffort;
         if (params.kind === 'openai-responses' && effort) configuration.reasoningEffort = effort;
@@ -944,9 +964,10 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   }
   const runtime = {
     remoteRequest: remoteWorkspace.dispatch, request, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, emit,
-    readMedia,
+    readMedia, mediaNotes,
     publishMedia(args) { if (closed || !state.chats.some(chat => chat.id === args.chatId)) throw new Error('Chat no longer exists'); return mediaStore.publish(args); },
     registerTools(tools) { install(tools); },
+    startRoutines:()=>routines.ready(),
     async withExternalProvider({ providerId, model }, callback) {
       if (closed) throw new Error('Runtime is closed');
       validate({ providerId, ...(model !== undefined ? { model } : {}) }, object({ providerId: idSchema, model: { type: 'string', minLength: 1, maxLength: 300 } }, ['providerId']));
@@ -1016,7 +1037,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     },
     async setExtensions(metadata) { state.extensions = structuredClone(metadata); await changed(); },
     async replaceExtensionTools(tools, metadata) { const copy = structuredClone(metadata); install(tools, true); state.extensions = copy; await changed(); },
-    async close() { if (closed) return; closed = true; remoteWorkspace.close(); const done = [...live.values()].map(item => item.done); await stopRuns(new Set(live.keys())); await Promise.all(done); await store.flush(); listeners.clear(); },
+    async close() { if (closed) return; closed = true; const closingRoutines = routines.close(); remoteWorkspace.close(); const done = [...settling]; await stopRuns(new Set(live.keys())); await Promise.all([...done, closingRoutines]); await store.flush(); listeners.clear(); },
   };
   const builtin = (name, description, parameters, execute) => ({ name, description, parameters, permission: 'read', execute });
   runtime.registerTools([

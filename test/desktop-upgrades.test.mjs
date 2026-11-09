@@ -87,6 +87,23 @@ test('staged verification includes the read-only scripts imported by installed t
   assert.equal((await manager.verify(stage.id)).verified,true);
   await assert.rejects(manager.stage([{path:'scripts/privacy-check.mjs',content:'export const ready=false;'}]));
 });
+
+test('applied history preserves feature titles, paths, verification, previous-version records and rollback state',async t=>{
+  const {manager,sourceDir,dataDir}=await fixture(t,{runner:async()=>({code:0})});
+  await assert.rejects(manager.stage([{path:'desktop/profile-owner.cjs',content:'tamper'}]),/Invalid/);
+  const first=await manager.stage([{path:'renderer/widget.mjs',content:'// widget'}],undefined,'Draft counter');
+  await manager.verify(first.id); await manager.apply(first.id);
+  const second=await manager.stage([{path:'renderer/theme.mjs',content:'// theme'}],undefined,'Color scheme');
+  await manager.verify(second.id); await manager.apply(second.id);
+  let rows=await manager.list();assert.equal(rows.length,2);
+  assert.equal(rows[0].title,'Color scheme');assert.equal(rows[0].canRollback,true);assert.ok(rows[0].verifiedAt);
+  assert.deepEqual(rows[1].files,['renderer/widget.mjs']);assert.equal(rows[1].canRollback,false);
+  await manager.rollback();
+  const restart=createUpgrades({sourceDir,dataDir,confirm:async()=>true});
+  rows=await restart.list();assert.equal(rows.find(row=>row.id===second.id).status,'rolledBack');
+  assert.equal(rows.find(row=>row.id===first.id).title,'Draft counter');
+  assert.equal(rows.some(row=>row.canRollback),false);
+});
 test('upgrade runs real staged tests, applies explicitly, then rolls back preserving data',async t=>{
   const {sourceDir,dataDir,manager}=await fixture(t);await fs.mkdir(dataDir);await fs.writeFile(path.join(dataDir,'state.json'),'preserved');
   const stage=await manager.stage([{path:'core/value.mjs',content:'export const value=2;'}]);

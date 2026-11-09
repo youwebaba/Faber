@@ -10,15 +10,25 @@ export const mediaIdSchema = { type: 'string', pattern: uuid, minLength: 36, max
 export const mediaFormats = Object.freeze({
   '.wav': ['audio', 'audio/wav'], '.mp3': ['audio', 'audio/mpeg'], '.m4a': ['audio', 'audio/mp4'],
   '.ogg': ['audio', 'audio/ogg'], '.mp4': ['video', 'video/mp4'], '.webm': ['video', 'video/webm'],
+  '.pdf': ['document', 'application/pdf'], '.docx': ['document', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  '.svg': ['vector', 'image/svg+xml'], '.gif': ['animation', 'image/gif'], '.apng': ['animation', 'image/apng'], '.png': ['animation', 'image/png'],
 });
+export const previewLimits = Object.freeze({ document: 64 * 1024 * 1024, vector: 4 * 1024 * 1024, animation: 16 * 1024 * 1024 });
+const notesOwner = { chatId: { type: 'string', minLength: 1, maxLength: 256 }, mediaId: mediaIdSchema, revision: { type: 'string', pattern: '^[a-f0-9]{64}$', minLength: 64, maxLength: 64 } };
+export const mediaNotesSchemas = {
+  read: { type: 'object', properties: notesOwner, required: Object.keys(notesOwner), additionalProperties: false },
+  save: { type: 'object', properties: { ...notesOwner, noteId: mediaIdSchema, page: { type: 'integer', minimum: 1, maximum: 2000 }, kind: { enum: ['highlight', 'note'] }, quote: { type: 'string', maxLength: 4000 }, text: { type: 'string', maxLength: 2000 }, anchorStart: { type: 'integer', minimum: 0, maximum: 2_000_000 } }, required: [...Object.keys(notesOwner), 'noteId', 'page', 'kind', 'quote', 'text'], additionalProperties: false },
+  delete: { type: 'object', properties: { ...notesOwner, noteId: mediaIdSchema }, required: [...Object.keys(notesOwner), 'noteId'], additionalProperties: false },
+};
 const refSchema = { type: 'object', additionalProperties: false, required: ['id','kind','mimeType','bytes','name'], properties: {
-  id: mediaIdSchema, kind: { enum: ['audio','video'] }, mimeType: { type: 'string', maxLength: 32 },
+  id: mediaIdSchema, kind: { enum: ['audio','video','document','vector','animation'] }, mimeType: { type: 'string', maxLength: 100 }, revision: { type: 'string', pattern: '^[a-f0-9]{64}$', minLength: 64, maxLength: 64 },
   bytes: { type: 'integer', minimum: 1, maximum: mediaBytesLimit }, name: { type: 'string', minLength: 1, maxLength: 180 },
 } };
 export function validateMediaRef(value) {
   validate(value, refSchema);
   const format = mediaFormats[path.extname(value.name).toLowerCase()];
   if (/[\\/:\x00-\x1f\x7f]/.test(value.name) || !format || format[0] !== value.kind || format[1] !== value.mimeType) throw new Error('Invalid chat media reference');
+  if (previewLimits[value.kind] && (value.bytes > previewLimits[value.kind] || !value.revision)) throw new Error('Invalid preview revision or size');
   return value;
 }
 export function sourceMediaRefs(source) {
@@ -31,16 +41,22 @@ function checkSignature(bytes, ext) {
     : ext === '.mp3' ? text(0,3) === 'ID3' || bytes.length > 3 && bytes[0] === 0xff && (bytes[1] & 0xe6) === 0xe2
     : ext === '.ogg' ? bytes.length >= 27 && text(0,4) === 'OggS' && bytes[4] === 0
     : ext === '.webm' ? bytes.subarray(0,4).equals(Buffer.from([0x1a,0x45,0xdf,0xa3])) && bytes.includes(Buffer.from('webm'))
+    : ext === '.pdf' ? text(0,5) === '%PDF-'
+    : ext === '.docx' ? text(0,4) === 'PK\x03\x04'
+    : ext === '.svg' ? /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)?<svg[\s>]/i.test(bytes.toString('utf8').replace(/^\uFEFF/, ''))
+    : ext === '.gif' ? ['GIF87a', 'GIF89a'].includes(text(0,6)) && bytes.length >= 13 && bytes.readUInt16LE(6) * bytes.readUInt16LE(8) <= 8_000_000
+    : ['.apng','.png'].includes(ext) ? bytes.length>=24 && bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex')) && bytes.includes(Buffer.from('acTL')) && bytes.readUInt32BE(16) * bytes.readUInt32BE(20) <= 8_000_000
     : bytes.length >= 16 && text(4,8) === 'ftyp' && bytes.readUInt32BE(0) >= 16 && bytes.readUInt32BE(0) <= bytes.length;
   if (!valid) throw new Error('Media contents do not match the supported file format');
 }
 
 // Bytes live outside state.json and provider history; only published chat references can read them.
-export function createMediaStore({ dataDir, findReference }) {
+export function createMediaStore({ dataDir, findReference, assertAnnotations = () => {} }) {
   const directory = path.join(dataDir, 'chat-media');
   const unpublished = new Map();
+  const noteWrites = new Map();
   const ownerKey = chatId => createHash('sha256').update(chatId).digest('hex');
-  async function filePath(chatId,id) {
+  async function filePath(chatId,id,kind) {
     if (typeof chatId !== 'string' || !chatId.length || chatId.length > 256) throw new Error('Invalid media owner');
     validate(id, mediaIdSchema);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -48,22 +64,63 @@ export function createMediaStore({ dataDir, findReference }) {
     const owner = path.join(directory,ownerKey(chatId));
     await fs.mkdir(owner,{recursive:true,mode:0o700});
     if (await fs.realpath(owner) !== owner) throw new Error('Invalid chat media storage');
-    return path.join(owner, id + '.bin');
+    // Earlier releases ignore this suffix, preserving new attachments across rollback.
+    return path.join(owner, id + (previewLimits[kind]?'.preview.bin':'.bin'));
   }
   return {
+    async notes(action, params, signal) {
+      if (!Object.hasOwn(mediaNotesSchemas, action)) throw new Error('Unknown document annotation action');
+      validate(params, mediaNotesSchemas[action]); signal?.throwIfAborted();
+      const check = () => { signal?.throwIfAborted(); if(action!=='read')assertAnnotations(params.chatId);const ref = validateMediaRef(findReference(params.chatId, params.mediaId)); if (ref.kind !== 'document' || ref.revision !== params.revision) throw new Error('Document revision is no longer available'); };
+      check();
+      const file = (await filePath(params.chatId, params.mediaId,'document')) + '.notes.json';
+      const operation = async () => {
+        check(); let notes = [];
+        try {
+          if ((await fs.lstat(file)).isSymbolicLink()) throw new Error('Invalid annotation storage');
+          const input=await fs.open(file,'r');
+          try{
+            const before=await input.stat();
+            if(!before.isFile()||before.size>256*1024||await fs.realpath(file)!==file)throw new Error('Annotation storage exceeds its type, path or size limit');
+            const bytes=Buffer.alloc(before.size);
+            for(let offset=0;offset<bytes.length;){check();const {bytesRead}=await input.read(bytes,offset,bytes.length-offset,offset);if(!bytesRead)throw new Error('Annotation storage changed while reading');offset+=bytesRead;}
+            const after=await input.stat(),current=await fs.lstat(file);
+            if(after.size!==before.size||after.mtimeMs!==before.mtimeMs||current.ino!==before.ino||current.dev!==before.dev||current.isSymbolicLink())throw new Error('Annotation storage changed while reading');
+            notes=JSON.parse(bytes);
+          }finally{await input.close();}
+          if (!Array.isArray(notes) || notes.length > 100) throw new Error('Invalid annotation storage');
+        }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        for(const note of notes)validate({...params,noteId:note.id,page:note.page,kind:note.kind,quote:note.quote,text:note.text,...(note.anchorStart!==undefined?{anchorStart:note.anchorStart}:{})},mediaNotesSchemas.save);
+        check();
+        if (action !== 'read') {
+          notes = notes.filter(note => note.id !== params.noteId);
+          if (action === 'save') notes.push({ id: params.noteId, page: params.page, kind: params.kind, quote: params.quote, text: params.text, ...(params.anchorStart!==undefined?{anchorStart:params.anchorStart}:{}) });
+          if (notes.length > 100) throw new Error('Document annotation limit reached');
+          const json = JSON.stringify(notes); if (Buffer.byteLength(json) > 256 * 1024) throw new Error('Document annotation storage limit reached');
+          const temporary = file + '.' + randomUUID() + '.tmp';
+          try { await fs.writeFile(temporary, json, { flag: 'wx', mode: 0o600, flush: true }); check(); await fs.rename(temporary, file); check(); }
+          finally { await fs.rm(temporary, { force: true }); }
+        }
+        return { revision: params.revision, notes };
+      };
+      const result = (noteWrites.get(file) || Promise.resolve()).catch(() => {}).then(operation); noteWrites.set(file, result);
+      try { return await result; } finally { if (noteWrites.get(file) === result) noteWrites.delete(file); }
+    },
     async publish({ chatId, file, name, signal }) {
       signal?.throwIfAborted();
       const ext = path.extname(name).toLowerCase(), format = mediaFormats[ext];
-      if (!format) throw new Error('Choose a WAV, MP3, M4A, Ogg audio, MP4, or WebM file');
+      if (!format) throw new Error('Choose supported audio, video, PDF, DOCX, SVG, GIF or APNG media');
       const stat = await file.stat();
       if (!stat.isFile() || stat.size < 1 || stat.size > mediaBytesLimit) throw new Error('Media must be a nonempty file up to 512 MiB');
+      if (stat.size > (previewLimits[format[0]] || mediaBytesLimit)) throw new Error('Preview exceeds its bounded file size');
       const head = Buffer.alloc(Math.min(65536, stat.size));
       const { bytesRead } = await file.read(head, 0, head.length, 0);
       checkSignature(head.subarray(0,bytesRead), ext);
       name = path.basename(name).replace(/[\\/:\x00-\x1f\x7f]/g, '_');
       if (name.length > 180) name = name.slice(0,180-ext.length) + ext;
-      const media = validateMediaRef({ id: randomUUID(), kind: format[0], mimeType: format[1], bytes: stat.size, name });
-      const target = await filePath(chatId,media.id), temporary = target + '.tmp';
+      const media = { id: randomUUID(), kind: format[0], mimeType: format[1], bytes: stat.size, name }, digest = previewLimits[format[0]] ? createHash('sha256') : null;
+      const target = await filePath(chatId,media.id,media.kind), temporary = target + '.tmp';
       let output, complete = false, renamed = false;
       try {
         output = await fs.open(temporary,'wx',0o600);
@@ -72,11 +129,12 @@ export function createMediaStore({ dataDir, findReference }) {
           signal?.throwIfAborted();
           const { bytesRead } = await file.read(buffer,0,Math.min(buffer.length,stat.size-offset),offset);
           if (!bytesRead) throw new Error('Media changed while being saved. Try again.');
-          await output.writeFile(buffer.subarray(0,bytesRead)); offset += bytesRead;
+          const bytes = buffer.subarray(0,bytesRead); digest?.update(bytes); await output.writeFile(bytes); offset += bytesRead;
         }
         const after = await file.stat();
         if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) throw new Error('Media changed while being saved. Try again.');
         signal?.throwIfAborted();
+        if (digest) media.revision = digest.digest('hex'); validateMediaRef(media);
         await output.sync(); await output.close(); output = null;
         await fs.rename(temporary,target); renamed = true;
         signal?.throwIfAborted();
@@ -91,7 +149,7 @@ export function createMediaStore({ dataDir, findReference }) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > mediaChunkLimit) throw new Error('Invalid media chunk range');
       const media = structuredClone(validateMediaRef(findReference(chatId,mediaId)));
       if (offset > media.bytes) throw new Error('Invalid media chunk range');
-      const target = await filePath(chatId,mediaId);
+      const target = await filePath(chatId,mediaId,media.kind);
       if ((await fs.lstat(target)).isSymbolicLink()) throw new Error('Invalid chat media storage');
       const file = await fs.open(target,'r');
       try {
@@ -114,7 +172,7 @@ export function createMediaStore({ dataDir, findReference }) {
       unpublished.delete(chatId);
       for (const id of ids) {
         let published = false; try { published = !!findReference(chatId,id); } catch { /* A canceled tool did not publish its snapshot. */ }
-        if (!published) await fs.rm(await filePath(chatId,id),{force:true});
+        if (!published) { await fs.rm(await filePath(chatId,id),{force:true});await fs.rm(await filePath(chatId,id,'document'),{force:true}); }
       }
     },
     async prune(chatIds, remove = false) {
@@ -126,10 +184,10 @@ export function createMediaStore({ dataDir, findReference }) {
         const folder = path.join(directory,owner);
         if ((await fs.lstat(folder)).isSymbolicLink() || !(await fs.stat(folder)).isDirectory() || await fs.realpath(folder) !== folder) throw new Error('Invalid chat media storage');
         for (const name of await fs.readdir(folder)) {
-          const match = /^([0-9a-f-]{36})\.bin(\.tmp)?$/.exec(name);
+          const match = /^([0-9a-f-]{36})(?:\.preview)?\.bin(\.tmp|\.notes\.json(?:\.[0-9a-f-]{36}\.tmp)?)?$/.exec(name);
           if (!match || !new RegExp(uuid).test(match[1])) continue;
           let keep = false;
-          if (!remove && !match[2] && known.has(owner)) { try { keep = !!findReference(known.get(owner),match[1]); } catch { /* Interrupted or deleted chat output. */ } }
+          if (!remove && (!match[2] || match[2] === '.notes.json') && known.has(owner)) { try { keep = !!findReference(known.get(owner),match[1]); } catch { /* Interrupted or deleted chat output. */ } }
           if (!keep) await fs.rm(path.join(folder,name),{force:true});
         }
         try { await fs.rmdir(folder); } catch(error) { if(error.code!=='ENOTEMPTY' && error.code!=='EEXIST') throw error; }

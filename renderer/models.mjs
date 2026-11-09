@@ -220,16 +220,15 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
         const error = el('p', 'model-job-error error-text'); error.setAttribute('role', 'status'); node.append(error);
         const path = el('p', 'model-job-directory hint', job.directory); node.append(path);
         const files = el('details', 'tool-message'); files.append(el('summary', '', `${job.files.length} selected file${job.files.length === 1 ? '' : 's'}`)); const fileText = el('pre', 'result-content'); files.append(fileText); node.append(files);
-        const cancel = button('Cancel download', async () => { await request('models.cancel', { id: job.id }); await refresh(); }); cancel.dataset.action = 'cancel-download';
         const retry = button('Inspect files again', async () => { showTab('browse'); await inspect(job.repoId); });
-        node.append(actions(pageLink(job.repoId), button('Open folder', () => request('models.openDirectory', { id: job.id })), retry, cancel));
-        row = { node, status, progress, bytes, speed, percent, error, fileText, cancel, retry }; jobNodes.set(job.id, row); jobs.prepend(node);
+        node.append(actions(pageLink(job.repoId), button('Open folder', () => request('models.openDirectory', { id: job.id })), retry));
+        row = { node, status, progress, bytes, speed, percent, error, fileText, retry }; jobNodes.set(job.id, row); jobs.prepend(node);
       }
       const info = downloadProgress(job);
       row.status.textContent = job.status === 'completed' ? 'Files downloaded' : String(job.status).replace(/^./, letter => letter.toUpperCase());
       if (info.progress === null) row.progress.removeAttribute('value'); else row.progress.value = info.progress;
       row.bytes.textContent = info.bytes; row.speed.textContent = info.speed; row.percent.textContent = info.percent;
-      row.cancel.hidden = !info.active; row.retry.hidden = !['failed', 'canceled', 'interrupted'].includes(job.status);
+      row.retry.hidden = !['failed', 'canceled', 'interrupted'].includes(job.status);
       row.error.hidden = !job.error; row.error.textContent = job.error || '';
       row.fileText.textContent = job.files.map(file => `${file.path}\n${file.status || job.status} · ${formatBytes(file.downloadedBytes ?? file.bytes)} / ${formatBytes(file.size)}`).join('\n\n');
     }

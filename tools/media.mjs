@@ -5,7 +5,7 @@ import { containedPath } from './files.mjs';
 export function mediaTools() {
   return [{
     name: 'media_show', permission: 'read',
-    description: 'Display saved audio or video from the current project in chat. Supports WAV, MP3, M4A, Ogg audio, MP4, and WebM up to 512 MiB; playback depends on the file codecs. Path must be project-relative. Copies a durable chat attachment; does not generate or transcode media or send its bytes to the model.',
+    description: 'Display saved project media in chat: WAV/MP3/M4A/Ogg audio, MP4/WebM video (512 MiB), PDF/DOCX documents (64 MiB), SVG (4 MiB), or GIF/APNG including animated PNG (16 MiB). Documents support preview and user annotations; animations have frame controls. Path must be project-relative. Copies an immutable chat attachment; never generates media or sends its bytes to the model.',
     parameters: { type: 'object', properties: { path: { type: 'string', minLength: 1, maxLength: 4096 } }, required: ['path'], additionalProperties: false },
     async execute(args, ctx) {
       ctx.signal?.throwIfAborted();

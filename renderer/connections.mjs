@@ -124,7 +124,7 @@ export function createConnections({ request, refresh, getState, getChat, getMode
     function updateDetail() {
       const current = selectedProvider(); const active = isLocal();
       model.wrapper.hidden = active; recommended.hidden = active || current?.kind !== 'openai-responses'; listButton.hidden = active;
-      detail.textContent = provider.input.value === LOCAL_FILES ? 'Runs downloaded GGUF files locally with the bundled model server. Faber’s tools, approvals, and upgrade controls remain available.' : `${current?.baseUrl || ''}${current?.reasoningEffort ? ` · Reasoning: ${current.reasoningEffort}` : ''}\n${notice(current)}`;
+      detail.textContent = provider.input.value === LOCAL_FILES ? 'Runs complete GGUF models and supported Safetensors CPU packages locally. Start loads a model; Use in this chat selects it. Faber’s tools and approvals remain available.' : `${current?.baseUrl || ''}${current?.reasoningEffort ? ` · Reasoning: ${current.reasoningEffort}` : ''}\n${notice(current)}`;
       local.configure(current, model.input.value, active); useButton.disabled = applying || active && !local.selection().canUse;
     }
     provider.input.addEventListener('change', () => { nextList(); model.input.value = selectedProvider()?.model || ''; result.replaceChildren(); result.hidden = true; updateDetail(); });

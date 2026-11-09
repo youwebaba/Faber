@@ -13,6 +13,7 @@ import {outputPath} from '../model-hub/paths.mjs';
 import {recycleModel} from './recycle.mjs';
 import {localModelDetails} from './details.mjs';
 import {contextTokensSchema} from '../core/controls.mjs';
+import {createSafetensorsRuntime} from './safetensors-runtime.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const id = { type: 'string', minLength: 1, maxLength: 300 };
@@ -43,11 +44,12 @@ export async function killOwnedProcess(child) {
   } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
 }
 
-export async function createLocalModels({ dataDir, runtime, getHubState, emit = () => {}, executable, backendDirectories,hardwareRunner,trashItem,withModelFiles,fetchImpl = fetch, spawnImpl = spawn, killProcess = killOwnedProcess, loadTimeoutMs = 300000, pollMs = 250 }) {
+export async function createLocalModels({ dataDir, runtime, getHubState, emit = () => {}, executable, safetensorsExecutable, safetensorsVerify, backendDirectories,hardwareRunner,trashItem,withModelFiles,fetchImpl = fetch, spawnImpl = spawn, killProcess = killOwnedProcess, loadTimeoutMs = 300000, pollMs = 250 }) {
   const store = await openStore(path.join(dataDir, 'local-models'), { version: 1, providerId: null });
   if (store.state.version !== 1 || (store.state.providerId !== null && typeof store.state.providerId !== 'string')) throw new Error('Invalid local-model manager state');
   store.state.configuration ||= structuredClone(defaultConfiguration);validate(store.state.configuration,configurationSchema);
   const executableFile = await executablePath(executable), ollama = createOllamaControl({ runtime, fetchImpl });
+  const safetensors = await createSafetensorsRuntime({dataDir,executable:safetensorsExecutable,fetchImpl,verifyImpl:safetensorsVerify});
   const hardware=createHardware({executable:executableFile,backendDirectories,runner:hardwareRunner});
   let library = { directory: '', models: [], warnings: [] }, processState = { status: 'stopped' }, current, closed = false, starting = false, stopping = false, stopPromise, preparing;
   const lifetime = new AbortController();
@@ -78,10 +80,10 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
   const snapshot = () => {
     const providerId=store.state.providerId,label=modelLabel(providerId,store.state.connection?.model);
     return structuredClone({ ...library, modelLabels:label?[label]:[], configuration:store.state.configuration, installed: [], loaded: [], managedProviderId: providerId,
-      runtime: { available: !!executableFile, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
+      runtime: { available: !!executableFile, safetensors:safetensors.status, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
   };
   function publish() { try { emit({ type: 'localModels', state: snapshot() }); } catch { /* Detached UI does not own the process. */ } }
-  async function scan() { const hub = await getHubState(); library = await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads }); return library; }
+  async function scan() { const hub = await getHubState(),scanned=await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads });scanned.models=await Promise.all(scanned.models.map(model=>model.format==='safetensors'?safetensors.describe(scanned.directory,model):model));library=scanned;return library; }
   const hardwareState=async signal=>({...await hardware.inspect(signal),configuration:structuredClone(store.state.configuration),observed:processState.observed||null});
   const controlOnly = (run, callerRunId) => run.id === callerRunId && Array.isArray(run.modelCalls) && run.modelCalls.length === 0;
   async function ensureIdle(callerRunId) {
@@ -97,6 +99,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       try { await Promise.race([operation.exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Owned local model process did not exit; stop was not confirmed')), 10000); })]); }
       finally { clearTimeout(timer); }
     }
+    await operation.native?.close();
     await fs.rm(operation.keyFile, { force: true });
   }
   async function ready(operation, model) {
@@ -107,7 +110,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
         if (operation.didExit) throw new Error(operation.spawnError || `Local model process exited before loading. ${operation.logs}`);
         if (Date.now() - started >= loadTimeoutMs) throw new Error(`Local model loading timed out. ${operation.logs}`);
         try {
-          const response = await fetchImpl(`${operation.baseUrl}/health`, { redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]) });
+          const response = await fetchImpl(`${operation.baseUrl}/health`, { redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]),headers:{Authorization:`Bearer ${operation.key}`} });
           if (response.ok) {
             const listed = await fetchImpl(`${operation.baseUrl}/v1/models`, { redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(1500)]), headers: { Authorization: `Bearer ${operation.key}` } });
             if (listed.ok && (await listed.json()).data?.some(item => item.id === operation.alias)) break;
@@ -134,14 +137,14 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if(operation.contextTokens!==null&&contextCapacityTokens!==operation.contextTokens)throw new Error(`Requested ${operation.contextTokens} context tokens, but the runtime reported ${contextCapacityTokens??'no verified capacity'}. The model was stopped; choose a supported context size and start again.`);
       signal.throwIfAborted();
       if(current!==operation||operation.didExit)throw new Error('Local model process changed during context inspection');
-      const observed=observePlacement(operation.placementLogs+operation.logTails.join('\n'));
+      const observed=operation.native?{backend:'cpu',gpuLayers:0,totalLayers:null,devices:[],verified:true}:observePlacement(operation.placementLogs+operation.logTails.join('\n'));
       if(operation.requested.mode==='custom'&&(!observed.verified||!observed.gpuLayers||operation.requested.gpuIds.some(id=>!observed.devices.includes(id))))throw new Error('Selected GPU placement could not be confirmed. The model was stopped instead of silently falling back; inspect runtime compatibility or choose Automatic/CPU mode.');
       const providerId = store.state.providerId || randomUUID();
       if (!store.state.providerId) { store.state.providerId = providerId; await store.save(store.state); }
       signal.throwIfAborted();
-      const saved=await runtime.request('provider.save', { id: providerId, name: 'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
+      const saved=await runtime.request('provider.save', { id: providerId, name: operation.native?'Downloaded Safetensors (CPU)':'Downloaded GGUF (local)', kind: 'openai', baseUrl: `${operation.baseUrl}/v1`, model: operation.alias, apiKey: operation.key });
       providers=[...providers.filter(provider=>provider.id!==providerId),saved];
-      store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,displayName:model.label,modelId:model.id,thinkingSupported};await store.save(store.state);
+      store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,displayName:model.label,modelId:model.id,thinkingSupported,format:model.format};await store.save(store.state);
       signal.throwIfAborted();
       operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
       processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
@@ -158,7 +161,6 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
   }
   async function startFile(modelId, originSignal, callerRunId, contextTokens=null) {
     if (closed) throw new Error('Local model manager is closed');
-    if (!executableFile) throw new Error(snapshot().runtime.reason);
     if (starting || stopping || current ||deleting||configuring|| ['loading', 'stopping'].includes(processState.status)) throw new Error('Stop the current local model and finish pending file/settings actions before starting another.');
     starting = true;
     originSignal = originSignal ? AbortSignal.any([originSignal, lifetime.signal]) : lifetime.signal;
@@ -167,39 +169,45 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       originSignal?.throwIfAborted(); await ensureIdle(callerRunId); await scan(); originSignal?.throwIfAborted();
       const model = library.models.find(item => item.id === modelId);
       if (!model) throw new Error('Model files changed or left the configured folder. Refresh the local model list.');
-      if (!model.available || model.format !== 'gguf') throw new Error(model.reason || 'Only complete GGUF models can start in this runtime');
-      const detected=await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=launchArguments(requested,detected);
+      if (!model.available || !['gguf','safetensors'].includes(model.format)) throw new Error(model.reason || 'Choose a complete model supported by this runtime');
+      const nativeSafe=model.format==='safetensors';
+      if(!nativeSafe&&!executableFile)throw new Error(snapshot().runtime.reason);
+      const detected=nativeSafe?null:await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=nativeSafe?[]:launchArguments(requested,detected);
       if(contextTokens!==null){
+        if(nativeSafe)throw new Error('This native Safetensors CPU loader currently supports Default context only. Select Default and start again.');
         if(!detected.capabilities.contextSize)throw new Error('This runtime does not support configurable context size; use provider default or update the runtime.');
         // One slot gives each queued request the selected capacity instead of dividing it across slots.
         hardwareArgs.push('--ctx-size',String(contextTokens),'--parallel','1');
       }
-      const files=await Promise.all(model.files.map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
+      const files=await Promise.all([...model.files,...(nativeSafe?model.supportFiles||[]:[])].map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
       originSignal.throwIfAborted();
       const operationId = randomUUID(), keyFile = path.join(dataDir, 'local-models', `${operationId}.key`), key = randomBytes(32).toString('hex');
-      const port = await freePort(); originSignal?.throwIfAborted();
+      const port = nativeSafe?null:await freePort(); originSignal?.throwIfAborted();
       try { await fs.writeFile(keyFile, key, { mode: 0o600, flag: 'wx' }); }
       catch (error) { if (error.code !== 'EEXIST') await fs.rm(keyFile, { force: true }).catch(() => {}); throw error; }
       if (originSignal?.aborted) { await fs.rm(keyFile, { force: true }); originSignal.throwIfAborted(); }
       const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',logTails:['',''],requested,files,contextTokens, didExit: false, originSignal };
       current = operation;
-      processState = { status: 'loading', operationId, modelId, stage: 'Loading GGUF into local runtime',requested,contextTokens }; publish();
+      processState = { status: 'loading', operationId, modelId, stage: nativeSafe?'Loading Safetensors on native CPU runtime':'Loading GGUF into local runtime',requested,contextTokens }; publish();
       operation.abortOrigin = () => { operation.controller.abort(originSignal.reason); void Promise.resolve().then(() => stopFile()).catch(() => {}); };
       originSignal?.addEventListener('abort', operation.abortOrigin, { once: true });
-      const env = hardware.environment();
+      const env = nativeSafe?null:hardware.environment();
       try {
-        const child = spawnImpl(executableFile, ['--model', path.join(library.directory, model.relativePath), '--host', '127.0.0.1', '--port', String(port), '--alias', operation.alias, '--api-key-file', keyFile, '--offline', '--no-webui', '--no-mmproj', '--jinja',...hardwareArgs], { cwd: path.dirname(executableFile), env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+        let binary=executableFile,args=['--model', path.join(library.directory, model.relativePath), '--host', '127.0.0.1', '--port', String(port), '--alias', operation.alias, '--api-key-file', keyFile, '--offline', '--no-webui', '--no-mmproj', '--jinja',...hardwareArgs],environment=env;
+        if(nativeSafe){operation.native=await safetensors.prepare({directory:library.directory,model,operation,nativePort:port,configuration:requested,contextTokens});binary=operation.native.executable;args=operation.native.args;environment=operation.native.env;operation.baseUrl=operation.native.baseUrl;}
+        const child = spawnImpl(binary,args, { cwd: path.dirname(binary), env:environment, windowsHide: true, detached: process.platform !== 'win32', stdio: [nativeSafe?'pipe':'ignore', 'pipe', 'pipe'] });
         operation.child = child;
         operation.exited = new Promise(resolve => {
           child.once('error', error => { operation.spawnError = redact(error.message, operation); operation.didExit = true; resolve(); });
           child.once('close', () => {
             operation.didExit = true; resolve();
             if (current === operation && processState.status === 'ready') {
-              processState = { status: 'failed', operationId, modelId, stage: 'Local runtime exited', error: redact(operation.logs, operation).slice(-5000) || 'Local model process exited unexpectedly' }; current = undefined; void fs.rm(keyFile, { force: true }).catch(() => {}); publish();
+              processState = { status: 'failed', operationId, modelId, stage: 'Local runtime exited', error: redact(operation.logs, operation).slice(-5000) || 'Local model process exited unexpectedly' }; current = undefined; void operation.native?.close().catch(()=>{});void fs.rm(keyFile, { force: true }).catch(() => {}); publish();
             }
           });
         });
-        for (const [index,stream] of [child.stdout, child.stderr].entries()) stream?.setEncoding('utf8').on('data', chunk => {
+        operation.native?.attach(child);
+        for (const [index,stream] of [operation.native?null:child.stdout, child.stderr].entries()) stream?.setEncoding('utf8').on('data', chunk => {
           operation.logs = redact(operation.logs + chunk, operation).slice(-8000);
           const lines=(operation.logTails[index]+redact(chunk,operation)).split(/\r?\n/);operation.logTails[index]=lines.pop().slice(-2000);
           for(const line of lines)if(/using device|offloaded\s+\d+\s*\/|n_ctx_slot\s*=/i.test(line))operation.placementLogs=(operation.placementLogs+line+'\n').slice(-16000);
@@ -292,7 +300,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     modelDisplayName(providerId,model){return modelLabel(providerId,model)?.displayName??null;},
     providerControls(providerId,model){
       if(providerId!==store.state.providerId||!ownedConnection(providerId,model))return undefined;
-      return {context:{configurable:!!executableFile,mode:'managed',capacityTokens:processState.status==='ready'&&processState.model===model?processState.contextCapacityTokens:null,requiresRestart:true},thinking:{supported:store.state.connection?.thinkingSupported===true,mode:'llama_cpp',effective:null}};
+      return {context:{configurable:!!executableFile&&store.state.connection?.format!=='safetensors',mode:'managed',capacityTokens:processState.status==='ready'&&processState.model===model?processState.contextCapacityTokens:null,requiresRestart:true},thinking:{supported:store.state.connection?.thinkingSupported===true,mode:'llama_cpp',effective:null}};
     },
     assertProviderAvailable(providerId, model, options={}) {
       if (providerId === store.state.providerId && (closed || starting || stopping || processState.status !== 'ready' || processState.model !== model)) throw new Error('Start this downloaded local model and wait until it is ready before sending a chat.');
@@ -306,7 +314,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       {name:'local_model_configure',description:'Save global hardware defaults for the next managed GGUF Start. Stop the managed model first. Does not change external Ollama or API servers. CPU IDs select logical cores; empty means automatic. Memory mapping is disk-backed paging, not extra VRAM.',parameters:schemas['localModels.configure'],permission:'computer',execute:(args,ctx)=>request('localModels.configure',args,ctx.signal)},
       {name:'local_model_delete',description:'Move only the selected detected model files to the Recycle Bin, including existing shards of incomplete or invalid models. Rejects loaded/in-use or actively downloading files. Never guesses missing shards or deletes repository directories, other variants or external Ollama models.',parameters:schemas['localModels.delete'],permission:'files',execute:(args,ctx)=>request('localModels.delete',args,ctx.signal,ctx.runId)},
       { name: 'local_models_list', description: 'List complete local model files from the configured download folder and optionally installed models in a loopback Ollama connection. Does not load models.', parameters: schemas['localModels.list'], permission: 'read', execute: (args, ctx) => request('localModels.list', args, ctx.signal) },
-      { name: 'local_model_start', description: 'Load a selected local GGUF, or an installed loopback Ollama model. Does not download weights or select a chat model. Poll local_models_list for readiness.', parameters: schemas['localModels.start'], permission: 'computer', execute: (args, ctx) => request('localModels.start', args, ctx.signal, ctx.runId) },
+      { name: 'local_model_start', description: 'Load a supported complete local GGUF or native CPU Safetensors package, or an installed loopback Ollama model. Safetensors supports Default context and qualified text architectures. Does not download weights or select a chat model. Poll local_models_list for readiness.', parameters: schemas['localModels.start'], permission: 'computer', execute: (args, ctx) => request('localModels.start', args, ctx.signal, ctx.runId) },
       { name: 'local_model_stop', description: 'Unload the owned GGUF process, or a specified installed Ollama model. Stop its active chats first. Does not delete model files.', parameters: schemas['localModels.stop'], permission: 'computer', execute: (args, ctx) => request('localModels.stop', args, ctx.signal, ctx.runId) },
     ],
     async close() { if (closed) return; closed = true; unsubscribe?.(); lifetime.abort(new Error('App shutting down')); await preparing;await fileOperation?.catch(()=>{}); for (const transition of ollamaTransitions.values()) transition.controller.abort(new Error('App shutting down')); await Promise.allSettled([...ollamaTransitions.values()].map(item => item.done)); await stopFile(true); await store.flush(); },

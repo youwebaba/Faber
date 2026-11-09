@@ -19,6 +19,7 @@ import { createContentMenu, createMediaOutputs, resultMedia } from './content-me
 import { createWorkspaceControls, pendingUserMessages, hasUnsentDrafts, projectApprovalTitle } from './workspace-controls.mjs';
 import { releaseLabel } from './release.mjs';
 import { correctionLabel, correctionRequest } from './prompt-progress.mjs';
+import {createRoutineControls} from './routines.mjs';
 
 const $ = selector => document.querySelector(selector);
 document.title = `Faber ${releaseLabel}`;
@@ -656,6 +657,8 @@ const addonManager = createAddonManager({ request, subscribe: bridge?.subscribe,
 const remoteConnections = createRemoteConnections({ request, subscribe: bridge?.subscribe, el, field, closeModal, contentMenu, showConnections: () => showSettings('connections'), suspendLocal: () => { mediaOutputs.clear(); transcriptChatId = undefined; browserPanel.suspend(); modelsBrowser.close(); navigationMenu.close(); }, onChange: () => { renderNavigation(); if (!remoteConnections.workspace.isOpen()) renderTranscript(); scheduleUIRefresh(); } });
 const workspaceControls = createWorkspaceControls({ request, subscribe: bridge?.subscribe, getState: () => state, modal, closeModal, el, button, field, selectField, actions, notify, addonManager, hasDrafts: () => remoteConnections.hasDrafts() || hasUnsentDrafts({ text: $('#prompt').value, drafts: drafts.values(), attachments: imageDrafts.hasPending() ? [] : imageDrafts.snapshot(), pending: imageDrafts.hasPending() || pendingPicker, fields: document.querySelectorAll('#modal input, #modal textarea, #modal select, #models-panel input, #models-panel textarea, #models-panel select') }) });
 const preferences = createPreferences({ workspaceControls, remoteConnections, request, refresh, getState: () => state, getChat: currentChat, modal, closeModal, el, button, field, selectField, actions, notify, wordmark, connections, modelsBrowser, addonManager, showVoice, showTools, refreshInterface, getErrors: () => recentErrors.slice(), showOpenAI: () => connections.showPicker(undefined, 'openai') });
+const routineControls=createRoutineControls({request,subscribe:bridge?.subscribe,getState:()=>state,getProject:currentProject,selectChat,modal,closeModal,el,button,field,selectField,checkedRow,actions,notify});
+$('#open-routines').addEventListener('click',()=>act(()=>routineControls.show()));
 const chatgptControls = createChatGPTControls({ request, refresh, getChat: currentChat, getState: () => state, newChat, closeModal, el, button, field, selectField, actions, createPromptChoice: () => preferences.createPromptChoice(), notify });
 $('#open-addons').addEventListener('click', () => act(() => addonManager.show()));
 $('#open-connections').addEventListener('click', () => showSettings('connections'));

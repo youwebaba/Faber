@@ -9,7 +9,7 @@ const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 const allowed=/^(core|desktop|renderer|tools|extensions|model-hub|local-models|test)\/[a-zA-Z0-9_./-]+\.(mjs|cjs|js|json|html|css|ps1)$/;
 const rustSource=/^native\/src\/[a-zA-Z0-9_./-]+\.rs$/;
 const nativeManifest='native/runtime.json';
-export function validUpgradePath(value){return typeof value==='string'&&(allowed.test(value)||rustSource.test(value)||value==='native/worker.mjs')&&!value.split('/').some(p=>!p||p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/boot-state.cjs','desktop/packaged-paths.mjs','desktop/profile-path.cjs'].includes(value.toLowerCase());}
+export function validUpgradePath(value){return typeof value==='string'&&(allowed.test(value)||rustSource.test(value)||value==='native/worker.mjs')&&!value.split('/').some(p=>!p||p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/boot-state.cjs','desktop/packaged-paths.mjs','desktop/profile-path.cjs','desktop/profile-owner.cjs'].includes(value.toLowerCase());}
 async function safePath(root,relative,{generated=false}={}){
   if(!validUpgradePath(relative)&&!(generated&&(relative===nativeManifest||/^native\/bin\/[a-f0-9]{64}(?:\.exe)?$/.test(relative))))throw new Error('Invalid recovery path');
   const base=await fs.realpath(root),target=path.resolve(base,relative);let probe=target;
@@ -18,7 +18,38 @@ async function safePath(root,relative,{generated=false}={}){
   return target;
 }
 export async function atomicWrite(file,bytes){const temporary=file+'.'+crypto.randomUUID()+'.tmp';try{await fs.mkdir(path.dirname(file),{recursive:true});await fs.writeFile(temporary,bytes,{flag:'wx'});await fs.rename(temporary,file);}finally{await fs.rm(temporary,{force:true});}}
-export async function writeRecoveryRecord(dataDir,record){const target=path.join(dataDir,'upgrades','last-applied.json');await fs.mkdir(path.dirname(target),{recursive:true});await atomicWrite(target,JSON.stringify(record,null,2));}
+const historyId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+export async function writeRecoveryRecord(dataDir,record){
+  await fs.mkdir(dataDir,{recursive:true});
+  const pointer=await recoveryProfilePath(dataDir,'upgrades/last-applied.json');
+  let previous;
+  try{previous=JSON.parse(await fs.readFile(pointer,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
+  if(previous&&previous.id!==record.id){
+    if(!historyId.test(previous.id)||!['applied','rolledBack'].includes(previous.status))throw new Error('The previous upgrade requires recovery before applying another.');
+    const archive=await recoveryProfilePath(dataDir,`upgrades/${previous.id}/history.json`);
+    await atomicWrite(archive,JSON.stringify(previous,null,2));
+  }
+  await atomicWrite(pointer,JSON.stringify(record,null,2));
+}
+export async function appliedUpgrades(dataDir,sourceDir){
+  let entries;
+  try{entries=await fs.readdir(await recoveryProfilePath(dataDir,'upgrades'),{withFileTypes:true});}catch(error){if(error.code==='ENOENT')return [];throw error;}
+  const rows=new Map();
+  async function collect(relative,latest){
+    const file=await recoveryProfilePath(dataDir,relative);
+    let bytes;
+    try{bytes=await fs.readFile(file,'utf8');}catch(error){if(error.code==='ENOENT')return;throw error;}
+    const record=JSON.parse(bytes);
+    if(!historyId.test(record.id)||!['applied','applying','rolledBack'].includes(record.status)||!Array.isArray(record.files))throw new Error('Unrecognized upgrade history record');
+    const files=record.files.map(item=>item.path).filter(name=>validUpgradePath(name)||name===nativeManifest);
+    rows.set(record.id,{id:record.id,files,title:record.title||files.join(', '),status:record.status,
+      appliedAt:record.appliedAt||null,verifiedAt:record.verifiedAt||null,
+      canRollback:latest&&record.sourceDir===sourceDir&&record.status==='applied'});
+  }
+  for(const entry of entries)if(entry.isDirectory()&&historyId.test(entry.name))await collect(`upgrades/${entry.name}/history.json`,false);
+  await collect('upgrades/last-applied.json',true);
+  return [...rows.values()].sort((a,b)=>Number(b.canRollback)-Number(a.canRollback)||String(b.appliedAt||'').localeCompare(String(a.appliedAt||'')));
+}
 export async function recoveryProfilePath(dataDir,relative){
   const base=await fs.realpath(dataDir),target=path.join(base,relative);let current=base;
   for(const part of relative.split('/')){current=path.join(current,part);try{if((await fs.lstat(current)).isSymbolicLink())throw new Error('Recovery storage contains a link or junction');const resolved=await fs.realpath(current),inside=path.relative(base,resolved);if(inside==='..'||inside.startsWith(`..${path.sep}`)||path.isAbsolute(inside))throw new Error('Recovery storage escapes the profile');}catch(error){if(error.code!=='ENOENT')throw error;}}

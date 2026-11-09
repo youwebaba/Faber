@@ -1,5 +1,20 @@
 Faber bundled runtime notices
 
+Native Safetensors chat uses the official Mistral.rs 0.9.5 library (MIT),
+source commit 465191d0b0a7e2432d327b0de06204ab3f94d3a2, through a separate
+Faber worker using inherited pipes. The stock Mistral.rs server is not bundled.
+Exact native dependency versions and source checksums are in
+native-safetensors/Cargo.lock. Full dependency license texts, required notices,
+authors and unmodified source links are retained in
+SAFETENSORS-THIRD-PARTY-NOTICES.txt and safetensors-dependencies.json,
+also included beside the native runtime under resources/safetensors-runtime.
+MPL-2.0-covered dependency source is available at the exact package URLs there.
+The Rust standard-library notices below also apply to this worker; Microsoft
+runtime terms are retained as MICROSOFT-VS18-REDIST.txt. The compiler, build
+caches, debugging symbols and model weights are not included in that payload.
+The native source, runtime files and SHA-256 digests are pinned in
+safetensors-runtime-lock.json. See docs/a2.6-safetensors.md for rebuilding.
+
 MiniMax Music3 local generation uses minimaxmusic.cpp (MIT), source commit
 35ba334b4d23b5a8e631e3c2d97f074a185e41d4, and ggml (MIT), source commit
 210138933b22221ced02943b7b6e4308610ab530. The separate music-runtime payload
@@ -54,3 +69,10 @@ https://visualstudio.microsoft.com/license-terms/vs2022-ga-community/
 
 Additional upstream distribution notices are retained as GO_LICENSE.
 Faber does not claim ownership of third-party components or model weights.
+
+PDF.js 6.5.438: Copyright Mozilla Foundation and contributors; Apache License 2.0.
+Official source: https://github.com/mozilla/pdf.js
+The verified distribution is included under renderer/vendor/pdfjs. Its LICENSE
+and the font-specific LICENSE_FOXIT and LICENSE_LIBERATION notices are retained.
+The archive integrity and SHA-256 digests for each shipped file are recorded in
+renderer/vendor/pdfjs/manifest.json. PDF rendering uses these local assets only.

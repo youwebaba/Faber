@@ -20,8 +20,8 @@ MTP does not hide its main model. Incomplete or failed tracked downloads
 and unsupported formats are unavailable. File discovery is not a guarantee that
 the model is complete, fits memory or supports the selected runtime.
 
-Start rescans the selected file set and launches the managed llama.cpp server
-on an authenticated loopback endpoint. It uses the original files directly,
+Start rescans the selected file set and launches the managed GGUF or native
+Safetensors runtime behind an authenticated loopback endpoint. It uses the original files directly,
 without importing another copy into Ollama. The host owns the process, waits for
 readiness, and records a reusable OpenAI-compatible connection. Starting never
 selects that connection for a chat. Stop cancels loading or ends the owned server;
@@ -41,6 +41,29 @@ harness does not download executables or weights automatically. Separate vision-
 files are not loaded by this first GGUF launcher. Tool calling depends on the
 model and its chat template. Runtime-native context and hardware constraints
 apply; the harness does not reinstate a context or turn budget.
+
+## Native Safetensors chat
+
+Complete original Llama, Qwen2/Qwen3 and Mistral text packages can use the bundled
+Windows x64 CPU runtime. Choose the package under **Downloaded models (local)**,
+select **Default** context, then **Start** and **Use in this chat**. The host
+retains the same chat tools, approvals and Stop controls. Unsupported packages
+stay visible with a reason and guidance to use GGUF or an external connection.
+
+This route loads weights as float32; RAM use can substantially exceed download
+size, with additional context and execution buffers. Automatic and CPU modes use
+automatic CPU cores; an optional thread count is supported. Custom GPU/core
+placement, custom context capacity, prequantized checkpoints, custom model code,
+vision, diffusion and music packages are unavailable on this chat route.
+
+Only the selected original weights are hardlinked into a temporary directory
+beside the package; checked support files are copied there. This requires a
+drive supporting hardlinks, normally NTFS. Stop removes the temporary entries
+and preserves the original package. No weights are converted or downloaded by
+Start. The native inference process has no network listener or executable tool
+service; it communicates over private inherited pipes. Faber's separate
+loopback endpoint requires its private API key and rejects browser origins.
+See [native build and acceptance evidence](docs/a2.6-safetensors.md).
 
 ## Per-chat context selection
 

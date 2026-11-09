@@ -1,4 +1,4 @@
-import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,WebContentsView,powerMonitor,powerSaveBlocker,clipboard,nativeImage} from 'electron';
+import {app,BrowserWindow,dialog,ipcMain,protocol,safeStorage,shell,session,Menu,Tray,WebContentsView,powerMonitor,powerSaveBlocker,clipboard,nativeImage} from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -28,7 +28,10 @@ import {imageTools} from '../tools/images.mjs';
 import {mediaTools} from '../tools/media.mjs';
 import {createLocalMusic} from '../local-music/index.mjs';
 import {createChatMedia,mediaMethods} from './chat-media.mjs';
+import {previewScheme,previewProtocol} from './media-preview.mjs';
 import {createBrowserManager,browserMethods} from './browser.mjs';
+import {createBackgroundWorker,workerMethods} from './background.mjs';
+import {routineSchemas} from '../core/routines.mjs';
 
 const bootstrap=globalThis.__FABER_BOOTSTRAP__;
 const sourceDir=bootstrap?.sourceDir||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -42,10 +45,11 @@ const smokeB201=process.argv.includes('--smoke-b201');
 const smokeThinking=process.argv.includes('--smoke-thinking');
 const smokeBrowser=process.argv.includes('--smoke-browser');
 const smokeMedia=process.argv.includes('--smoke-media');
+const smokeWorker=process.argv.includes('--smoke-worker');
 const smokeInstalled=process.argv.includes('--smoke-installed');
 const smokeFaber=process.argv.includes('--smoke-faber');
 const smokePackage=process.argv.includes('--smoke-package');
-const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia;
+const smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-live')||smokeModels||smokeFeatures||smokeLocalModels||smokeUIReload||smokePackage||smokeFaber||smokeInstalled||smokeB11||smokeB12||smokeB201||smokeThinking||smokeBrowser||smokeMedia||smokeWorker;
 const dataDir=bootstrap?.dataDir||(smoke?await fs.mkdtemp(path.join(os.tmpdir(),'Faber-smoke-')):getProfileDirectory(process.env.LOCALAPPDATA??app.getPath('appData')));
 const profiles=bootstrap?.profiles||createProfiles(smoke?path.join(dataDir,'profile-registry'):process.env.LOCALAPPDATA??app.getPath('appData'),smoke?{defaultDirectory:dataDir}:{});
 const recoveryStatus={safeMode:bootstrap?.safeMode===true,reason:bootstrap?.recoveryReason||''};
@@ -53,8 +57,8 @@ await fs.mkdir(dataDir,{recursive:true});
 app.setPath('userData',dataDir);
 app.setPath('sessionData',dataDir);
 if(!bootstrap?.hasLock&&!app.requestSingleInstanceLock()){app.quit();process.exit(0);}
-app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.show();window.focus();}});
-if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}}]);
+app.on('second-instance',(_event,args)=>{if(args.includes('--background-worker'))return;showRequested=true;void openWindow?.().catch(error=>console.error('Could not reopen interface:',error));});
+if(!bootstrap)protocol.registerSchemesAsPrivileged([{scheme:'faber',privileges:{standard:true,secure:true,supportFetchAPI:true,stream:true}},previewScheme]);
 const modelMethods=new Set(['models.state','models.search','models.inspect','models.download','models.cancel','models.settings.save','models.chooseDirectory','models.openDirectory','models.openPage']);
 const localMethods=new Set(['localModels.list','localModels.start','localModels.stop','localModels.details','localModels.hardware','localModels.configure','localModels.delete']);
 const addonMethods=new Set(['addons.list','addons.import','addons.enable','addons.disable','addons.uninstall','addons.reset','addons.rollback','addons.openDirectory']);
@@ -63,13 +67,19 @@ const chatGPTMethods=new Set(['chatgpt.status','chatgpt.signIn','chatgpt.cancel'
 const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.start','gateway.stop','gateway.rotateToken']);
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
+methods.add('upgrades.list');
+for(const method of [...workerMethods,...Object.keys(routineSchemas)])methods.add(method);
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
+let worker,tray,openWindow,showRequested=false,desktopLocked=false;
+const visibleLaunchArgs=()=>process.argv.slice(1).filter((value,index,args)=>!['--background-worker','--worker-profile'].includes(value)&&args[index-1]!=='--worker-profile');
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
 let secretQueue=Promise.resolve();
 async function secrets(){try{return JSON.parse(await fs.readFile(secretFile,'utf8'));}catch(error){if(error.code==='ENOENT')return {};throw error;}}
 const host={
+  safeMode:recoveryStatus.safeMode,
+  interactionAvailable:()=>!!window&&!window.isDestroyed()&&window.isVisible()&&!window.isMinimized()&&!desktopLocked,
   privatePaths:profiles.privatePaths,
   async getSecret(id){const values=await secrets();if(!values[id])return '';if(!safeStorage.isEncryptionAvailable())throw new Error('Windows credential encryption is unavailable');return safeStorage.decryptString(Buffer.from(values[id],'base64'));},
   setSecret(id,value){const result=secretQueue.catch(()=>{}).then(async()=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Cannot save API key: Windows credential encryption is unavailable');if(typeof id!=='string'||!id||['__proto__','constructor','prototype'].includes(id))throw new Error('Invalid secret ID');const values=await secrets();if(value)values[id]=safeStorage.encryptString(value).toString('base64');else delete values[id];await atomicWrite(secretFile,JSON.stringify(values));});secretQueue=result;return result;},
@@ -95,9 +105,9 @@ const host={
   assertProviderAvailable:(providerId,model,options)=>{if(providerId.startsWith('chatgpt:')){if(!chatgpt)throw new Error('ChatGPT account connection is unavailable');return chatgpt.assertAvailable(providerId,model,options);}return localModels?.assertProviderAvailable(providerId,model,options);},
   reloadExtensions:()=>extensions.reload(),
   backupCore:signal=>upgrades.backupCore('shell',signal),
-  async restart(){if(!await confirm('Restart Faber? Running chats will stop.'))return {restarting:false};app.relaunch();app.quit();return {restarting:true};}
+  async restart(){if(!await confirm('Restart Faber? Running chats will stop.'))return {restarting:false};app.relaunch({args:visibleLaunchArgs()});app.quit();return {restarting:true};}
 };
-app.on('window-all-closed',()=>app.quit());
+app.on('window-all-closed',()=>{if(!worker?.enabled||quitting)app.quit();});
 async function shutdown(){
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
@@ -107,6 +117,7 @@ async function shutdown(){
   try{await extensions?.close();}catch(error){failures.push(error);}
   try{await localModels?.close();}catch(error){failures.push(error);}
   try{await upgrades?.close();}catch(error){failures.push(error);}
+  try{await worker?.close();}catch(error){failures.push(error);}tray?.destroy();
   await featureFixture?.close();await reloadFixture?.close();if(browserParking&&!browserParking.isDestroyed())browserParking.destroy();
   for(const error of failures)console.error('Shutdown failed:',error);return failures.length===0;
 }
@@ -133,12 +144,17 @@ protocol.handle('faber',async request=>{
     const relative=decodeURIComponent(url.pathname).replace(/^\//,'')||'index.html';
     const target=await containedPath(path.join(reloadFixture?.sourceDir||sourceDir,'renderer'),relative);
     const mime={'.html':'text/html','.mjs':'text/javascript','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.png':'image/png'}[path.extname(target)]??'application/octet-stream';
-    return new Response(await fs.readFile(target),{headers:{'Content-Type':mime,'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",'X-Content-Type-Options':'nosniff'}});
+    return new Response(await fs.readFile(target),{headers:{'Content-Type':mime,'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; object-src 'none'; frame-src faber-preview:; base-uri 'none'; form-action 'none'",'X-Content-Type-Options':'nosniff'}});
   }catch{return new Response('Not found',{status:404});}
 });
-runtime=await createRuntime({dataDir,sourceDir,host});
-media=createChatMedia({readMedia:runtime.readMedia,readImage:params=>runtime.remoteRequest('chat.image',params),remoteRequest:(deviceId,method,params,signal)=>{if(!remote)throw new Error('Remote connections unavailable');return remote.request('remote.request',{deviceId,method,params},{signal});},protectedPaths:[dataDir,...profiles.privatePaths],
-  chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':'video'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
+protocol.handle('faber-preview',request=>previewProtocol(request,sourceDir));
+const workerSmoke=smokeWorker?await import('../test/desktop-worker-smoke.mjs'):null;
+runtime=await createRuntime({dataDir,sourceDir,host,...(workerSmoke?{provider:workerSmoke.workerProvider}:{})});
+worker=await createBackgroundWorker({dataDir,sourceDir,profileId:profiles.currentId,app,isAttached:()=>!!window&&!window.isDestroyed(),closeWindow:async()=>{window?.close();},pause:async()=>{await runtime.request('routines.pause',{paused:true});const state=await runtime.request('state.get');for(const id of new Set(state.runs.filter(run=>['running','waiting_approval'].includes(run.status)).map(run=>run.chatId)))await runtime.request('chat.forceStop',{chatId:id});},quit:()=>app.quit(),emit:event=>runtime.emit(event),allowLoginMutation:!smoke});
+desktopLocked=!['active','idle'].includes(powerMonitor.getSystemIdleState(1));
+powerMonitor.on('lock-screen',()=>{desktopLocked=true;});powerMonitor.on('unlock-screen',()=>{desktopLocked=false;});
+media=createChatMedia({readMedia:runtime.readMedia,mediaNotes:runtime.mediaNotes,readImage:params=>runtime.remoteRequest('chat.image',params),remoteRequest:(deviceId,method,params,signal)=>{if(!remote)throw new Error('Remote connections unavailable');return remote.request('remote.request',{deviceId,method,params},{signal});},protectedPaths:[dataDir,...profiles.privatePaths],
+  chooseSave:async({name,mimeType})=>{browser?.hideView();const result=await dialog.showSaveDialog(window,{title:'Save chat '+(mimeType.startsWith('image/')?'image':mimeType.startsWith('audio/')?'audio':mimeType.startsWith('video/')?'video':'document'),defaultPath:name,filters:[{name:'Media file',extensions:[path.extname(name).slice(1)]}]});return result.canceled?null:result.filePath;},
   copyText:text=>clipboard.writeText(text),copyImage:data=>{const value=nativeImage.createFromDataURL(data);if(value.isEmpty())throw new Error('This image could not be copied');clipboard.writeImage(value);}
 });
 browserChats=(await runtime.request('state.get')).chats;
@@ -174,37 +190,53 @@ await upgrades.expireStages().catch(error=>console.error('Expired upgrade cleanu
 // Recognition errors can leave a live session; only an explicit off event clears the reload barrier.
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
-runtime.registerTools([...fileTools(),...imageTools(),...mediaTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
+runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):fileTools()),...imageTools(),...mediaTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
 gateway=await createGateway({dataDir,runtime,host,emit:event=>runtime.emit(event)});
+await runtime.startRoutines();
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 function applyZoom(value){if(window&&!window.isDestroyed()&&Number.isFinite(value)&&value>=0.75&&value<=1.5&&lastZoom!==value){window.webContents.setZoomFactor(value);lastZoom=value;}}
 browserChats=(await runtime.request('state.get')).chats;
-runtime.subscribe(event=>{if(event.type==='state'){browserChats=event.state.chats;browser.reconcile(event.state);applyZoom(event.state.settings.uiScale);}emit(event);});
-window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:`Faber ${releaseLabel}`,icon:path.join(sourceDir,'build','faber.ico'),backgroundColor:'#101114',show:!smoke,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
-Menu.setApplicationMenu(Menu.buildFromTemplate([{role:'fileMenu'},{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Settings',accelerator:'CmdOrCtrl+,',click:()=>{browser.hideView();emit({type:'openSettings'});}}]},{role:'viewMenu'},{role:'windowMenu'}]));
+runtime.subscribe(event=>{if(event.type==='state'){browserChats=event.state.chats;browser.reconcile(event.state);applyZoom(event.state.settings.uiScale);}if(event.type==='worker')syncTray();emit(event);});
+openWindow=async()=>{
+if(quitting)return;
+if(window&&!window.isDestroyed()){if(window.isMinimized())window.restore();window.show();window.focus();return window;}
+lastZoom=undefined;uiReady=false;
+window=new BrowserWindow({width:1440,height:960,minWidth:900,minHeight:640,title:`Faber ${releaseLabel}`,icon:path.join(sourceDir,'build','faber.ico'),backgroundColor:'#101114',show:!smoke||showRequested,webPreferences:{preload:path.join(sourceDir,'desktop','preload.cjs'),sandbox:true,contextIsolation:true,nodeIntegration:false,webSecurity:true,allowRunningInsecureContent:false,webviewTag:false,spellcheck:false,backgroundThrottling:!smoke}});
+const ownedWindow=window;
+if(smokeWorker)window.webContents.on('console-message',event=>{if(event.level==='error'||event.level>=2)console.error('Worker renderer:',event.message);});
 window.on('blur',()=>{browserViewRequest++;browser.hideView({keepMonitoring:true});});
 for(const event of ['minimize','hide','resize'])window.on(event,()=>{browserViewRequest++;browser.hideView();});
-window.on('closed',()=>app.quit());
-window.webContents.on('did-start-navigation',()=>{browserViewRequest++;browser.hideView();media.cancel();});
+window.on('close',()=>{browser.hideView();});
+window.on('closed',()=>{if(window===ownedWindow)window=null;media.cancel();if(!worker.enabled&&!quitting)app.quit();});
+window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame){browserViewRequest++;browser.hideView();media.cancel();}});
 window.on('focus',()=>{emit({type:'browserViewHidden'});void browser.request('browser.state').then(state=>emit({type:'browser',state})).catch(()=>{});});
 window.webContents.on('blur',()=>{browserChromeFocus=null;});
 window.webContents.on('before-input-event',(event,input)=>{if(!browserChromeFocus||input.type!=='keyDown'||(!input.control&&!input.meta)||input.alt)return;const key=input.key.length===1?input.key.toLowerCase():input.key;const action={l:'address',t:'newTab',w:'closeTab',f:'find',Tab:input.shift?'previousTab':'nextTab','+':'zoomIn','=':'zoomIn','-':'zoomOut','0':'zoomReset'}[key];if(action){event.preventDefault();emit({type:'browserShortcut',...browserChromeFocus,action});}});
 window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
 window.webContents.on('will-navigate',event=>event.preventDefault());
+window.webContents.on('will-frame-navigate',event=>{if(!event.isMainFrame&&event.url!=='about:blank'&&!event.url.startsWith('faber-preview://viewer/'))event.preventDefault();});
 window.webContents.on('will-attach-webview',event=>event.preventDefault());
-window.webContents.on('render-process-gone',(_event,details)=>{void startupFailure(new Error(`The interface process stopped: ${details.reason}`));});
+window.webContents.on('render-process-gone',(_event,details)=>{console.error(`The interface process stopped: ${details.reason}; background work remains owned by this worker.`);clearTimeout(bootTimer);browser.hideView();ownedWindow.destroy();});
+bootTimer=setTimeout(()=>{if(!uiReady){if(worker.enabled){console.error('The interface did not become ready; reopen Faber from the tray.');ownedWindow.destroy();}else void startupFailure(new Error('The interface did not finish startup within one minute.'));}},60000);
+await window.loadURL('faber://app/index.html');applyZoom((await runtime.request('state.get')).settings.uiScale);if(showRequested){window.show();window.focus();}return window;
+};
+Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'File',submenu:[{label:'Close window',accelerator:'Alt+F4',click:()=>window?.close()},{label:'Pause work',click:()=>void worker.request('worker.pause')},{type:'separator'},{label:'Quit Faber',accelerator:'CmdOrCtrl+Q',click:()=>app.quit()}]},{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'},{type:'separator'},{label:'Settings',accelerator:'CmdOrCtrl+,',click:()=>{browser.hideView();emit({type:'openSettings'});}}]},{role:'viewMenu'},{role:'windowMenu'}]));
+function syncTray(){if(!worker.enabled){tray?.destroy();tray=null;return;}if(tray)return;tray=new Tray(path.join(sourceDir,'build','faber.ico'));tray.setToolTip('Faber background worker');tray.on('double-click',()=>void openWindow());tray.setContextMenu(Menu.buildFromTemplate([{label:'Open Faber',click:()=>void openWindow()},{label:'Pause work',click:()=>void worker.request('worker.pause')},{label:'Resume routine queue',click:()=>void runtime.request('routines.pause',{paused:false})},{type:'separator'},{label:'Quit Faber',click:()=>app.quit()}]));}
+syncTray();
 ipcMain.handle('faber:request',async(event,method,params={})=>{
-  if(event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||event.senderFrame.url!=='faber://app/index.html')throw new Error('Untrusted request frame');
+  if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||event.senderFrame.url!=='faber://app/index.html')throw new Error('Untrusted request frame');
   if(!methods.has(method))throw new Error('Invalid bridge request');
   validateRequestPayload(method,params);
   if((switchingProfile||quitting)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
   if(mediaMethods.includes(method))return media.request(method,params);
+  if(method==='upgrades.list'){validate(params,{type:'object',properties:{},additionalProperties:false});return upgrades.list();}
+  if(workerMethods.includes(method))return worker.request(method,params);
   if(method==='app.uiReady'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!uiReady){uiReady=true;clearTimeout(bootTimer);bootstrap?.onReady?.();}return {ready:true,...recoveryStatus};}
   if(method==='app.recoveryStatus'){validate(params,{type:'object',properties:{},additionalProperties:false});return {...recoveryStatus};}
-  if(method==='app.restartNormal'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!await confirm('Restart Faber normally? Addons enabled in this profile may run.'))return {restarting:false};app.relaunch({args:process.argv.slice(1).filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true};}
+  if(method==='app.restartNormal'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!await confirm('Restart Faber normally? Addons enabled in this profile may run.'))return {restarting:false};app.relaunch({args:visibleLaunchArgs().filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true};}
   if(profileMethods.has(method)){
     const properties=method==='profiles.list'?{}:method==='profiles.create'?{name:{type:'string',minLength:1,maxLength:80}}:method==='profiles.rename'?{id:{type:'string',minLength:1,maxLength:36},name:{type:'string',minLength:1,maxLength:80}}:{id:{type:'string',minLength:1,maxLength:36},draftsCleared:{const:true}};
     validate(params,{type:'object',properties,required:Object.keys(properties),additionalProperties:false});
@@ -216,7 +248,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
     try{
       const check=async()=>assertProfileSwitchAllowed({draftsCleared:params.draftsCleared,runs:(await runtime.request('state.get')).runs,downloads:(await modelHub.request('models.state')).downloads,voiceBusy:voiceBusy||voiceOperations>0,uiPending:uiReload.pending,updating:(await upgrades.activationStatus()).busy,gatewayActive:(await gateway.request('gateway.status')).activeRequests});
       await check();await gateway.request('gateway.stop');await check();media.cancel();profiles.select(params.id);
-      app.relaunch({args:process.argv.slice(1).filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true,currentId:params.id};
+      app.relaunch({args:visibleLaunchArgs().filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true,currentId:params.id};
     }catch(error){switchingProfile=false;throw error;}
   }
   if(remoteMethods.includes(method)){if(!remote)throw new Error(remoteStartupError||'Remote connections unavailable');return remote.request(method,params);}
@@ -240,9 +272,8 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   if(chatGPTMethods.has(method)){if(!chatgpt){if(method==='chatgpt.status')return {accounts:[],activeAccountId:null,signIn:{status:'error',error:chatGPTStartupError||'ChatGPT account connection is unavailable'}};throw new Error(chatGPTStartupError||'ChatGPT account connection is unavailable');}return chatgpt.request(method,params);}
   return runtime.request(method,params);
 });
-bootTimer=setTimeout(()=>{if(!uiReady)void startupFailure(new Error('The interface did not finish startup within one minute.'));},60000);
-await window.loadURL('faber://app/index.html');
-applyZoom((await runtime.request('state.get')).settings.uiScale);
+if(!worker.hiddenStart||showRequested)await openWindow();else{uiReady=true;bootstrap?.onReady?.();}
+if(smokeWorker){try{console.log(JSON.stringify(await(await import('../test/desktop-worker-smoke.mjs')).runWorkerSmoke({runtime,worker,getWindow:()=>window,openWindow,dataDir,sourceDir,app})));app.quit();}catch(error){console.error(error);await shutdown();app.exit(1);}return;}
 if(browserStartupError)runtime.emit({type:'error',error:browserStartupError});
 if(chatGPTStartupError)runtime.emit({type:'error',error:chatGPTStartupError});
 if(extensionStartupError)runtime.emit({type:'error',error:`Extensions could not load: ${extensionStartupError}`});

@@ -11,3 +11,4 @@ native/Cargo.lock text eol=lf
 native/.cargo/config.toml text eol=lf
 # Runtime and upstream license hashes require exact bytes across checkouts.
 build/licenses/** -text
+renderer/vendor/pdfjs/** -text
