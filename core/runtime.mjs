@@ -103,7 +103,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
   const routines=createRoutines({state,changed,emit,start,createChat,stopChat:chatId=>stopChats(chatTree(chatId),true),registry,host});
   const recentErrors = [];
   let closed = false;
-  const mediaStore = createMediaStore({ dataDir, findReference(chatId,mediaId) {
+  const mediaStore = createMediaStore({ dataDir, assertAnnotations(chatId) { const chat=state.chats.find(chat=>chat.id===chatId);if(closed||!chat||chat.archived||chat.externalSessionId||state.projects.find(project=>project.id===chat.projectId)?.archived)throw new Error('This chat is read-only'); }, findReference(chatId,mediaId) {
     const chat = state.chats.find(chat => chat.id === chatId);
     const sources = [...(chat?.messages || []), ...state.runs.filter(run => run.chatId === chatId).flatMap(run => run.toolEvents)];
     const media = chat && sources.flatMap(sourceMediaRefs).find(media => media.id === mediaId);

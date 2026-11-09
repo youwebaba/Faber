@@ -37,9 +37,9 @@ export function localSelection(state, choice, provider) {
     if (choice.stopOnly) return { canStart: false, canStop: matches && ['loading', 'ready'].includes(process.status), canUse: false, busy, note: choice.reason };
     const ready = matches && process.status === 'ready' && process.providerId && process.model;
     const otherActive = !matches && ['loading', 'ready', 'stopping'].includes(process.status);
-    return { canStart: Boolean(state?.runtime?.available) && !['loading', 'ready', 'stopping'].includes(process.status), canStop: matches && ['loading', 'ready'].includes(process.status), canUse: Boolean(ready), busy,
+    return { canStart: Boolean(choice.format==='safetensors'?state?.runtime?.safetensors?.available:state?.runtime?.available) && !['loading', 'ready', 'stopping'].includes(process.status), canStop: matches && ['loading', 'ready'].includes(process.status), canUse: Boolean(ready), busy,
       ...(ready ? { providerId: process.providerId, model: process.model } : {}),
-      note: matches ? process.error || process.stage || ({ ready: 'Loaded and ready.', loading: 'Loading model…', stopping: 'Stopping model…', stopped: 'Model stopped.', failed: 'Model failed to load.' }[process.status]) || 'Not loaded.' : otherActive ? `Another local model is ${process.status === 'ready' ? 'loaded' : process.status}: ${state.models?.find(item => item.id === process.modelId)?.label || process.modelId || 'local runtime'}. Select it and stop it before starting this model.` : 'Not loaded.',
+      note: matches ? process.error || process.stage || ({ ready: 'Loaded and ready.', loading: 'Loading model…', stopping: 'Stopping model…', stopped: 'Model stopped.', failed: 'Model failed to load.' }[process.status]) || 'Not loaded.' : otherActive ? `Another local model is ${process.status === 'ready' ? 'loaded' : process.status}: ${state.models?.find(item => item.id === process.modelId)?.label || process.modelId || 'local runtime'}. Select it and stop it before starting this model.` : choice.format==='safetensors'?'Native CPU Safetensors · Default context. Loading as float32 can use more RAM than the download size.':'Not loaded.',
     };
   }
   const loaded = (state?.loaded || []).includes(choice.id);
@@ -92,7 +92,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     detail.textContent = choice ? `${choice.source === 'download' ? choice.relativePath || choice.label : choice.id}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
     const ownOperation = operation && operation.value === select.value;
     status.textContent = ownOperation ? operation.label : !loadingList && !choices.length ? 'No local model files were found. Download a GGUF in Models, then refresh this folder.' : info.note;
-    if ((!choice || choice.source === 'download') && state.runtime?.available === false) status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
+    if ((!choice || choice.source === 'download') && state.runtime?.available === false&&choice?.format!=='safetensors') status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
     if (isLocalOllama(provider) && state.ollama?.error) status.textContent += ` Ollama: ${state.ollama.error}`;
     progress.hidden = !(ownOperation || info.busy);
     hardware.setContext(state, !provider || choice?.source === 'download');

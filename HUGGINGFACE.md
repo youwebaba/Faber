@@ -71,6 +71,12 @@ files are excluded. The advanced individual-file selector remains available;
 subfolder paths are preserved for every transfer. Group downloads re-inspect the
 pinned metadata before files approval and transfer.
 
+Complete supported language-model packages can be started by Faber's native
+Windows CPU runtime through the normal chat model picker. Package completion
+does not promise architecture support or sufficient RAM. The picker reports
+unsupported checkpoints and missing runtime assets before loading. See
+[native Safetensors chat](LOCAL_MODELS.md#native-safetensors-chat).
+
 MiniMax-Music3 GGUF packages present five separate component selectors with
 runtime-specific encoding compatibility and explicit missing components. They
 are one music pipeline, never five standalone chat models. Whole-pipeline memory

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { validate } from './registry.mjs';
 import { imageBytesLimit, validateChatImages } from './images.mjs';
-import { mediaChunkLimit, mediaIdSchema, sourceMediaRefs } from './media.mjs';
+import { mediaChunkLimit, mediaIdSchema, sourceMediaRefs, mediaNotesSchemas } from './media.mjs';
 
 const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
@@ -10,6 +10,7 @@ const chatRef = object({ chatId: id });
 const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, steering: true };
 const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
+  ...Object.fromEntries(Object.entries(mediaNotesSchemas).map(([action,schema])=>['chat.mediaNotes.'+action,schema])),
   'workspace.ping': object({}), 'workspace.models': object({}),
   'chat.selectModel': object({ chatId:id, providerId:id, model:{type:'string',minLength:1,maxLength:300} }),
   'workspace.list': object({ since: id, offset: bounded(0, 10000000), limit: bounded(1, 500) }, []),
@@ -108,7 +109,7 @@ function runRow(run, references, budget, mediaReferences) {
 }
 
 // Only the desktop device transport receives this dispatcher. Never expose the general runtime RPC here.
-export function createRemoteWorkspace({ current, request, readMedia, modelDisplayName }) {
+export function createRemoteWorkspace({ current, request, readMedia, mediaNotes, modelDisplayName }) {
   const epoch = randomUUID(), waiters = new Set(), mutations = new Map();
   let closed = false;
   function revision(view, family) {
@@ -194,11 +195,12 @@ export function createRemoteWorkspace({ current, request, readMedia, modelDispla
       streams: live,
       approvals: state.approvals.filter(row => family.has(row.chatId)).map(row => pick(row,['id','kind','chatId','runId','permission','toolName','summary'])) };
   }
-  async function mutate(method, params) {
+  async function mutate(method, params, signal) {
     const {state} = current();
     const chat = params.chatId && findChat(state,params.chatId);
     const project = state.projects.find(row => row.id === (chat?.projectId ?? params.projectId));
     if (!project || project.archived || chat?.archived || chat?.externalSessionId) throw new Error('This remote project or chat is read-only.');
+    if (method.startsWith('chat.mediaNotes.')) { if (!mediaNotes) throw new Error('Document annotations unavailable'); return mediaNotes(method.split('.').at(-1),params,signal); }
     if (method === 'chat.selectModel') {
       const provider = hostModels(state.providers,modelDisplayName).find(row => row.id === params.providerId);
       if (!provider?.models.some(m => m.id === params.model)) throw new Error('Choose a configured model on the host.');
@@ -223,6 +225,7 @@ export function createRemoteWorkspace({ current, request, readMedia, modelDispla
     if (method === 'chat.read') return transcript(params,signal);
     if (method === 'chat.image') return readImage(params);
     if (method === 'chat.media') { if (!readMedia) throw new Error('Chat media is unavailable'); return readMedia(params,signal); }
+    if (method === 'chat.mediaNotes.read') { if (!mediaNotes) throw new Error('Document annotations unavailable'); return mediaNotes('read',params,signal); }
     if (!device?.id || typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new Error('A device request ID is required');
     const key = device.id + '/' + requestId, hash = createHash('sha256').update(JSON.stringify([method,params])).digest('hex');
     const prior = mutations.get(key);
@@ -233,7 +236,7 @@ export function createRemoteWorkspace({ current, request, readMedia, modelDispla
     for (const [k,entry] of mutations) if (entry.expires <= Date.now()) mutations.delete(k);
     if (mutations.size >= 1024) throw new Error('Too many recent remote changes. Try again later.');
     const entry = { hash, expires: Infinity, result: undefined };
-    entry.result = Promise.resolve().then(() => { signal?.throwIfAborted(); return mutate(method,params); }).finally(() => { entry.expires = Date.now() + 300000; });
+    entry.result = Promise.resolve().then(() => { signal?.throwIfAborted(); return mutate(method,params,signal); }).finally(() => { entry.expires = Date.now() + 300000; });
     mutations.set(key,entry);
     return entry.result;
   }

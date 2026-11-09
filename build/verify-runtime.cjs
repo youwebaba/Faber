@@ -9,6 +9,14 @@ module.exports=async context=>{
   const fs=require('node:fs/promises'),path=require('node:path');
   const musicLock=JSON.parse(await fs.readFile(path.join(context.packager.projectDir,'build','music-runtime-lock.json'),'utf8'));
   await verifyMusicRuntime(path.join(context.packager.projectDir,'.runtime','music-runtime'),musicLock);
+  const {verifySafetensorsRuntime,safetensorsSourceHash}=await import('../local-models/safetensors-integrity.mjs');
+  const safeLock=JSON.parse(await fs.readFile(path.join(context.packager.projectDir,'build','safetensors-runtime-lock.json'),'utf8'));
+  if(await safetensorsSourceHash(context.packager.projectDir)!==safeLock.sourceHash)throw new Error('Native Safetensors source differs from the reviewed build');
+  await verifySafetensorsRuntime(path.join(context.packager.projectDir,'.runtime','safetensors-runtime'),safeLock);
+  const {verifySafetensorsPrivacy}=await import('../scripts/safetensors-privacy.mjs');
+  await verifySafetensorsPrivacy(path.join(context.packager.projectDir,'.runtime','safetensors-runtime'),safeLock);
   const {verifyNativeRuntime}=await import('../native/integrity.mjs');
   await verifyNativeRuntime(context.packager.projectDir);
+  const {verifyPreviewAssets}=await import('../desktop/media-preview.mjs');
+  await verifyPreviewAssets(context.packager.projectDir);
 };

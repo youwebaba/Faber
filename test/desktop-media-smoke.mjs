@@ -7,6 +7,8 @@ import { createRemoteHost, createRemoteController } from '../desktop/remote-tran
 import { createRelayHostAdapter, connectRelayController, generateRouteSecret, deriveRouteId } from '../desktop/remote-relay.mjs';
 import { createRelayServer } from '../relay/server.mjs';
 import { waveFixture, webmFixture } from './fixtures/media.mjs';
+import { prepareDocumentMedia } from './desktop-document-media.fixture.mjs';
+import {randomUUID} from 'node:crypto';
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const vault = () => { const values = new Map(); return { getSecret: async key => values.get(key) || '', setSecret: async (key, value) => { values.set(key, value); } }; };
@@ -75,6 +77,9 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     assert.deepEqual(await fs.readFile(chosen), expected, name + ' byte-identical');
   }
   try {
+    const documents=await prepareDocumentMedia({window,runtime,chat,project,bridge,until,save,checks,capture});
+    await documents.run('#transcript');
+    await documents.malformed('#transcript');
     for (const ref of refs) await save({ chatId: chat.id, mediaId: ref.id }, originals.get(ref.name), 'local-' + ref.name);
     await save({ chatId: chat.id, image: png }, Buffer.from(png.split(',')[1], 'base64'), 'local-pixel.png');
     await bridge('clipboard.copyImage', { chatId: chat.id, image: png });
@@ -100,7 +105,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await js(`(()=>{const image=document.querySelector('#transcript .message-images img');if(!image)throw Error('Missing local image');image.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}));document.querySelector('#content-context-menu [data-action="copyImage"]').click();})()`);
     await until(() => Promise.resolve(copiedImage?.getSize().width === 1), 'local Copy image menu');
 
-    receiver = await createRemoteHost({ host: vault(), allowLocalRelay: true, dispatch: (method, params, authority) => runtime.remoteRequest(method, params, authority) });
+    receiver = await createRemoteHost({ host: vault(), allowLocalRelay: true, dispatch: (method, params, authority) => method==='workspace.rpc'?runtime.remoteRequest(params.method,params.params,{...authority,requestId:params.requestId}):runtime.remoteRequest(method, params, authority) });
     const { port } = await receiver.start();
     const secret = generateRouteSecret(), routeId = deriveRouteId(secret);
     relay = createRelayServer({ allowedRouteIds: [routeId] }); const relayAddress = await relay.start();
@@ -112,7 +117,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     const { connection } = await controller.completePairing();
     remote.request = async (method, params = {}) => {
       if (method === 'remote.status') { const value = await originalRemote.call(remote, method, params); return { ...value, devices: [...value.devices, { id: connection.id, name: 'Media fixture host', role: 'host', online: true }] }; }
-      if (method === 'remote.request' && params.deviceId === connection.id) { requests.push({ method: params.method, ...params.params }); return controller.request(connection.id, params.method, params.params); }
+      if (method === 'remote.request' && params.deviceId === connection.id) { requests.push({ method: params.method, ...params.params }); return controller.request(connection.id,'workspace.rpc',{method:params.method,params:params.params,requestId:randomUUID()}); }
       return originalRemote.call(remote, method, params);
     };
     const remoteState = await originalRemote.call(remote, 'remote.status');
@@ -122,6 +127,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await until(() => js(`window.mediaSmokeLocalPlayer.paused&&!window.mediaSmokeLocalPlayer.hasAttribute('src')`), 'local media released on remote route');
     await until(() => js(`!!document.querySelector('#remote-transcript [data-media-id="${video.id}"]')`), 'remote media refs'); await showMedia();
     for (const ref of refs) await playback(`#remote-transcript [data-media-id="${ref.id}"] ${ref.kind}`, 'paired TLS ' + ref.kind);
+    await documents.run('#remote-transcript',connection.id);
     await capture('media-remote-players');
     for (const ref of refs) await save({ chatId: chat.id, mediaId: ref.id, deviceId: connection.id }, originals.get(ref.name), 'remote-' + ref.name);
     const transcript = await controller.request(connection.id, 'chat.read', { chatId: chat.id, imageMode: 'references', mediaMode: 'references' });
@@ -146,9 +152,13 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     runtime.emit({ type: 'remote', state: { ...remoteState, devices: [{ id: connection.id, name: 'Media fixture host', role: 'host', online: false }] } });
     await until(() => js(`window.mediaSmokeRemotePlayer.paused&&!window.mediaSmokeRemotePlayer.hasAttribute('src')&&document.querySelector('#content-context-menu').hidden`), 'offline release and menu closure');
     checks.push('remote player and open menu survive local state refresh; offline clears sources and closes its menu');
+    runtime.emit({type:'remote',state:{...remoteState,devices:[{id:connection.id,name:'Media fixture host',role:'host',online:true}]}});
+    await js(`document.querySelector('#remote-retry').click()`);
+    await documents.reconnect('#remote-transcript');
     await receiver.revokeDevice(pending.id);
     await assert.rejects(bridge('media.save', { chatId: chat.id, mediaId: video.id, deviceId: connection.id }));
     checks.push('host revocation blocks subsequent remote media access');
+    await assert.rejects(bridge('media.notes.read',{chatId:chat.id,mediaId:documents.refs[0].id,revision:documents.refs[0].revision,deviceId:connection.id}));
   } finally {
     dialog.showSaveDialog = originalSave; remote.request = originalRemote; clipboard.writeImage = originalCopyImage; clipboard.writeText = originalCopyText;
     await controller?.dispose(); await adapter?.close(); await receiver?.dispose(); await relay?.close();

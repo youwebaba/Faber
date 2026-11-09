@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.5 (application version 2.5.0), including
+This contract describes Faber a2.6 (application version 2.6.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -56,6 +56,17 @@ Use Node's test runner. Electron is the only initial runtime dependency; prefer
 standard-library code over adding a framework for this small first version.
 
 ## Runtime and tool boundary
+
+a2.6 adds opt-in background operation and reviewed manual routines. The Electron
+main process remains the sole profile-state owner while sandboxed UI windows can
+close, crash and reconnect. The trusted bootstrap's kernel profile lock precedes
+editable code and is released by Windows after a worker crash. Routine revisions,
+input snapshots, action intents/receipts, review decisions and queue state are
+durable records, separate from conversation compaction. User-only worker/routine
+bridge methods and authority/recovery rules are specified in [WORKER.md](WORKER.md).
+The host calls `runtime.startRoutines()` after tool registration; Safe Mode pauses
+automatic admission, unknown effects require review, and no scheduling or boot
+service is implied.
 
 `core/runtime.mjs` exports `createRuntime({dataDir, sourceDir, host, provider?})`
 as an async factory. Runtime exposes `request(method, params = {})`,

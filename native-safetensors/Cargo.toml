@@ -1,0 +1,15 @@
+[package]
+name = "faber-safetensors"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "=1.0.100"
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs", rev = "465191d0b0a7e2432d327b0de06204ab3f94d3a2", default-features = false }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+tokio = { version = "=1.49.0", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+
+[profile.release]
+strip = true

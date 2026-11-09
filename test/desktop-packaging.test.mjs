@@ -32,6 +32,8 @@ test('packaged workbench is seeded once, preserves edits, and keeps prior instal
 test('packaged runner resolves entirely within bundled real resources', () => {
   const root = path.resolve('fixture-resources'), result = packagedRuntime(root);
   assert.equal(result.executable, path.join(root, 'local-runtime', 'llama-server.exe'));
+  assert.equal(result.safetensorsExecutable,path.join(root,'safetensors-runtime','faber-safetensors.exe'));
+  for(const file of ['native-safetensors/src/main.rs','native-safetensors/Cargo.toml','native-safetensors/Cargo.lock','.runtime/safetensors-runtime/faber-safetensors.exe','build/safetensors-runtime-lock.json'])assert.equal(validUpgradePath(file),false,`${file} requires a reviewed installer release`);
   assert.deepEqual(result.backendDirectories, ['cuda_v13', 'vulkan'].map(name => path.join(root, 'local-runtime', name)));
 });
 
