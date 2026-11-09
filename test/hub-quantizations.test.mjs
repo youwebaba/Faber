@@ -23,6 +23,11 @@ test('auxiliaries, ambiguous and undocumented names remain manual files only', (
   const names = ['mmproj-Model-Q4_K_M.gguf', 'mtp/Model-Q4_K_M.gguf', 'Model-Q4_K_M-LoRA.gguf', 'Model-vocab-F16.gguf', 'adapter.Model-F16.gguf', 'Model-Q4_UNKNOWN.gguf', 'Named-70B.gguf', 'Q4_K_M-model.gguf', 'Model-Q4_K_M-v2.gguf'];
   const details = modelDetails(raw(names), repoId); assert.equal(details.quantizations.length, 0); assert.equal(details.files.length, names.length); assert.equal(details.parameters, null);
 });
+
+test('repository-style MTP parent names do not classify main GGUFs as auxiliary',()=>{
+  const main='Qwen3.5-0.8B-MTP-GGUF/revision/Qwen3.5-0.8B-Q4_K_M.gguf',auxiliary='Qwen3.5-0.8B-MTP-GGUF/revision/mtp/draft-Q4_K_M.gguf';
+  const details=modelDetails(raw([main,auxiliary]),repoId);assert.equal(details.quantizations.length,1);assert.deepEqual(details.quantizations[0].files,[main]);assert.ok(details.files.find(file=>file.path===main).vram);assert.equal(details.files.find(file=>file.path===auxiliary).vram,undefined);
+});
 test('missing, duplicate, mixed, invalid and inconsistent shards cannot be downloaded as variants', () => {
   const cases = [
     ['Model-Q4_K_M-00001-of-00002.gguf'],

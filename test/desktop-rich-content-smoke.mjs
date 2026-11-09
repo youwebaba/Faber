@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // raster fixture; no network images, account calls, clipboard, or user files.
 export async function runRichContentSmoke({ window }) {
   const result = await window.webContents.executeJavaScript(`(async () => {
-    const { renderRichContent, renderOutputImages } = await import('./rich-content.mjs');
+    const { renderRichContent, renderOutputImages, updateStreamContent } = await import('./rich-content.mjs');
     const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=';
     const host = document.createElement('section'); host.dataset.richSmoke = 'true'; document.body.append(host);
     let opened;
@@ -15,6 +15,19 @@ export async function runRichContentSmoke({ window }) {
       const anchor = content.querySelector('a'); const event = new MouseEvent('click', { bubbles: true, cancelable: true }); anchor.dispatchEvent(event);
       const span = content.querySelector('span');
       const partial = renderRichContent('**part'); host.append(partial); partial.replaceWith(renderRichContent('**complete**'));
+      const complete=host.lastElementChild.querySelector('strong')?.textContent;
+      const stream=document.createElement('div');host.append(stream);
+      const fence=String.fromCharCode(96).repeat(3),start='**Keep**\\n\\n'+fence+'js\\nconst x';
+      updateStreamContent(stream,start);
+      const stable=stream.querySelector('strong'),literal=stream.querySelector('code').firstChild,selection=getSelection(),range=document.createRange();
+      range.selectNodeContents(stable);selection.removeAllRanges();selection.addRange(range);
+      updateStreamContent(stream,start+' = 1');
+      const retained=stable===stream.querySelector('strong')&&literal===stream.querySelector('code').firstChild&&selection.toString()==='Keep';
+      updateStreamContent(stream,start+' = 1\\n'+fence+'\\n\\n[Link](https://example.com/)');
+      const canonical=renderRichContent(start+' = 1\\n'+fence+'\\n\\n[Link](https://example.com/)').isEqualNode(stream.firstChild);
+      updateStreamContent(stream,'<img src=x onerror=alert(1)>');
+      const safeReplace=!stream.querySelector('img')&&stream.querySelector('.rich-content').textContent.includes('<img');
+      selection.removeAllRanges();
       return {
         bold: content.querySelector('strong')?.textContent,
         underline: getComputedStyle(content.querySelector('u')).textDecorationLine,
@@ -25,7 +38,7 @@ export async function runRichContentSmoke({ window }) {
         imageWidth: image.naturalWidth,
         imageSrc: image.getAttribute('src'),
         opened, prevented: event.defaultPrevented,
-        streamComplete: host.lastElementChild.querySelector('strong')?.textContent,
+        streamComplete: complete, retained, canonical, safeReplace,
         whiteSpace: getComputedStyle(content).whiteSpace,
       };
     } finally { host.remove(); }
@@ -36,5 +49,6 @@ export async function runRichContentSmoke({ window }) {
   assert.ok(result.imageSrc.startsWith('data:image/png;base64,'));
   assert.equal(result.opened, 'https://example.com/'); assert.equal(result.prevented, true);
   assert.equal(result.streamComplete, 'complete'); assert.equal(result.whiteSpace, 'normal');
+  assert.ok(result.retained && result.canonical && result.safeReplace);
   return { passed: true, checks: ['rich formatting', 'CSP-safe text color', 'literal unsafe HTML', 'embedded raster output', 'explicit link click', 'stream replacement'] };
 }

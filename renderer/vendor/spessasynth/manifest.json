@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "synthesizer": "SpessaSynth",
+  "sources": [
+    {
+      "name": "spessasynth_lib",
+      "version": "4.4.7",
+      "url": "https://registry.npmjs.org/spessasynth_lib/-/spessasynth_lib-4.4.7.tgz",
+      "integrity": "sha512-fZOoU3pV4o/OPfIZYOnj5En+fmejwWViaGgQ+l0p8q6j9t55APVoLojEuEENvdcpojoe+v6VQKj7E04Ke/dpag=="
+    },
+    {
+      "name": "spessasynth_core",
+      "version": "4.4.9",
+      "url": "https://registry.npmjs.org/spessasynth_core/-/spessasynth_core-4.4.9.tgz",
+      "integrity": "sha512-XukwmKvjQziCvjDdL0XAye1wg6FygDl3rdOGEO3WIwFQownVJybgbjZiH42ryG0fZSKWLVK3RHmD7SSNpn9WyA=="
+    },
+    {
+      "name": "fflate",
+      "version": "0.8.3",
+      "url": "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz",
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA=="
+    },
+    {
+      "name": "stb-vorbis",
+      "version": "0.0.7",
+      "url": "https://registry.npmjs.org/stb-vorbis/-/stb-vorbis-0.0.7.tgz",
+      "integrity": "sha512-OsD8Vm9EcStsiYGUBSqJ88gBPwDYR1Uv57bV/KZhu6Li1kzjm0fO+iiTkm79bZ1L2I/z6IrA1wkWHu3xQYY7Hw=="
+    }
+  ],
+  "files": {
+    "LICENSE-spessasynth_lib": {
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "spessasynth_lib.js": {
+      "sha256": "26dccc20083a2fa10f73a0533f198552730fb0b532d10918aa4119f9ac9ae205",
+      "bytes": 106482
+    },
+    "spessasynth_processor.min.js": {
+      "sha256": "cb5a3f643e2fb6048c40f6f6f180b1de6414705fadd65630879c57511e494a09",
+      "bytes": 762099
+    },
+    "LICENSE-spessasynth_core": {
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "spessasynth_core.js": {
+      "sha256": "57ec0ce6c0d83cb4a6aebeb3dffe3f7c25010d155ed51db64ac29b6b8b98a3a9",
+      "bytes": 1463504
+    },
+    "LICENSE-fflate": {
+      "sha256": "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551",
+      "bytes": 1069
+    },
+    "fflate.js": {
+      "sha256": "c5f22eccd8551bdcc9614ccaf836c5d32225ed80838b97554df5d1a070260f06",
+      "bytes": 91002
+    },
+    "LICENSE-stb-vorbis": {
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "stb-vorbis.js": {
+      "sha256": "759e846319704ccab0605e83230ae3f40c6c517fd616bc2fb9a01db8284d0b0f",
+      "bytes": 117610
+    },
+    "LICENSE-FluidR3Mono.md": {
+      "sha256": "c21ed6be2fea862673953977c616befc28d1b20dfa60349e4461b97c759db6ca",
+      "bytes": 2900
+    }
+  },
+  "bank": {
+    "file": "FluidR3Mono_GM.sf3",
+    "name": "FluidR3Mono GM",
+    "version": "2.312",
+    "license": "MIT",
+    "url": "https://raw.githubusercontent.com/musescore/MuseScore/v2.3.2/share/sound/FluidR3Mono_GM.sf3",
+    "bytes": 14563174,
+    "sha256": "cfcd66d89e8386823400eca64934b14fbea7bf48ba1f00d21189af1262794ec2"
+  }
+}

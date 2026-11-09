@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.6 (application version 2.6.0), including
+This contract describes Faber a2.7 (application version 2.7.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -473,3 +473,15 @@ output list, Faber uses validated completed item events from that stream.
 Malformed or incomplete fallback batches fail before any tool executes. A context rejection may trigger bounded compaction retries; a run with
 contextOverflow:true exposes manual recovery. This does not restore finite user
 turn limits or trim the saved transcript.
+
+## Scheduled worker authority (a2.7)
+
+Scheduled and file-triggered jobs use the same durable routine definitions,
+grants, project paths, credential identity, Stop and action receipts as manual
+jobs. Each occurrence or file revision has a persisted admission identity.
+Timezone/DST, missed-run and overlap policies are explicitly reviewed; child
+agents share the job's budget and cannot widen scope. Model usage is reserved
+before transport dispatch and unknown bounds are never invented. The daily
+folder report requires an owned local Qwen model, preserves per-input coverage
+and exceptions, and atomically creates one dated report without replacing an
+unexpected destination. See [the scheduler contract](SCHEDULER.md).

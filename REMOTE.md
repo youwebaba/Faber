@@ -1,6 +1,6 @@
 # Remote sessions
 
-Install Faber a2.6 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
+Install Faber a2.7 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
 
 ## Pair the laptop
 

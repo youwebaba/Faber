@@ -48,7 +48,8 @@ export function providerMessages(messages, kind) {
 export function providerBody({provider,messages,tools}){
   if(provider.kind==='openai-responses')return responsesBody({provider,messages,tools});
   const ollama=provider.kind==='ollama',options=provider.chatOptions||{};
-  const compactionTokens=Number.isSafeInteger(provider.compactionTokens)&&provider.compactionTokens>0?provider.compactionTokens:undefined;
+  const limits=[provider.compactionTokens,provider.workOutputTokens].filter(value=>Number.isSafeInteger(value)&&value>0);
+  const compactionTokens=limits.length?Math.min(...limits):undefined;
   const localOptions={...(options.contextTokens!==null&&options.contextTokens!==undefined?{num_ctx:options.contextTokens}:{}),...(compactionTokens?{num_predict:compactionTokens}:{})};
   return {model:provider.model,messages:providerMessages(messages,provider.kind),stream:true,
     ...(ollama?{think:Object.hasOwn(options,'thinking')?options.thinking:false,...(Object.keys(localOptions).length?{options:localOptions}:{})}:{stream_options:{include_usage:true},...(compactionTokens?{max_tokens:compactionTokens}:{})}),

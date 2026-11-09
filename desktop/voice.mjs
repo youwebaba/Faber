@@ -101,6 +101,6 @@ export function createVoice({runtime,emit}){
       const token=generation;
       if(message)void api.action('speak',{text:message.content.slice(0,20000)}).catch(error=>{if(session&&token===generation)publish('error',{error:error.message});});
     }
-  });
+  },{accept:type=>type==='state'&&session?.mode==='assistant'});
   return {...api,close(){unsubscribe();close();}};
 }

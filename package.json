@@ -2,7 +2,7 @@
   "name": "faber",
   "productName": "Faber",
   "description": "Faber desktop AI workspace",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -20,6 +20,7 @@
     "prepare:safetensors": "node scripts/prepare-safetensors.mjs",
     "prepare:music": "node scripts/prepare-music.mjs",
     "prepare:media": "node scripts/prepare-media.mjs",
+    "prepare:timed-media": "node scripts/prepare-timed-media.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
@@ -39,7 +40,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "2.6.0.0",
+    "buildVersion": "2.7.0.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -75,6 +76,10 @@
     ],
     "extraResources": [
       {
+        "from": ".runtime/media-runtime",
+        "to": "media-runtime"
+      },
+      {
         "from": ".runtime/local-runtime",
         "to": "local-runtime"
       },
@@ -106,7 +111,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a2.6-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a2.7-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

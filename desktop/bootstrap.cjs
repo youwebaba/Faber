@@ -8,6 +8,7 @@ const { pathToFileURL } = require('node:url');
 const appRoot = path.resolve(__dirname, '..');
 const smokeModes = new Set(['--smoke','--smoke-live','--smoke-models','--smoke-features','--smoke-local-models','--smoke-ui-reload','--smoke-package','--smoke-faber','--smoke-installed','--smoke-b11','--smoke-b12','--smoke-b201','--smoke-thinking','--smoke-browser','--smoke-media']);
 smokeModes.add('--smoke-worker');
+smokeModes.add('--smoke-schedules');
 const smoke = process.argv.some(value => smokeModes.has(value));
 const profileIndex = process.argv.indexOf('--smoke-profile');
 const workerProfileIndex=process.argv.indexOf('--worker-profile');

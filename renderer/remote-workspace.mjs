@@ -4,7 +4,7 @@ import { createAttachmentDrafts, attachmentMessage } from './file-attachments.mj
 import { mergeRuntimeStreams } from './ui-refresh.mjs';
 import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createRunActivity } from './run-activity.mjs';
-import { transcriptTimeline, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
+import { createLiveTranscript, reconcileTranscript, preserveTranscriptViewport } from './transcript-timeline.mjs';
 import { pendingUserMessages, projectApprovalTitle } from './workspace-controls.mjs';
 import { createMediaOutputs, resultMedia } from './content-media.mjs';
 import { correctionLabel, correctionRequest } from './prompt-progress.mjs';
@@ -46,7 +46,8 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
   const steer = button('Steer now', () => submit(true)); steer.id = 'remote-steer'; steer.hidden = true;
   const send = el('button', 'button primary', 'Send'); send.type = 'submit'; send.id = 'remote-send'; toolbar.append(attach, compact, clearDraft, el('span', 'composer-spacer'), forceStop, stop, steer, send);
   composer.append(imageDrafts, picker, prompt, toolbar); composerWrap.append(approvalList, composer, caption); conversation.append(titlebar, modelPanel, notice, retry, older, transcript, composerWrap); layout.append(conversation); root.append(layout); (document.querySelector('.workspace') || document.body).append(root);
-  const drafts = new Map(), selections = new Map(), streams = new Map(), messageNodes = new Map(), streamNodes = new Map(), directories = new Map(), directoryLoads = new Map(), details = new Map(), imageCache = new Map(), imageNodes = new Map();
+  const drafts = new Map(), selections = new Map(), streams = new Map(), messageNodes = new Map(), directories = new Map(), directoryLoads = new Map(), details = new Map(), imageCache = new Map(), imageNodes = new Map();
+  const liveTranscript=createLiveTranscript({el,bindContent,onOpenLink:url=>request('app.openLink',{url}).catch(setError)});
   const attachments = createAttachmentDrafts({ onChange: draft => { if (draft === key()) { renderAttachments(); renderStatus(); } onChange(); } });
   const pendingCorrections = new Map();
   const imageQueue = [], imageObserver = typeof globalThis.IntersectionObserver === 'function' ? new globalThis.IntersectionObserver(records => { for (const record of records) { const entry = imageNodes.get(record.target.dataset.imageKey); if (!entry) continue; entry.visible = record.isIntersecting; if (entry.visible) queueImage(entry); else unloadImage(entry); } }, { root: transcript, rootMargin: '200px' }) : null;
@@ -185,11 +186,11 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     mediaOutputs.setAvailable(online);
     for (const [cacheKey, entry] of imageNodes) if (online && entry.visible && entry.deviceId === deviceId && !imageCache.has(cacheKey)) queueImage(entry);
     const identity = `${deviceId}:${selectedChatId || ''}`;
-    if (transcriptIdentity !== identity) { mediaOutputs.clear(); transcriptIdentity = identity; transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); activity.reset(); }
+    if (transcriptIdentity !== identity) { mediaOutputs.clear(); transcriptIdentity = identity; transcript.replaceChildren(); messageNodes.clear(); liveTranscript.reset(); activity.reset(); }
     preserveTranscriptViewport(transcript, () => {
       const nodes = [];
       if (selectedDetail?.id === selectedChatId) {
-        const timeline = transcriptTimeline({ ...state, approvals: [] }, selectedChatId, streams);
+        const timeline = liveTranscript.timeline({ ...state, approvals: [] }, selectedChatId, streams);
         for (const row of timeline) {
           if (row.kind === 'usage') { nodes.push(activity.promptUsage(row.key, row.usage)); continue; }
           if (row.kind === 'activity') {
@@ -201,9 +202,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
             continue;
           }
           if (row.kind === 'message') { nodes.push(messageNode(row.message)); continue; }
-          let cached = streamNodes.get(row.key);
-          if (!cached) { const node = el('article', 'message assistant streaming'); node.dataset.runId = row.run.id; node.append(el('div', 'message-heading', 'Faber'), el('div', 'message-content')); cached = { node }; streamNodes.set(row.key, cached); }
-          if (cached.text !== row.text) { cached.text = row.text; cached.node.lastChild.replaceChildren(renderRichContent(row.text, { document, onOpenLink: url => request('app.openLink', { url }).catch(setError) }), el('span', 'stream-cursor')); bindContent(cached.node, { chatId: selectedChatId, text: row.text }); } nodes.push(cached.node);
+          nodes.push(liveTranscript.row(row.run,row.text));
         }
         for (const message of pendingUserMessages(selectedDetail)) nodes.push(messageNode({ ...message, imageRefs: selectedDetail.inbox?.find(item => item.id === message.id)?.imageRefs }));
         const run = latestRun(state, selectedChatId); if (run && !isActive(run) && ['failed', 'interrupted', 'canceled'].includes(run.status)) nodes.push(el('p', 'run-note', run.error || `Run ${statusLabel(run.status).toLowerCase()}.`));
@@ -221,6 +220,9 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
       const allow = button('Allow this action', () => resolveApproval(approval.id, true), 'button primary'), deny = button('Deny', () => resolveApproval(approval.id, false)); allow.disabled = deny.disabled = !online || pending || readOnly;
       card.append(el('h3', '', projectApprovalTitle(approval)), el('p', '', approval.summary), el('p', 'hint', `Runs on ${currentDevice()?.name || currentDevice()?.deviceName || 'the host'}. Approval applies to this action.`), allow, deny); approvalList.append(card);
     }
+  }
+  function renderLive() {
+    if (!liveTranscript.update(transcript,streams,card=>activity.get(state,card,streams))) renderTranscript();
   }
   function render() { const following = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 8; renderStatus(); renderAttachments(); renderNavigation(); renderApprovals(); renderTranscript(); if (following) transcript.scrollTop = transcript.scrollHeight; }
   function renderModelChoices() {
@@ -244,7 +246,7 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     const response = await rpc('chat.read', { chatId, limit: 30, ...referenceModes(), ...(wait && chatRevision ? { since: chatRevision, waitMs: 12000 } : {}) });
     if (token !== session || chatId !== selectedChatId || sequence !== readSequence) return;
     if (response?.unchanged === true) return;
-    if (response?.liveOnly === true) { if (selectedDetail?.id !== chatId) throw new Error('Reload this host chat before accepting live updates.'); const live = remoteLive(response, chatId); chatRevision = live.revision; acceptStreams(live); renderTranscript(); return; }
+    if (response?.liveOnly === true) { if (selectedDetail?.id !== chatId) throw new Error('Reload this host chat before accepting live updates.'); const live = remoteLive(response, chatId); chatRevision = live.revision; acceptStreams(live); renderLive(); return; }
     const value = remoteChat(response, chatId); chatRevision = value.revision;
     if (selectedDetail?.id === chatId) { const ids = new Set(value.chat.messages.map(message => message.id)); value.chat.messages = [...selectedDetail.messages.filter(message => !ids.has(message.id)), ...value.chat.messages]; }
     else olderToken = value.before;
@@ -364,14 +366,14 @@ export function createRemoteWorkspace({ request, subscribe, el, getDevices, show
     prompt.value = drafts.get(key()) || ''; returnFocus ||= document.activeElement; root.hidden = false; document.body.classList.add('remote-open'); render(); prompt.focus(); const token = session; void poll().then(() => { if (token === session) void pollChat(token); }); onChange();
   }
   function reconnect() { clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; polling = undefined; connecting = true; online = false; pending = false; lastError = ''; renderStatus(); const token = session; return poll().then(() => { if (token === session) void pollChat(token); }); }
-  function close() { if (root.hidden) return; saveDraft(); clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; ++readSequence; resetImages(); pending = false; selections.set(deviceId, { selectedChatId, selectedProjectId }); root.hidden = true; document.body.classList.remove('remote-open'); renderNavigation(); returnFocus?.focus(); returnFocus = undefined; onChange(); }
+  function close() { if (root.hidden) return; saveDraft(); clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; ++readSequence; resetImages(); liveTranscript.reset(); transcriptIdentity=undefined; transcript.replaceChildren(); messageNodes.clear(); activity.reset(); pending = false; selections.set(deviceId, { selectedChatId, selectedProjectId }); root.hidden = true; document.body.classList.remove('remote-open'); renderNavigation(); returnFocus?.focus(); returnFocus = undefined; onChange(); }
   function updateDevices() {
     void syncDirectories(); renderNavigation(); if (root.hidden) return; if (!currentDevice()) { close(); return; } if (connecting) return;
     const wasOnline = online; online = currentDevice()?.online === true; if (wasOnline && !online) { clearTimeout(timer); clearTimeout(chatTimer); ++session; ++chatGeneration; pending = false; resetMedia(); renderTranscript(); } renderStatus(); renderApprovals(); if (!wasOnline && online) { clearTimeout(timer); clearTimeout(chatTimer); void poll(); void pollChat(); }
   }
   subscribe?.(envelope => {
     const event = remoteEvent(envelope, deviceId); if (!event || root.hidden || !online) return;
-    if (['delta', 'progress'].includes(event.type) && Number.isSafeInteger(event.streamSequence) && Number.isSafeInteger(event.sequence) && typeof event.runId === 'string' && (event.type !== 'delta' || typeof event.text === 'string')) { acceptStreams(event); renderTranscript(); }
+    if (['delta', 'progress'].includes(event.type) && Number.isSafeInteger(event.streamSequence) && Number.isSafeInteger(event.sequence) && typeof event.runId === 'string' && (event.type !== 'delta' || typeof event.text === 'string')) { acceptStreams(event); renderLive(); }
     else if (['state', 'approval'].includes(event.type)) { clearTimeout(timer); void poll(); }
   });
   archiveInput.addEventListener('change', () => { renderNavigation(); if (!archiveInput.checked && (currentChat()?.archived || currentProject()?.archived)) void selectChat(null, state.projects.find(project => !project.archived)?.id); });

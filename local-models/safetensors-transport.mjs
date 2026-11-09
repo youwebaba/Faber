@@ -1,8 +1,8 @@
 const limit = 16 * 1024 * 1024;
 
 // The worker receives only inherited stdio; this adapter never opens an upstream socket.
-export function createSafetensorsTransport() {
-  let child, pending = Buffer.alloc(0), ready = false, closed = false, sequence = 0, active, paused = false, queue = Promise.resolve();
+export function createSafetensorsTransport({quantization={mode:'none'}}={}) {
+  let child, pending = Buffer.alloc(0), ready = false,handshake, closed = false, sequence = 0, active, paused = false, queue = Promise.resolve();
   function send(value) {
     const body = Buffer.from(JSON.stringify(value)); if (body.length > limit) throw new Error('Native request exceeds the pipe frame limit');
     const header = Buffer.alloc(4); header.writeUInt32LE(body.length); child.stdin.write(Buffer.concat([header, body]));
@@ -20,7 +20,7 @@ export function createSafetensorsTransport() {
   }
   function fail(error) { closed = true; ready = false; finish(error); }
   function accept(frame) {
-    if (frame.kind === 'ready') { if (frame.protocol !== 1 || frame.model !== 'worker-model' || frame.backend !== 'cpu') throw new Error('Unsupported native worker handshake'); ready = true; return; }
+    if (frame.kind === 'ready') { if (frame.protocol !== 2 || frame.model !== 'worker-model' || frame.backend !== 'cpu'||JSON.stringify(frame.quantization)!==JSON.stringify(quantization)) throw new Error('Native worker did not confirm the selected load profile');handshake={quantization:{...quantization,accepted:true,precision:'layer-dependent'}}; ready = true; return; }
     if (!active || frame.id !== active.id) throw new Error('Unexpected native worker request identity');
     if (frame.kind === 'error') { finish(new Error(String(frame.message || 'Native model request failed').slice(0,1500))); return; }
     if (frame.kind === 'done') { finish(); return; }
@@ -51,6 +51,7 @@ export function createSafetensorsTransport() {
   }
   const resume = () => { paused = false; pump(); if (!paused) child?.stdout.resume(); };
   return {
+    observed(){if(!ready)throw new Error('Native load profile is not confirmed');return structuredClone(handshake);},
     attach(process) {
       child = process; child.stdout.on('data', bytes => { if (pending.length + bytes.length > limit + 1024*1024) { fail(new Error('Native pipe buffer exceeded limit')); child.kill(); return; } pending = Buffer.concat([pending,bytes]); pump(); });
       child.once('error',fail); child.once('close',()=>fail(new Error('Native worker exited')));

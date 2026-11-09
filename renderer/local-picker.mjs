@@ -63,9 +63,16 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   const progress = el('progress'); progress.id = 'local-model-progress'; progress.setAttribute('aria-label', 'Local model operation'); progress.hidden = true;
   const error = el('p', 'error-text hint'); error.id = 'local-model-error'; error.setAttribute('role', 'alert'); error.hidden = true;
   const controls = el('div', 'local-model-actions');
+  const loadLabel=el('label','form-row');loadLabel.append(el('span','','Quantization at load'));
+  const loadMode=el('select');loadMode.id='local-model-quantization';
+  const chooseProfile=el('option','','Choose a supported profile');chooseProfile.value='';chooseProfile.disabled=true;loadMode.append(chooseProfile);
+  for(const [value,text] of [['none','Original · float32 CPU'],['q4_0','4-bit · Q4_0'],['q8_0','8-bit · Q8_0']]){const option=el('option','',text);option.value=value;loadMode.append(option);}loadLabel.append(loadMode);loadLabel.hidden=true;
+  const loadNote=el('p','hint','Applies at Start; the original files stay unchanged. Quantizing during load takes time and can temporarily need float32 RAM. Layer precision may differ.');loadNote.hidden=true;
+  const loadDrafts=new Map();
   const hardware = createHardwareControls({ request, el, onChange: () => render() });
   root.append(label, directory, detail, status, progress, error, controls, el('p', 'hint', 'Start loads the model without changing this chat. Stop unloads the model; it does not stop a chat run. Use in this chat applies your selection to the next run.'));
   root.append(hardware.root);
+  root.append(loadLabel,loadNote);
   let state = {}, provider, configuredModel = '', choices = [], enabled = false, disposed = false, loadingList = false, operation, connectionEpoch = 0, optionsSignature;
   const nextList = requestGate();
   const selected = () => choices.find(item => item.value === select.value);
@@ -89,14 +96,20 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     select.value = current?.value || ''; select.disabled = loadingList && !choices.length;
     directory.textContent = state.directory ? `Download folder: ${state.directory}` : 'Download folder is being checked…';
     const choice = selected(); const info = selection();
+    const native=choice?.format==='safetensors';loadLabel.hidden=loadNote.hidden=!native;
+    const needsProfile=Boolean(choice?.quantizationWarning&&!loadDrafts.has(choice.id));loadMode.value=needsProfile?'':loadDrafts.get(choice?.id)||choice?.quantization?.mode||'none';
+    const loadModes=state.runtime?.safetensors?.quantizationModes||['none'];for(const option of loadMode.options)option.disabled=!loadModes.includes(option.value);
+    loadMode.disabled=!native||!state.runtime?.safetensors?.available||['loading','ready','stopping'].includes(state.process?.status);
     detail.textContent = choice ? `${choice.source === 'download' ? choice.relativePath || choice.label : choice.id}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
     const ownOperation = operation && operation.value === select.value;
     status.textContent = ownOperation ? operation.label : !loadingList && !choices.length ? 'No local model files were found. Download a GGUF in Models, then refresh this folder.' : info.note;
+    if(native&&needsProfile)status.textContent+=' '+choice.quantizationWarning;
+    if(native&&state.process?.modelId===choice.id&&state.process.quantization)status.textContent+=` Requested load: ${state.process.quantization.mode==='none'?'original float32':state.process.quantization.mode.toUpperCase()}.${state.process.observed?.quantization?.accepted?' Native loader accepted this profile; individual layers may use different precision.':''}`;
     if ((!choice || choice.source === 'download') && state.runtime?.available === false&&choice?.format!=='safetensors') status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
     if (isLocalOllama(provider) && state.ollama?.error) status.textContent += ` Ollama: ${state.ollama.error}`;
     progress.hidden = !(ownOperation || info.busy);
     hardware.setContext(state, !provider || choice?.source === 'download');
-    start.disabled = Boolean(operation) || !info.canStart || choice?.source === 'download' && hardware.isDirty();
+    start.disabled = Boolean(operation) || !info.canStart || choice?.source === 'download' && hardware.isDirty()||native&&needsProfile;
     stop.disabled = operation?.type === 'stop' || !(info.canStop || ownOperation && operation.type === 'start');
     refreshButton.disabled = loadingList;
     onChange();
@@ -114,7 +127,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     const choice = selected(); if (!choice) return;
     if (type === 'start' && choice.source === 'download' && hardware.isDirty()) { showError('Save hardware settings before starting this model.'); return; }
     const requestProvider = provider; const value = select.value; const epoch = connectionEpoch;
-    const params = choice.source === 'download' ? type === 'start' ? { modelId: choice.id, contextTokens: getContextTokens() } : {} : { providerId: requestProvider.id, model: choice.id };
+    const params = choice.source === 'download' ? type === 'start' ? { modelId: choice.id, contextTokens: getContextTokens(),...(choice.format==='safetensors'?{quantization:{mode:loadMode.value}}:{}) } : {} : { providerId: requestProvider.id, model: choice.id };
     const token = { value, type, label: type === 'start' ? 'Starting model…' : 'Stopping model…' }; operation = token; showError(''); render();
     try {
       const result = await request(`localModels.${type}`, params);
@@ -132,6 +145,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   const stop = control('■', () => operate('stop')); stop.id = 'local-model-stop'; stop.classList.add('model-stop'); stop.title = 'Stop model'; stop.setAttribute('aria-label', 'Stop model');
   controls.append(refreshButton, start, stop);
   select.addEventListener('change', () => { showError(''); render(); });
+  loadMode.addEventListener('change',()=>{const choice=selected();if(choice?.format==='safetensors')loadDrafts.set(choice.id,loadMode.value);showError('');render();});
   let unsubscribe;
   const dispose = () => { disposed = true; nextList(); unsubscribe?.(); };
   unsubscribe = subscribe?.(event => {

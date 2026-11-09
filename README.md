@@ -1,10 +1,14 @@
-# Faber a2.6
+# Faber a2.7
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
 Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
+
+**a2.7 adds scheduled work to the Work Inbox.** Choose a time or a stable new file as a trigger, set limits, and review the inputs and outputs of each job. The daily folder report can run with the window closed. [Schedules and the Work Inbox](SCHEDULER.md)
+
+Supported original Safetensors models can load in float32, Q4 or Q8. Faber preserves the downloaded weights. [Model loading and verification](docs/a2.7-safetensors-quantization.md)
 
 **a2.6 can keep a reviewed routine running after its window closes.**
 Open Routines, select a project and the tools it may use, then preview and enable

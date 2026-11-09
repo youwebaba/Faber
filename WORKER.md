@@ -103,3 +103,8 @@ Implementation: [routine journal](core/routines.mjs),
 [trusted profile owner](desktop/profile-owner.cjs) and
 [routine UI](renderer/routines.mjs). See
 [a2.6 worker verification](docs/a2.6-worker-verification.md) for observed tests.
+
+a2.7 adds timezone-aware schedules, stable-file triggers, shared job budgets,
+the Work Inbox and a local Qwen daily folder report. These retain the same
+profile owner, routine scope and action-receipt rules. See
+[scheduled work](SCHEDULER.md) and [a2.7 verification](docs/a2.7-scheduler-verification.md).
