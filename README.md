@@ -20,6 +20,11 @@ recovery, plus local and encrypted remote previews for documents, music,
 interactive outputs and static 3D models. Extended hardware, WAN, pre-login and
 seven-day acceptance remain separately tracked. [Acceptance status](docs/a3.0-acceptance.md)
 
+Native Safetensors uses the verified CPU runtime in a3.0. The pinned upstream
+Mistral.rs Windows CUDA candidate could not build because its paged-attention
+CUDA APIs are exposed only on Unix. No engine fork is included. GGUF llama.cpp
+and the separate Ollama GPU route were verified independently.
+
 **a2.9 adds reviewed Outlook work, stronger recovery and 3D chat previews.**
 Connect an Outlook account to one project, page through unread messages, prepare
 reply drafts and review calendar changes. Sending and invitations retain their

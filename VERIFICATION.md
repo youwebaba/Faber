@@ -28,6 +28,12 @@ Physical devices/WAN, pre-login reboot, the full hardware matrix and seven actua
 days remain separately pending. See [release notes](docs/a3.0-release-notes.md),
 [live sharing](LIVE_MEDIA.md) and [acceptance status](docs/a3.0-acceptance.md).
 
+The immutable native Safetensors CPU payload is retained. The pinned upstream
+Mistral.rs Windows CUDA candidate failed to compile because paged-attention CUDA
+APIs are gated to Unix while Windows core paths reference them. It supplied no
+native GPU inference proof and no engine fork was made. GGUF llama.cpp and the
+separate Ollama GPU route have independent verification.
+
 ## a2.9
 
 The candidate source suite passed **783 tests, zero failures and one optional
