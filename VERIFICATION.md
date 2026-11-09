@@ -5,6 +5,16 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a2.8
+
+The independent MCP reference filesystem server returned the selected disposable file over stdio and authenticated Streamable HTTP. A real local Qwen run selected the permitted MCP read tool. The Windows Excel check changed two cells, reopened the workbook, verified the calculated dependent formula and retained the chart and other worksheet. Repeating the same edit left the bytes intact.
+
+The Windows Settings test saved a project-scoped authenticated HTTP connection, discovered its tools, granted a read tool, revoked it, disabled the server and removed the connection through the normal desktop controls.
+
+The remote media fixture canceled an in-flight transfer during a pinned TLS handshake. a2.7 could open an Electron exception dialog during this cancellation. The a2.8 transport rejects the request once and closes its socket. Eight competing socket closes released every slot, and the full encrypted Electron preview, reconnect, revoke and teardown test passed.
+
+On a disposable 3,000-message history, five background changes produced **20 full history copies in a2.4 and zero in a2.8** for filtered lifecycle subscribers. A hundred cookie changes plus shutdown produced 101 encrypted-write callbacks in a2.4 and one in a2.8. Reading 100 authorized 1 KiB chunks three times took 3.95–7.98 seconds in a2.4 and 0.097–0.120 seconds in a2.8. Each asynchronous read still checked attachment ownership twice. One cancellation reached its provider in 7.76 ms and 0.18 ms respectively. These figures measure the fixture on one PC.
+
 ## a2.7
 
 A Windows CPU Qwen run processed ten files while the interface was closed. Nine received model summaries and the invalid UTF-8 input received an explicit exception. A duplicate trigger produced one report. After a worker crash, the resumed job reused its two saved summaries. [Scheduling and recovery](docs/a2.7-scheduler-verification.md)

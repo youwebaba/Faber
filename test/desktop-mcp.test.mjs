@@ -35,6 +35,7 @@ for(const transport of ['stdio','http'])test('MCP discovery, project scope and r
   await assert.rejects(tool.execute({text:'again'},ctx),/grant/);
   assert.equal(await fs.readFile(path.join(root,'journal.txt'),'utf8'),'once\n');
   await manager.request('mcp.grant',grant);
+  await assert.rejects(tool.execute({text:'stale'},ctx),/grant/);
   const slow=tools[0].execute({text:'slow'},ctx);
   const interrupted=assert.rejects(slow,/may have occurred/);
   for(let i=0;i<100;i++){if((await fs.readFile(path.join(root,'journal.txt'),'utf8')).includes('slow'))break;await new Promise(r=>setTimeout(r,5));}

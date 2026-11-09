@@ -1,5 +1,7 @@
 # External model and tool gateway
 
+To connect a third-party MCP server to a Faber project, open Settings → MCP servers. [MCP client setup](MCP.md)
+
 The endpoint starts **off**, including after restart. It serves one selected
 saved local/API model and a fixed set of project-bound Faber tools. It never
 starts/downloads a model or forwards ChatGPT/Claude account subscriptions.

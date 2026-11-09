@@ -50,6 +50,20 @@ test('changing a paired relay verifies the same TLS host before saving the endpo
   assert.deepEqual(credentials(f),{...before,relayUrl:url});
   assert.equal(f.calls.at(-1).method,'workspace.rpc');
 });
+test('aborting pinned TLS during a competing socket close settles once and releases the slot',windows,async t=>{
+  const f=await fixture(t),connection=await f.pair(),peers=new Set();
+  let entered;
+  const stall=net.createServer(peer=>{peers.add(peer);peer.once('close',()=>peers.delete(peer));peer.once('data',()=>entered(peer));});
+  stall.listen(0,'127.0.0.1');await once(stall,'listening');
+  const controller=await createRemoteController({host:f.controllerStore,dial:async()=>{const wire=net.connect(stall.address().port,'127.0.0.1');await once(wire,'connect');return wire;}});
+  t.after(async()=>{await controller.dispose();for(const peer of peers)peer.destroy();await new Promise(resolve=>stall.close(resolve));});
+  for(let i=0;i<8;i++){
+    const handshake=new Promise(resolve=>{entered=resolve;}),abort=new AbortController();
+    const rejected=assert.rejects(controller.request(connection.id,'workspace.rpc',{}, {signal:abort.signal}),/canceled|closed|failed|interrupt/i);
+    const peer=await handshake;abort.abort();peer.destroy();await rejected;
+    assert.equal(controller.status().activeRequests,0);
+  }
+});
 const auth = connection => ({ Authorization: 'Bearer ' + connection.token, 'X-Faber-Device': connection.deviceId });
 
 test('remote pairing requires local acceptance, persists only token hashes on host, and exposes no secrets', windows, async t => {
