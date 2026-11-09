@@ -1,8 +1,8 @@
 {
   "name": "faber",
   "productName": "Faber",
-  "description": "Faber a2.4 desktop AI workspace",
-  "version": "2.4.0",
+  "description": "Faber desktop AI workspace",
+  "version": "2.5.0",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -17,6 +17,7 @@
     "smoke:b201": "electron . --smoke-b201",
     "smoke:media": "electron . --smoke-media",
     "prepare:runtime": "node scripts/prepare-runtime.mjs",
+    "prepare:music": "node scripts/prepare-music.mjs",
     "prepare:native": "node scripts/prepare-native.mjs",
     "build:dir": "electron-builder --win --x64 --dir --publish never",
     "build:installer": "electron-builder --win nsis --x64 --publish never",
@@ -36,7 +37,7 @@
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "2.4.0.0",
+    "buildVersion": "2.5.0.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -49,6 +50,7 @@
       "extensions/**",
       "model-hub/**",
       "local-models/**",
+      "local-music/**",
       "native/**",
       "!native/target/**",
       "!native/vendor/**",
@@ -74,6 +76,10 @@
       {
         "from": ".runtime/lightpanda",
         "to": "lightpanda"
+      },
+      {
+        "from": ".runtime/music-runtime",
+        "to": "music-runtime"
       }
     ],
     "npmRebuild": false,
@@ -91,7 +97,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a2.4-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a2.5-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

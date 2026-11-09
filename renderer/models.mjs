@@ -1,5 +1,6 @@
 import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest } from './model-helpers.mjs';
 import { createDiskLibrary } from './library.mjs';
+import { createPackageChoices } from './model-packages.mjs';
 
 export function createModelsBrowser({ request, subscribe, el, button, field, actions, notify, showSettings }) {
   let hub = { downloadDirectory: '', hasToken: false, downloads: [] };
@@ -128,6 +129,8 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     const variantButtons = [];
     const header = el('div', 'model-detail-heading'); header.append(button('Back to model grid', () => { detail.hidden = true; columns.classList.remove('has-detail'); results.focus(); }, 'text-button'), el('h2', 'model-repo', model.id), pageLink(model.id)); detail.append(header);
     if (model.gated) detail.append(el('p', 'hint', 'This repository restricts access. Accept its terms on Hugging Face and add an authorized token in Settings before downloading.'));
+    const packages = createPackageChoices({ model, el, onSelect(files) { quantization = undefined; selected.clear(); files.forEach(file => selected.add(file)); checkboxes.forEach(check => { check.checked = selected.has(check.value); }); updateSelection(); } });
+    detail.append(packages.root);
     const information = model.quantizations?.length ? el('details', 'model-information') : detail;
     if (information !== detail) information.append(el('summary', '', 'Model information and estimates'));
     const metrics = el('div', 'model-metrics model-detail-metrics'); metrics.append(metric('Parameters', formatParameters(model.parameters)), metric(model.totalBytes === null || model.totalBytes === undefined ? model.sizeLabel || 'Size' : 'All repository files', formatBytes(model.totalBytes ?? model.sizeBytes)), metric('VRAM estimate', formatVram(model.vram))); information.append(metrics);
@@ -142,7 +145,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
           choice.append(el('strong', '', variant.encoding), el('span', 'quantization-size', formatBytes(variant.sizeBytes)), el('span', 'quantization-identity', variant.label), el('span', 'quantization-vram', variant.complete ? `VRAM estimate ${formatVram(variant.vram)}` : variant.reason || 'Incomplete shard set'));
           choice.title = `${variant.label}${variant.vram?.note ? `\n${variant.vram.note}` : ''}${variant.reason ? `\n${variant.reason}` : ''}`;
           choice.addEventListener('click', () => {
-            quantization = variant; selected.clear(); variant.files.forEach(path => selected.add(path));
+            packages.clear(); quantization = variant; selected.clear(); variant.files.forEach(path => selected.add(path));
             checkboxes.forEach(check => { check.checked = selected.has(check.value); }); updateSelection();
           });
           variantButtons.push({ choice, variant }); choices.append(choice);
@@ -164,11 +167,12 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
       const text = el('span', 'model-file-name'); text.append(el('strong', '', file.path), el('small', '', `${file.format || (file.weight ? 'Weights' : 'Supporting file')}${file.sha256 ? ' · SHA-256 available' : ''}${file.vram ? ` · VRAM estimate ${formatVram(file.vram)}` : ''}`));
       if (file.vram?.note) text.title = file.vram.note;
       row.append(check, text, el('span', 'model-file-size', formatBytes(file.size))); files.append(row); checkboxes.push(check);
-      check.addEventListener('change', () => { quantization = undefined; check.checked ? selected.add(file.path) : selected.delete(file.path); updateSelection(); });
+      check.addEventListener('change', () => { packages.clear(); quantization = undefined; check.checked ? selected.add(file.path) : selected.delete(file.path); updateSelection(); });
     }
     if (!model.files?.length) files.append(el('p', 'hint', 'No files were listed for this revision.'));
     const manual = el('details', 'model-manual-files'); manual.id = 'model-manual-files'; manual.open = !model.quantizations?.length;
-    manual.append(el('summary', '', 'Select individual files'), files); detail.append(manual);
+    manual.open = !model.quantizations?.length && !model.packages?.length;
+    manual.append(el('summary', '', 'Advanced: select individual files'), el('p', 'hint', 'Manual selection may omit required weights or support data. Original repository subfolders are preserved.'), files); detail.append(manual);
     const selection = el('div', 'model-selection'); const summary = el('span', 'hint'); summary.id = 'model-selection-summary';
     let downloading = false;
     const download = el('button', 'button primary', 'Download selected files'); download.type = 'button'; download.id = 'model-download-selected';
@@ -177,19 +181,20 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
       if (downloading || !chosen.count || !model.revision) return;
       downloading = true; updateSelection();
       try {
-        const job = await request('models.download', modelDownloadRequest(model, chosen.paths, quantization));
+        const job = await request('models.download', modelDownloadRequest(model, chosen.paths, quantization, packages.selected()));
         notify(`Download queued for ${job.repoId}. Track progress in Downloads & library.`); await refresh(); showTab('downloads');
       } catch (error) { notify(errorText(error), true); }
       finally { downloading = false; updateSelection(); }
     });
-    const clear = button('Clear selection', () => { quantization = undefined; selected.clear(); checkboxes.forEach(check => { check.checked = false; }); updateSelection(); }, 'text-button');
+    const clear = button('Clear selection', () => { packages.clear(); quantization = undefined; selected.clear(); checkboxes.forEach(check => { check.checked = false; }); updateSelection(); }, 'text-button');
     selection.append(summary, clear, download); detail.append(selection);
     function updateSelection() {
       const chosen = selectedFiles(model.files || [], selected);
       for (const { choice, variant } of variantButtons) choice.setAttribute('aria-pressed', String(quantization?.id === variant.id));
       variantSummary.textContent = quantization ? `${quantization.label}. ${quantization.files.length} file${quantization.files.length === 1 ? '' : 's'}; VRAM estimate ${formatVram(quantization.vram)}.` : chosen.count ? 'Custom file selection. Review that every required shard is included.' : 'Select one variant to see its exact download size.';
-      summary.textContent = `${quantization ? `${quantization.encoding}: ` : ''}${chosen.count} file${chosen.count === 1 ? '' : 's'} selected. Download size: ${chosen.sizeLabel}`;
-      download.textContent = quantization ? `Download ${quantization.encoding}` : 'Download selected files'; download.disabled = downloading || !chosen.count || !model.revision;
+      const selectedPackage = packages.selected();
+      summary.textContent = `${selectedPackage ? `${selectedPackage.label}: ` : quantization ? `${quantization.encoding}: ` : ''}${chosen.count} file${chosen.count === 1 ? '' : 's'} selected. Download size: ${chosen.sizeLabel}${selectedPackage && !selectedPackage.complete ? '. Choose all five components to continue.' : ''}`;
+      download.textContent = selectedPackage ? 'Download complete package' : quantization ? `Download ${quantization.encoding}` : 'Download selected files'; download.disabled = downloading || !chosen.count || !model.revision || Boolean(selectedPackage && !selectedPackage.complete);
     }
     updateSelection();
   }

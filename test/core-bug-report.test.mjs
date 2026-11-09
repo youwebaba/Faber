@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
 import {redactReport,bugReportDraft,reportIssueUrl,externalWebUrl} from '../core/bug-report.mjs';
+import {releaseLabel} from '../renderer/release.mjs';
+
+test('the visible release, bug reports, app version and installer filename agree',async()=>{
+  const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url)));
+  const label='a'+manifest.version.replace(/\.0$/,'');
+  assert.equal(releaseLabel,label);
+  assert.equal(manifest.build.buildVersion,manifest.version+'.0');
+  assert.ok(manifest.build.win.artifactName.includes('-'+label+'-'));
+  const report=bugReportDraft();assert.ok(report.title.startsWith('['+label+']'));assert.ok(report.body.startsWith('Faber '+label));
+});
 
 test('reports redact credentials, paths, account identifiers and URL query strings before creating a public draft',()=>{
   const secret='sk-examplePrivateCredential12345';

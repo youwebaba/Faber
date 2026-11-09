@@ -8,16 +8,21 @@ const weights=Buffer.alloc(128*1024,0x31),alternate=Buffer.alloc(64*1024,0x32);
 const payloads=new Map([['model.safetensors',weights],['alternate.safetensors',alternate],['config.json',Buffer.from('{"model_type":"fixture"}\n')]]);
 const digest=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const metadata={id:repoId,sha:revision,downloads:42,likes:3,gated:false,pipeline_tag:'text-generation',tags:['safetensors'],safetensors:{total:32768,parameters:{F32:32768}},siblings:[...payloads].map(([rfilename,bytes])=>({rfilename,size:bytes.length,lfs:{size:bytes.length,sha256:digest(bytes)}}))};
+const musicRepo='fixture/MiniMax-Music3-GGUF',musicRoles=['language_model','rvq_depth_decoder','condition_encoder','transformer','vocoder'];
+const musicPayloads=new Map(musicRoles.map(role=>{const bytes=Buffer.alloc(64);bytes.write('GGUF');bytes.writeUInt32LE(3,4);return [`MiniMax-Music3-${role}-${['condition_encoder','vocoder'].includes(role)?'F32':'Q8_0'}.gguf`,bytes];}));
+musicPayloads.set('LICENSE',Buffer.from('Fixture license'));musicPayloads.set('MiniMax-Music3-language_model-Q5_K_M.gguf',musicPayloads.values().next().value);
+const musicMetadata={id:musicRepo,sha:revision,tags:['gguf'],siblings:[...musicPayloads].map(([rfilename,bytes])=>({rfilename,size:bytes.length,lfs:{size:bytes.length,sha256:digest(bytes)}}))};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 export function createHubSmokeFetch(){return async(input,options={})=>{
   const url=new URL(input);
   if(url.origin!=='https://huggingface.co')throw new Error('Controlled smoke never uses external network');
-  if(url.pathname==='/api/models')return Response.json([metadata]);
+  if(url.pathname==='/api/models')return Response.json([metadata,musicMetadata]);
   if(url.pathname===`/api/models/${repoId}`||url.pathname===`/api/models/${repoId}/revision/${revision}`)return Response.json(metadata);
-  const prefix=`/${repoId}/resolve/${revision}/`;
+  if(url.pathname===`/api/models/${musicRepo}`||url.pathname===`/api/models/${musicRepo}/revision/${revision}`)return Response.json(musicMetadata);
+  const music=url.pathname.startsWith(`/${musicRepo}/resolve/`),prefix=`/${music?musicRepo:repoId}/resolve/${revision}/`;
   if(!url.pathname.startsWith(prefix))throw new Error(`Unexpected controlled smoke request: ${url.pathname}`);
-  const bytes=payloads.get(decodeURIComponent(url.pathname.slice(prefix.length)));if(!bytes)throw new Error('Unknown smoke fixture file');
+  const bytes=(music?musicPayloads:payloads).get(decodeURIComponent(url.pathname.slice(prefix.length)));if(!bytes)throw new Error('Unknown smoke fixture file');
   let offset=0,canceled=false;
   return new Response(new ReadableStream({
     async pull(controller){await pause(35);if(canceled)return;if(options.signal?.aborted){controller.error(options.signal.reason??new Error('Aborted'));return;}if(offset===bytes.length){controller.close();return;}const next=bytes.subarray(offset,offset+1024);offset+=next.length;controller.enqueue(next);},
@@ -26,7 +31,7 @@ export function createHubSmokeFetch(){return async(input,options={})=>{
 };}
 
 export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
-  const checks=[],screenshots={},js=code=>window.webContents.executeJavaScript(code);
+  const checks=[],screenshots={},js=code=>window.webContents.executeJavaScript(code).catch(error=>{throw new Error(`Renderer model smoke command failed: ${code}\n${error.message}`);});
   const state=()=>modelHub.request('models.state');
   async function until(predicate,label,timeout=15000){const started=Date.now();while(Date.now()-started<timeout){const value=await predicate();if(value)return value;await pause(60);}throw new Error(`Model smoke timeout: ${label}`);}
   const click=selector=>js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)throw new Error('Missing model smoke selector');e.click()})()`);
@@ -77,6 +82,20 @@ export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
   await until(async()=> (await state()).downloads.find(job=>job.id===agentDownload.result.id&&job.downloadedBytes>0),'agent-originated active transfer');
   assert.equal((await tool('hf_cancel_download',{id:agentDownload.result.id})).result.status,'canceled');assert.equal((await tool('hf_download_status',{id:agentDownload.result.id})).result.status,'canceled');
   checks.push('AI download requests fixed-destination files approval; AI status/cancel operate on the same background job');
+  await click('#model-browse-tab');
+  const safeDetails=(await tool('hf_model_details',{repoId})).result;const safePackage=safeDetails.packages.find(item=>item.label==='model.safetensors');
+  await click(`[data-package-choice="${safePackage.id}"]`);assert.match(await js(`document.querySelector('#model-selection-summary').textContent`),/2 files selected/);await click('#model-download-selected');
+  const safeJob=await until(async()=> (await state()).downloads.find(job=>job.packageId===safePackage.id&&job.status==='completed'),'complete Safetensors package');
+  assert.deepEqual(safeJob.files.map(file=>file.path),['config.json','model.safetensors']);checks.push('Visible Safetensors package choice downloads weights and configuration together');
+  await click('#model-browse-tab');await click(`#model-results [data-repo-id="${musicRepo}"]`);await until(()=>js(`document.querySelectorAll('#model-packages select[data-component]').length===5`),'five Music3 component choices');
+  assert.match(await js(`document.querySelector('#model-packages').innerText`),/Whole-pipeline memory/);
+  const musicDetails=(await tool('hf_model_details',{repoId:musicRepo})).result,pipeline=musicDetails.packages.find(item=>item.type==='minimax-music3');assert.equal(musicDetails.quantizations.length,0);
+  const components={};for(const component of pipeline.components){const variant=component.variants.find(item=>item.encoding==='Q8_0')||component.variants[0];components[component.role]=variant.id;await js(`(()=>{const select=document.querySelector('#model-packages [data-component="${component.role}"]');select.value=${JSON.stringify(variant.id)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);if(Object.keys(components).length<5)assert.equal(await js(`document.querySelector('#model-download-selected').disabled`),true);}
+  assert.equal(await js(`document.querySelector('#model-download-selected').disabled`),false);await click('#model-download-selected');
+  const musicJob=await until(async()=> (await state()).downloads.find(job=>job.packageId===pipeline.id&&job.status==='completed'),'complete Music3 pipeline');assert.equal(musicJob.files.length,6);assert.equal(Object.keys(musicJob.components).length,5);await assert.rejects(fs.access(path.join(musicJob.directory,'MiniMax-Music3-language_model-Q5_K_M.gguf')));
+  const musicAgent=await tool('hf_download_model',{repoId:musicRepo,revision,packageId:pipeline.id,components},['files']);assert.match(musicAgent.approvals[0].summary,/6 selected files/);await until(async()=> (await state()).downloads.find(job=>job.id===musicAgent.result.id&&job.status==='completed'),'agent pipeline package');
+  await until(()=>js(`Array.from(document.querySelectorAll('#disk-library-grid .model-repo')).some(node=>node.textContent.includes('MiniMax-Music3 pipeline'))`),'Music3 disk library pipeline');
+  checks.push('Music3 UI requires five component choices, downloads only one variant per role, and normal agent package downloads preserve files approval');await capture('models-music3-package');
   window.setSize(1100,760);await click('#model-browse-tab');await capture('models-browser-compact');
   await click('#open-settings');await click('[data-settings-category="models"].nav-button');await js(`document.querySelector('#model-download-settings').scrollIntoView({block:'center'})`);await capture('models-settings-compact');await click('#close-modal');
   const result={ok:true,kind:'deterministic-controlled-fetch',checks,destination,completed:{id:completed.id,file,bytes:weights.length,sha256:digest(weights)},canceled:{id:canceled.id,status:canceled.status},screenshots};

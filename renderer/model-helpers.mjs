@@ -35,7 +35,11 @@ export function quantizationGroups(variants = []) {
   return [...groups].sort(([a], [b]) => a - b).map(([bits, variants]) => ({ bits, variants }));
 }
 
-export function modelDownloadRequest(model, files, quantization) {
+export function modelDownloadRequest(model, files, quantization, selectedPackage) {
+  if (selectedPackage) {
+    if (!selectedPackage.complete) throw new Error(selectedPackage.reason || 'Select all five Music3 components.');
+    return { repoId: model.id, revision: model.revision, packageId: selectedPackage.id, ...(selectedPackage.type === 'minimax-music3' ? { components: selectedPackage.choices } : {}) };
+  }
   if (quantization && !quantization.complete) throw new Error(quantization.reason || 'This quantization is incomplete.');
   return { repoId: model.id, revision: model.revision, ...(quantization ? { quantizationId: quantization.id } : { files }) };
 }

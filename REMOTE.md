@@ -1,6 +1,6 @@
 # Remote sessions
 
-Install Faber a2.4 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
+Install Faber a2.5 on the home PC and the laptop. The home PC runs the model, tools and approvals. The laptop shows paired-device projects and chats in the main sidebar alongside its local projects, with separate drafts. Keep the home PC awake and Faber running in the profile you want to control.
 
 ## Pair the laptop
 
@@ -36,7 +36,7 @@ remain connected. See [Chat media](MEDIA.md) for formats and limits.
 
 ## Run the proof-of-concept relay on a Windows PC
 
-Download the relay kit from the [a2.4 release](https://github.com/youwebaba/Faber/releases/tag/a2.4) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
+Download the matching relay kit from [Faber releases](https://github.com/youwebaba/Faber/releases) and extract it. The relay operator needs Windows x64, Node.js 24 or newer with npm, and outbound Internet access. In PowerShell, open the extracted `relay` folder and run the launcher.
 
 ```powershell
 .\Start-FaberRelay.ps1

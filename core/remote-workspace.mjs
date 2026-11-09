@@ -7,7 +7,7 @@ const id = { type: 'string', minLength: 1, maxLength: 256 };
 const bounded = (minimum, maximum) => ({ type: 'integer', minimum, maximum });
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 const chatRef = object({ chatId: id });
-const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true };
+const imageMode = { type: 'string', enum: ['references'] }, capabilities = { imageReferences: true, mediaReferences: true, steering: true };
 const transcriptBytesLimit = 10 * 1024 * 1024;
 const methods = new Map(Object.entries({
   'workspace.ping': object({}), 'workspace.models': object({}),
@@ -17,6 +17,7 @@ const methods = new Map(Object.entries({
   'chat.image': object({ chatId: id, imageId: { type: 'string', minLength: 1, maxLength: 2048 } }),
   'chat.media': object({ chatId: id, mediaId: mediaIdSchema, offset: bounded(0, 536870912), length: bounded(0, mediaChunkLimit) }),
   'chat.send': object({ chatId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','text']),
+  'chat.steer': object({ chatId: id, runId: id, correctionId: id, text: { type: 'string', maxLength: 200000 }, images: { type: 'array', maxItems: 8, items: { type: 'string', maxLength: imageBytesLimit } } }, ['chatId','runId','text']),
   'chat.create': object({ projectId: id, title: { type: 'string', maxLength: 200 } }, ['projectId']),
   'chat.stop': chatRef, 'chat.forceStop': chatRef, 'chat.compact': chatRef,
   'approval.resolve': object({ chatId: id, id, allow: { type: 'boolean' } }),
@@ -91,7 +92,9 @@ function visibleMessage(message, chatId, references, mediaReferences) {
 }
 function runRow(run, references, budget, mediaReferences) {
   return { ...pick(run, ['id','chatId','status','startedAt','endedAt','requestMessageId','parentRunId','contextOverflow']), error: String(run.error ?? '').slice(0,2000),
-    modelCalls: (run.modelCalls || []).slice(-64).map(call=>pick(call,['id','status','phase','progressSummary'])),
+    promptUsage: structuredClone(run.promptUsage || []),
+    steering: (run.steering || []).slice(-64).map(item=>pick(item,['id','messageId','runId','status','mode','createdAt','acceptedAt','appliedAt','waitingFor','error'])),
+    modelCalls: (run.modelCalls || []).slice(-64).map(call=>pick(call,['id','status','phase','progressSummary','requestMessageId','promptRunId','purpose','usage','metrics'])),
     toolEvents: run.toolEvents.slice(-64).map(event => {
       const row = { ...pick(event, ['id','name','status','startedAt','endedAt','toolCallId','sourceMessageId','modelCallId']),
         summary: String(event.args?.command ?? event.args?.path ?? event.args?.url ?? event.error ?? '').slice(0,1000) };
@@ -165,7 +168,7 @@ export function createRemoteWorkspace({ current, request, readMedia, modelDispla
     if (!before && since === token) return { unchanged: true, revision: token };
     const {state,streams} = view, chat = findChat(state,chatId), source = chat.messages;
     const live = [...streams.values()].filter(row => family.has(row.chatId)).map(row => ({
-      ...pick(row,['runId','chatId','phase','progressSummary','sequence','lastAssistantId','modelCallId']), text: String(row.text ?? '').slice(0,500000) }));
+      ...pick(row,['runId','chatId','phase','progressSummary','sequence','lastAssistantId','modelCallId','metrics']), text: String(row.text ?? '').slice(0,500000) }));
     if (!before && waitMs && since?.startsWith(revision(view) + '.')) return { liveOnly:true, chatId, streams:live, revision:token };
     let cursor = before ? source.findIndex(row => row.id === before) : source.length;
     if (cursor < 0) throw new Error('Chat history changed. Reload this chat.');

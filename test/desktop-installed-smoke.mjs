@@ -1,9 +1,19 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir}) {
+import {bugReportDraft,releaseLabel} from '../core/bug-report.mjs';
+export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDir,sourceDir,window}) {
   assert.equal(JSON.parse(await fs.readFile(path.join(dataDir,'boot-state.json'),'utf8')).phase,'ready','Installed smoke must wait for the real renderer readiness handshake');
   const {version}=globalThis.__FABER_BOOTSTRAP__,marker=path.join(dataDir,'installer-fixture.json');let prior;
+  assert.equal(releaseLabel,'a'+version.replace(/\.0$/,''));
+  const labels=await window.webContents.executeJavaScript(`(()=>{
+    document.querySelector('#open-settings').click();
+    document.querySelector('button[data-settings-category="about"]').click();
+    return {title:document.title,about:document.querySelector('.settings-pane h3').textContent,badge:document.querySelector('.build-label').textContent};
+  })()`);
+  assert.deepEqual(labels,{title:'Faber '+releaseLabel,about:'Faber '+releaseLabel,badge:releaseLabel});
+  assert.equal(window.getTitle(),labels.title);
+  assert.ok(bugReportDraft().title.startsWith('['+releaseLabel+']'));
   try{prior=JSON.parse(await fs.readFile(marker,'utf8'));}catch(error){if(error.code!=='ENOENT')throw error;}
   if(!prior){
     const folder=path.join(dataDir,'fixture-project');await fs.mkdir(folder);const project=await runtime.request('project.create',{name:'Preserved installer fixture',path:folder});
@@ -18,6 +28,6 @@ export async function runInstalledSmoke({runtime,modelHub,extensions,host,dataDi
   assert.equal((await modelHub.request('models.state')).downloadDirectory,prior.models);assert.equal(await fs.readFile(path.join(prior.models,'retained-model.bin'),'utf8'),'fixture model retention');
   assert.equal(await fs.readFile(path.join(prior.firstSource,'.retained-source-fixture'),'utf8'),'approved source workbench retained');
   if(version!==prior.firstVersion)assert.notEqual(sourceDir,prior.firstSource);
-  const report={ok:true,version,dataDir,sourceDir,firstVersion:prior.firstVersion,rendererReady:true,oldWorkbenchRetained:true,projectsRetained:true,chatsRetained:true,encryptedFixtureKeyRetained:true,addonRetained:true,modelFolderRetained:true,noInference:true};
+  const report={ok:true,version,labels,dataDir,sourceDir,firstVersion:prior.firstVersion,rendererReady:true,oldWorkbenchRetained:true,projectsRetained:true,chatsRetained:true,encryptedFixtureKeyRetained:true,addonRetained:true,modelFolderRetained:true,noInference:true};
   const reportPath=path.join(dataDir,`installer-${version}-report.json`);await fs.writeFile(reportPath,JSON.stringify(report,null,2));return {...report,reportPath};
 }

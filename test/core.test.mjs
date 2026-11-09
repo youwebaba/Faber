@@ -232,7 +232,7 @@ test('OpenAI SSE adapter handles chunked UTF-8, split tool JSON, authorization a
   let request;
   const events = [];
   for await (const event of streamProvider({ provider: { kind: 'openai', baseUrl: 'http://localhost/v1', model: 'fake', id: 'p', hasKey: true }, messages: [{ role: 'tool', content: '{}', toolCallId: 'past', toolName: 'screen', image: 'data:image/png;base64,YQ==' }], tools: [], host: { getSecret: () => 'test-secret' }, fetchImpl: async (url, options) => { request = { url, ...options }; return streamResponse(frames.map(frame => `data: ${JSON.stringify(frame)}\r\n\r\n`).join('') + 'data: [DONE]\n'); } })) events.push(event);
-  assert.deepEqual(events, [{ type: 'delta', text: '你好' }, { type: 'tool', id: 'call1', name: 'test_read', args: { x: 2 } }]);
+  assert.deepEqual(events, [{ type: 'delta', text: '你好' }, { type: 'output_progress', characters: 14 }, { type: 'output_progress', characters: 16 }, { type: 'tool', id: 'call1', name: 'test_read', args: { x: 2 } }]);
   assert.equal(request.headers.Authorization, 'Bearer test-secret');
   assert.equal(request.redirect, 'error');
   assert.equal(JSON.parse(request.body).messages.at(-1).content[1].image_url.url, 'data:image/png;base64,YQ==');
@@ -244,7 +244,7 @@ test('native Ollama adapter handles tools, images and NDJSON; errors never becom
   const events = [];
   for await (const event of streamProvider({ provider, messages: [], tools: [], fetchImpl: async (url, options) => { request = { url, ...options }; return streamResponse(JSON.stringify({ message: { content: 'hello', tool_calls: [{ function: { name: 'test_read', arguments: {} } }] }, done: true }) + '\n'); } })) events.push(event);
   assert.equal(request.url, 'http://localhost:11434/api/chat'); assert.equal(JSON.parse(request.body).options, undefined);
-  assert.equal(events[1].name, 'test_read');
+  assert.equal(events[1].type, 'output_progress'); assert.equal(events[2].name, 'test_read');
   assert.deepEqual(providerMessages([{ role: 'tool', content: '{}', image: 'data:image/png;base64,YQ==' }], 'ollama').at(-1).images, ['YQ==']);
   for (const response of [() => streamResponse('{bad}\n'), () => streamResponse('{"message":{"content":"partial"}}\n'), () => streamResponse('{"error":"model missing"}\n'), () => streamResponse('', 500)]) {
     await assert.rejects(async () => { for await (const _ of streamProvider({ provider, messages: [], tools: [], fetchImpl: async () => response() })) {} });

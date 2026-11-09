@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a2.4 (application version 2.4.0), including
+This contract describes Faber a2.5 (application version 2.5.0), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release

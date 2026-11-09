@@ -1,4 +1,4 @@
-# Faber a2.4
+# Faber a2.5
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -6,7 +6,17 @@ Faber is a Windows desktop workspace for local and API-connected AI agents,
 with a Codex-style interface, shared tools, agent delegation, voice, and upgrades
 the agents can author. It has its own source, launchers and release lifecycle.
 
-**a2.4 plays audio and video directly in chat, including remote chats.**
+**a2.5 adds model packages, music generation and in-flight chat controls.**
+Choose a complete Safetensors package in Models, or select the five components
+for MiniMax Music3. A chat can generate a WAV using the bundled Windows CPU
+runner and return it to local or paired playback. [Music setup](MUSIC.md)
+
+During a run, **Steer now** sends a correction to the current task. **Queue
+follow-up** keeps the next instruction for a safe point. The activity row shows
+reported or estimated output tokens as they arrive. The transcript shows prompt
+usage across model calls and identifies gaps when a provider omits its counts.
+
+**a2.4 introduced audio and video playback in local and remote chats.**
 Use the playback controls to pause, seek or adjust volume, and open videos in
 fullscreen. Right-click chat content to copy text or images and save displayed
 images, audio or video with the Windows Save As dialog. An agent can publish a
@@ -33,7 +43,7 @@ a requested tool call when the final event contained an empty output list.
 Faber now recovers completed items from the stream and runs each validated tool
 call once. If only partial text arrived, it stays visible with an error.
 
-Download the [a2.4 Windows installer, relay kit and checksums](https://github.com/youwebaba/Faber/releases/tag/a2.4).
+Download Windows installers, relay kits and checksums from [Faber releases](https://github.com/youwebaba/Faber/releases).
 Each version has its own full release, patch notes and installer. Earlier
 versions are available in the [release history](https://github.com/youwebaba/Faber/releases).
 

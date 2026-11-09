@@ -1,5 +1,20 @@
 Faber bundled runtime notices
 
+MiniMax Music3 local generation uses minimaxmusic.cpp (MIT), source commit
+35ba334b4d23b5a8e631e3c2d97f074a185e41d4, and ggml (MIT), source commit
+210138933b22221ced02943b7b6e4308610ab530. The separate music-runtime payload
+retains their licenses, yyjson's MIT notice and minimp3's CC0 dedication.
+Sources: https://github.com/ServeurpersoCom/minimaxmusic.cpp and
+https://github.com/ServeurpersoCom/ggml. The bundled Windows x64 CPU runner
+uses app-local Microsoft Visual C++ runtime 14.51.36231, distributed under
+Microsoft's Visual Studio 2026 redistribution terms:
+https://aka.ms/vs/18/redistribution
+https://visualstudio.microsoft.com/license-terms/
+Exact runtime files and SHA-256 digests appear in music-runtime-lock.json.
+MiniMax Music3 weights are not bundled. Separately downloaded model weights
+remain subject to the MiniMax-Music3 Community License:
+https://huggingface.co/MiniMaxAI/MiniMax-Music3/blob/main/LICENSE
+
 The Faber metadata worker is built with Rust 1.99.1. The Rust standard library's
 copyright and dependency notices are retained in build/licenses/rust, including
 the linked license texts. The worker's Cargo dependencies are identified exactly

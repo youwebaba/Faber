@@ -154,6 +154,32 @@ test('client disconnect releases provider lease, and Stop cancels active model r
   await f.runtime.request('provider.save', { id: f.provider.id, name: 'Changed', kind: 'openai', baseUrl: 'http://127.0.0.1:2/v1', model: 'fixture-model' });
 });
 
+test('gateway rejects output and closes its provider iterator without awaiting a stalled return', async t => {
+  let returned = 0, canceled = false;
+  const f = await fixture(t, { stream: ({ signal }) => ({ [Symbol.asyncIterator]() { return {
+    next: async () => ({ done: false, value: { type: 'delta', text: 12 } }),
+    return() { returned++; canceled = signal.aborted; return new Promise(() => {}); },
+  }; } }) }); await f.start();
+  const response = await f.fetch('/v1/chat/completions', { model: 'fixture-model', messages: user });
+  assert.equal(response.status, 502); await until(() => returned === 1);
+  assert.equal(canceled, true); await until(async () => (await f.gateway.request('gateway.status')).activeRequests === 0);
+  await f.runtime.request('provider.save', { id: f.provider.id, name: 'Released', kind: 'openai', baseUrl: 'http://127.0.0.1:2/v1', model: 'fixture-model' });
+});
+
+test('rejected Responses streaming output closes a real loopback HTTP transport', async t => {
+  let disconnected = false;
+  const upstream = http.createServer((_request, response) => {
+    response.once('close', () => { disconnected = true; });
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 12 })}\n\n`);
+  });
+  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+  t.after(async () => { upstream.closeAllConnections(); await new Promise(resolve => upstream.close(resolve)); });
+  const f = await fixture(t, { adapter: true, kind: 'openai-responses', baseUrl: `http://127.0.0.1:${upstream.address().port}/v1` }); await f.start();
+  const response = await f.fetch('/v1/chat/completions', { model: 'fixture-model', messages: user });
+  assert.equal(response.status, 502); await until(() => disconnected);
+});
+
 test('request sizes and concurrent inference are bounded', async t => {
   let started = 0;
   const f = await fixture(t, { stream: async function* ({ signal }) { started++; await new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })); } }); await f.start();

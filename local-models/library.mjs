@@ -4,6 +4,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { inside, noLinks, validFilePath } from '../model-hub/paths.mjs';
 import { auxiliaryGGUF } from '../model-hub/quantizations.mjs';
+import { supportFile, musicComponent } from '../model-hub/packages.mjs';
+import { localPackages } from './packages.mjs';
 
 const folded = value => process.platform === 'win32' ? value.toLowerCase() : value;
 const relativeName = (root, file) => path.relative(root, file).split(path.sep).join('/');
@@ -76,7 +78,7 @@ export async function scanLocalModels({ directory, downloads = [] }) {
   if (!Array.isArray(downloads)) throw new Error('Download records must be an array');
   let root = await noLinks(directory);
   if (root === path.parse(root).root) throw new Error('Choose a model folder, not a drive root');
-  const warnings = [], groups = new Map();
+  const warnings = [], groups = new Map(), entries = [], documents = {};
   try {
     root = await fs.realpath(root);
     await noLinks(root);
@@ -103,7 +105,30 @@ export async function scanLocalModels({ directory, downloads = [] }) {
       // A repository's name does not identify its downloaded files as auxiliary.
       if (!child.isFile() || auxiliaryGGUF(track?.repositoryPath ?? relativePath)) continue;
       const extension = /\.(gguf|safetensors)$/i.exec(child.name);
-      if (!extension) continue;
+      if (!extension && !supportFile(relativePath)) continue;
+      if (!extension) {
+        try {
+          const stat = await fs.lstat(target);
+          if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Support file changed during scan');
+          let reason;
+          if (track && (track.jobStatus !== 'completed' || track.fileStatus !== 'completed')) reason = `Tracked download is not complete (${track.jobStatus || 'unknown'}/${track.fileStatus || 'unknown'})`;
+          else if (track && Number.isSafeInteger(track.size) && track.size !== stat.size) reason = 'Support file size differs from its completed download record';
+          entries.push({ path: relativePath, size: stat.size, mtimeMs: stat.mtimeMs, format: 'other', reason });
+          if (/(?:\.safetensors\.index\.json|(?:^|\/)modular_model_index\.json)$/i.test(relativePath) && stat.size <= 2 * 1024 * 1024) {
+            const handle = await fs.open(target, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
+            try {
+              const opened = await handle.stat();
+              if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size !== stat.size || opened.mtimeMs !== stat.mtimeMs) throw new Error('Index changed during scan');
+              const bytes = Buffer.alloc(stat.size + 1), { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+              if (bytesRead !== stat.size) throw new Error('Index changed during scan');
+              const after = await fs.lstat(target);
+              if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('Index changed during scan');
+              try { documents[relativePath] = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8')); } catch { /* Invalid indexes become unavailable packages. */ }
+            } finally { await handle.close(); }
+          }
+        } catch (error) { warnings.push({ path: relativePath, reason: error.message }); }
+        continue;
+      }
       const format = extension[1].toLowerCase(), bare = relativePath.slice(0, -extension[0].length);
       const shard = /-(\d+)-of-(\d+)$/i.exec(bare), stem = shard ? bare.slice(0, shard.index) : bare;
       const key = `${format}:${shard ? 'shards' : 'single'}:${stem.toLowerCase()}`;
@@ -116,6 +141,7 @@ export async function scanLocalModels({ directory, downloads = [] }) {
         if (track && (track.jobStatus !== 'completed' || track.fileStatus !== 'completed')) reason = `Tracked download is not complete (${track.jobStatus || 'unknown'}/${track.fileStatus || 'unknown'})`;
         else if (track && Number.isSafeInteger(track.size) && track.size !== stat.size) reason = 'File size differs from its completed download record';
         if (!reason && format === 'gguf') reason = await ggufHeader(root, target, stat);
+        entries.push({ path: relativePath, size: stat.size, mtimeMs: stat.mtimeMs, format, reason });
         group.entries.push({ relativePath, sizeBytes: stat.size, mtimeMs: stat.mtimeMs, reason,
           index: shard ? Number(shard[1]) : null, total: shard ? Number(shard[2]) : null,
           valid: !shard || (shard[1].length === 5 && shard[2].length === 5),
@@ -123,6 +149,8 @@ export async function scanLocalModels({ directory, downloads = [] }) {
       } catch (error) { warnings.push({ path: relativePath, reason: error.message }); }
     }
   }
-  const models = [...groups.values()].filter(group => group.entries.length).map(group => describe(root, group)).sort((a, b) => a.label.localeCompare(b.label));
+  const models = [...groups.values()].filter(group => group.format === 'gguf' && group.entries.length && !musicComponent(group.entries[0].relativePath)).map(group => describe(root, group));
+  models.push(...localPackages({ root, entries, documents, downloads }));
+  models.sort((a, b) => a.label.localeCompare(b.label));
   return { directory: root, models, warnings };
 }

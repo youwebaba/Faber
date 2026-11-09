@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { transcriptTimeline } from '../renderer/transcript-timeline.mjs';
 import { modelDisplayName } from '../renderer/model-names.mjs';
 import { preferredLocalChoice } from '../renderer/local-picker.mjs';
+import { correctionRequest, liveOutputLabel, promptUsageLabel } from '../renderer/prompt-progress.mjs';
 
 const at = second => `2026-11-03T00:00:${String(second).padStart(2, '0')}.000Z`;
 function fixture() {
@@ -24,6 +25,33 @@ function fixture() {
   ] };
 }
 const order = rows => rows.map(row => row.kind === 'message' ? row.message.id : `${row.kind}:${row.key}`);
+
+test('each completed prompt gets one usage line after its output and before the next prompt', () => {
+  const state = fixture(), [first, second] = state.runs;
+  first.promptUsage = [{requestMessageId:'u',status:'reported',calls:2,inputTokens:200,outputTokens:30,cachedInputTokens:100,reasoningTokens:10}];
+  second.promptUsage = [{requestMessageId:'u2',status:'unknown',calls:1,unknownCalls:1}];
+  second.status = 'running';
+  let rows = transcriptTimeline(state,'c');
+  assert.deepEqual(rows.filter(row => row.kind === 'usage').map(row => row.usage.requestMessageId), ['u']);
+  assert.equal(rows[rows.findIndex(row => row.kind === 'usage') - 1].message.id,'final');
+  const summary = promptUsageLabel(first.promptUsage[0]);
+  assert.equal(summary.text,'Prompt usage · 200 input · 30 output');
+  assert.match(summary.title,/100 cached input \(included\)/);
+  second.status = 'failed';
+  rows = transcriptTimeline(state,'c'); assert.equal(rows.at(-1).kind,'usage');
+  assert.match(promptUsageLabel(rows.at(-1).usage).text,/Usage unavailable.*1 call without provider counts/);
+});
+
+test('live usage belongs to the active model call and steer retries retain their IDs', () => {
+  const call={id:'current',status:'running',metrics:{outputTokensStatus:'pending'}}, run={modelCalls:[call]};
+  const stream={modelCallId:'current',metrics:{generatedOutputTokens:142,outputTokensStatus:'estimated'}};
+  assert.equal(liveOutputLabel(run,stream),'≈ 142 output tokens');
+  assert.equal(liveOutputLabel(run,{...stream,modelCallId:'obsolete'}),'Token count pending');
+  call.status='completed'; assert.equal(liveOutputLabel(run,stream),'');
+  const initial=correctionRequest(undefined,'run','use a blue heading',[{id:'image'}]);
+  assert.equal(correctionRequest(initial,'run','use a blue heading',[{id:'image'}]).correctionId,initial.correctionId);
+  for(const [runId,text,files] of [['next','use a blue heading',[{id:'image'}]],['run','green',[{id:'image'}]],['run','use a blue heading',[]]])assert.notEqual(correctionRequest(initial,runId,text,files).correctionId,initial.correctionId);
+});
 
 test('tool batches interleave with their assistant output and stay before final/continuation replies exactly once', () => {
   const state = fixture(), rows = transcriptTimeline(state, 'c');

@@ -1,4 +1,5 @@
-export const releaseLabel = 'a2.2';
+import { releaseLabel } from '../renderer/release.mjs';
+export { releaseLabel };
 
 export function redactReport(value) {
   return String(value ?? '').slice(0, 24000)

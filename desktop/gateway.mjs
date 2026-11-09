@@ -7,7 +7,7 @@ import path from 'node:path';
 import { streamProvider } from '../core/provider.mjs';
 import { validate, validateSchema } from '../core/registry.mjs';
 import { validateChatImages } from '../core/images.mjs';
-import { cleanUsage } from '../core/usage.mjs';
+import { cleanUsage, closeIterator } from '../core/usage.mjs';
 import { atomicWrite } from './recovery.mjs';
 
 const object = (properties = {}, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -150,10 +150,12 @@ export async function createGateway({ dataDir, runtime, host = {}, emit = () => 
       if (input.stream) { response.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); await frame({ role: 'assistant', content: '' }); }
       await runtime.withExternalProvider({ providerId: config.providerId, model }, async provider => {
         fence(lifetime);
-        const iterator = stream({ provider: { ...provider, ...(input.maxTokens ? { compactionTokens: input.maxTokens } : {}) }, messages: input.messages, tools: input.tools, signal: op.signal, host })[Symbol.asyncIterator]();
+        const transport = new AbortController(), signal = AbortSignal.any([op.signal, transport.signal]);
+        const iterator = stream({ provider: { ...provider, ...(input.maxTokens ? { compactionTokens: input.maxTokens } : {}) }, messages: input.messages, tools: input.tools, signal, host })[Symbol.asyncIterator]();
+        let finished = false;
         try {
           while (true) {
-            const next = await abortable(iterator.next(), op.signal); if (next.done) break; const event = next.value;
+            const next = await abortable(iterator.next(), signal); if (next.done) { finished = true; break; } const event = next.value;
             if (event.type === 'delta' || event.type === 'text') {
               if (typeof event.text !== 'string') throw new Error('Invalid model text');
               const previous = content; content = event.type === 'text' ? event.text : content + event.text;
@@ -171,7 +173,7 @@ export async function createGateway({ dataDir, runtime, host = {}, emit = () => 
             }
           }
         } catch (error) { if (!op.signal.aborted && error.message === 'Model output reached its token limit') finishReason = 'length'; else throw error; }
-        finally { if (op.signal.aborted) void iterator.return?.().catch(() => {}); }
+        finally { if (!finished) { transport.abort(new Error('Provider stream closed')); closeIterator(iterator); } }
       });
       op.signal.throwIfAborted();
       if (Buffer.byteLength(content) + Buffer.byteLength(JSON.stringify(calls)) > outputLimit) throw new Error('Model response exceeds limit');

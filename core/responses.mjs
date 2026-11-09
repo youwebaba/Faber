@@ -37,9 +37,9 @@ export function responsesBody({ provider, messages, tools }) {
   };
 }
 
-export async function* responseEvents(frames, provider, signal) {
+export async function* responseEvents(frames, provider, signal, { nativeSteering = false } = {}) {
   let text = '', arrivalText = '', legacy = false, completed = false, lastProgress = '', summaryKey = '', summary = '', lastVisibleText = '', completedBytes = 0, incompleteSnapshot = false;
-  const items = new Map(), completedItems = new Map(), completedIds = new Set();
+  const items = new Map(), completedItems = new Map(), completedIds = new Set(), argumentsByItem = new Map();
   function* display(nextText) {
     signal?.throwIfAborted();
     if (nextText.length > 1000000) throw new Error('Model response exceeds limit');
@@ -56,8 +56,11 @@ export async function* responseEvents(frames, provider, signal) {
   }
   for await (const frame of frames) {
     signal?.throwIfAborted();
+    if (nativeSteering && frame.type === 'faber.steering') { yield { type: 'steering', id: frame.id, status: frame.status, ...(frame.error ? { error: frame.error } : {}) }; continue; }
+    if (nativeSteering && frame.type === 'response.created') yield { type: 'response_start', responseId: frame.response.id };
     const usage = providerUsage(frame.response?.usage, 'openai-responses');
     if (Object.keys(usage).length) yield { type: 'usage', usage };
+    if (nativeSteering && frame.type === 'response.incomplete' && frame.response?.incomplete_details?.reason === 'steered') { yield { type: 'response_end', responseId: frame.response.id, status: 'interrupted' }; return; }
     if (frame.type === 'response.output_item.added') {
       const phase = frame.item?.type === 'reasoning' ? 'thinking' : frame.item?.type === 'message' ? 'responding' : frame.item?.type === 'function_call' ? 'preparing_tools' : undefined;
       if (phase) yield* progress(phase);
@@ -73,7 +76,16 @@ export async function* responseEvents(frames, provider, signal) {
       if (completedBytes > 8_000_000) throw new Error('Responses output exceeds the supported size');
       completedItems.set(index, structuredClone(item)); completedIds.add(item.id);
     }
-    if (frame.type === 'response.function_call_arguments.delta' || frame.type === 'response.function_call_arguments.done') yield* progress('preparing_tools');
+    if (frame.type === 'response.function_call_arguments.delta' || frame.type === 'response.function_call_arguments.done') {
+      yield* progress('preparing_tools');
+      const key = frame.output_index ?? frame.item_id, done = frame.type.endsWith('.done'), value = done ? frame.arguments : frame.delta;
+      if (typeof value !== 'string') throw new Error('Provider returned invalid streamed tool arguments');
+      const length = done ? value.length : (argumentsByItem.get(key) || 0) + value.length;
+      argumentsByItem.set(key, length);
+      const characters = [...argumentsByItem.values()].reduce((sum, count) => sum + count, 0);
+      if (characters > 8_000_000) throw new Error('Provider tool arguments exceed limit');
+      yield { type: 'output_progress', characters };
+    }
     if (frame.type === 'response.reasoning_text.delta') yield* progress('thinking');
     if (frame.type === 'response.reasoning_summary_text.delta' || frame.type === 'response.reasoning_summary_text.done' || frame.type === 'response.reasoning_summary_part.added' || frame.type === 'response.reasoning_summary_part.done') {
       const key = JSON.stringify([frame.item_id ?? frame.output_index, frame.summary_index]);
@@ -152,8 +164,10 @@ export async function* responseEvents(frames, provider, signal) {
     yield* display(finalText);
     signal?.throwIfAborted();
     yield { type: 'provider_output', data: { kind: 'openai-responses', providerId: provider.id, baseUrl: provider.baseUrl, model: provider.model, items: structuredClone(output) } };
+    if (calls.length) yield { type: 'output_progress', characters: calls.reduce((sum, call) => sum + call.name.length + JSON.stringify(call.args).length, 0) };
     for (const call of calls) { signal?.throwIfAborted(); yield call; }
     signal?.throwIfAborted();
+    if (nativeSteering) yield { type: 'response_end', responseId: response.id, status: 'completed' };
     completed = true; break;
   }
   if (!completed) throw new Error('Responses stream ended before a completed response');

@@ -9,6 +9,8 @@ const pick = (value, keys) => Object.fromEntries(keys.filter(key => Object.hasOw
 const imageRefs = value => list(value).filter(item => typeof item.id === 'string' && item.id.length > 0 && item.id.length <= 2048 && !/[\u0000-\u001f\u007f]/.test(item.id) && ['image/png', 'image/jpeg', 'image/webp'].includes(item.mimeType) && Number.isSafeInteger(item.bytes) && item.bytes > 0 && item.bytes <= 8 * 1024 * 1024).map(item => pick(item, ['id', 'mimeType', 'bytes']));
 const runs = value => list(value).filter(item => id(item.id) && id(item.chatId)).map(item => ({
   ...pick(item, ['id', 'chatId', 'startedAt', 'requestMessageId', 'sourceMessageId', 'modelCallId', 'contextOverflow']), parentRunId: id(item.parentRunId) ? item.parentRunId : null, status: text(item.status), error: text(item.error),
+  promptUsage: list(item.promptUsage).filter(row => id(row.requestMessageId)).map(row => pick(row, ['requestMessageId','status','allocation','sharedWithMessageId','calls','reportedCalls','unknownCalls','partialCalls','estimatedInputTokens','estimatedOutputTokens','inputTokens','outputTokens','cachedInputTokens','reasoningTokens'])),
+  steering: list(item.steering).filter(row => id(row.messageId)).map(row => pick(row,['messageId','status','waitingFor'])),
   modelCalls: list(item.modelCalls).map(call => ({ ...pick(call, ['id', 'modelCallId', 'sourceMessageId', 'requestMessageId', 'metrics', 'usage']), status: text(call.status), phase: text(call.phase), progressSummary: text(call.progressSummary) })),
   toolEvents: list(item.toolEvents).filter(event => id(event.id)).map(event => ({ ...pick(event, ['id', 'toolCallId', 'modelCallId', 'sourceMessageId', 'startedAt', 'args', 'result', 'image']), imageRefs: imageRefs(event.imageRefs), mediaRefs: mediaReferences(event.mediaRefs), name: text(event.name, 'Tool'), status: text(event.status), summary: text(event.summary), error: text(event.error) })),
 }));
@@ -29,7 +31,7 @@ export function remoteWorkspace(value) {
     parentChatId: id(item.parentChatId) ? item.parentChatId : null, archived: item.archived === true, readOnly: item.readOnly === true,
   }));
   return { projects, chats, runs: runs(value.runs), approvals: approvals(value.approvals), streams: streams(value.streams),
-    capabilities: { imageReferences: value.capabilities?.imageReferences === true, mediaReferences: value.capabilities?.mediaReferences === true },
+    capabilities: { imageReferences: value.capabilities?.imageReferences === true, mediaReferences: value.capabilities?.mediaReferences === true, steering: value.capabilities?.steering === true },
     ...pick(value, ['streamSequence', 'stateRevision', 'revision', 'nextOffset']) };
 }
 

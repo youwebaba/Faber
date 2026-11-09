@@ -17,8 +17,12 @@ import { createChatGPTControls } from './chatgpt.mjs';
 import { renderRichContent, renderOutputImages } from './rich-content.mjs';
 import { createContentMenu, createMediaOutputs, resultMedia } from './content-media.mjs';
 import { createWorkspaceControls, pendingUserMessages, hasUnsentDrafts, projectApprovalTitle } from './workspace-controls.mjs';
+import { releaseLabel } from './release.mjs';
+import { correctionLabel, correctionRequest } from './prompt-progress.mjs';
 
 const $ = selector => document.querySelector(selector);
+document.title = `Faber ${releaseLabel}`;
+$('.build-label').textContent = releaseLabel;
 const bridge = window.faber;
 let state = { projects: [], chats: [], runs: [], providers: [], tools: [], extensions: [], approvals: [], settings: {} };
 let selectedChatId = readLocal('faber.chat');
@@ -32,6 +36,7 @@ let modelLabels = [], modelLabelRequest = 0;
 const startupEvents = [], handoffVoiceEvents = [];
 const streams = new Map();
 const drafts = new Map();
+const pendingCorrections = new Map();
 const imageDrafts = createAttachmentDrafts({ onChange: key => { if (key === draftKey()) renderImageDrafts(); scheduleUIRefresh(); } });
 let imageDraftRenderKey;
 const messageNodes = new Map();
@@ -74,7 +79,7 @@ function currentChat() { return state.chats.find(chat => chat.id === selectedCha
 function currentProject() { return state.projects.find(project => project.id === (currentChat()?.projectId || selectedProjectId) && !project.archived); }
 function currentProvider() { return state.providers.find(provider => provider.id === currentChat()?.providerId) || state.providers[0]; }
 function draftKey() { return selectedChatId || `new:${selectedProjectId || ''}`; }
-function updateSendButton() { const images = imageDrafts.get(draftKey()); $('#send-message').disabled = sending || images.some(item => item.pending) || (!$('#prompt').value.trim() && !images.length); }
+function updateSendButton() { const images = imageDrafts.get(draftKey()); $('#steer-message').disabled = $('#send-message').disabled = sending || images.some(item => item.pending) || (!$('#prompt').value.trim() && !images.length); }
 function renderImageDrafts() {
   const key = draftKey(); const items = imageDrafts.get(key); const root = $('#image-drafts');
   const signature = JSON.stringify([key, items.map(item => [item.id, item.pending])]);
@@ -109,7 +114,7 @@ function acceptState(next) {
   const previousKey = draftKey();
   const providersChanged = JSON.stringify(state.providers) !== JSON.stringify(next.providers);
   const removed = [...state.chats.filter(chat => !next.chats.some(item => item.id === chat.id)).map(chat => chat.id), ...state.projects.filter(project => !next.projects.some(item => item.id === project.id)).map(project => `new:${project.id}`)];
-  for (const key of removed) { drafts.delete(key); imageDrafts.remove(key, imageDrafts.get(key).map(item => item.id)); }
+  for (const key of removed) { drafts.delete(key); pendingCorrections.delete(key); imageDrafts.remove(key, imageDrafts.get(key).map(item => item.id)); }
   state = next;
   if (providersChanged) { modelLabels = []; ++modelLabelRequest; if (!bootstrapping) void refreshModelLabels(); }
   if (!currentChat()) selectedChatId = null;
@@ -145,8 +150,10 @@ function render() {
   browserPanel.setContext();
   renderModelLabel();
   $('#stop-run').hidden = !isActive(run);
-  $('#send-message').hidden = false; $('#send-message').title = isActive(run) ? 'Queue a follow-up for the next safe point' : 'Send message';
-  $('#send-message').setAttribute('aria-label', isActive(run) ? 'Send follow-up' : 'Send message');
+  $('#steer-message').hidden = !isActive(run);
+  $('#send-message').hidden = false; $('#send-message').title = isActive(run) ? 'Queue follow-up at the next safe point (Enter)' : 'Send message';
+  $('#send-message').setAttribute('aria-label', isActive(run) ? 'Queue follow-up' : 'Send message');
+  $('#send-message span').hidden = !isActive(run);
   renderImageDrafts();
   $('#permission-caption').textContent = chat?.grants?.length ? `${chat.grants.length} chat permission${chat.grants.length === 1 ? '' : 's'} enabled` : 'Actions ask for approval';
   renderNavigation(); renderTranscript(); renderActivity(); renderApprovals(); renderVoice(); renderComposerControls();
@@ -200,6 +207,7 @@ function renderTranscript() {
   const identity = chat?.id || `new:${currentProject()?.id || ''}`;
   if (identity !== transcriptChatId) { mediaOutputs.clear(); transcript.replaceChildren(); messageNodes.clear(); streamNodes.clear(); outputImageNodes.clear(); runActivity.reset(); transcriptChatId = identity; }
   const rows = [...transcriptTimeline(state, chat?.id, streams), ...pending.map(message => ({ kind: 'message', key: message.id, message }))], nodes = [];
+  const corrections = new Map(state.runs.filter(run => run.chatId === chat?.id).flatMap(run => (run.steering || []).map(item => [item.messageId, item])));
   if (messages.length) transcript.querySelector('.welcome')?.remove();
   if (!messages.length && !transcript.querySelector('.welcome')) {
     const welcome = el('div', 'welcome'); welcome.append(wordmark('welcome-wordmark'), el('h1', '', currentProject() ? 'What are we working on?' : 'Make room for your next idea.'));
@@ -216,6 +224,7 @@ function renderTranscript() {
   const ids = new Set(messages.map(message => message.id));
   for (const [id, entry] of messageNodes) if (!ids.has(id)) { entry.node.remove(); messageNodes.delete(id); }
   for (const row of rows) {
+    if (row.kind === 'usage') { nodes.push(runActivity.promptUsage(row.key, row.usage)); continue; }
     if (row.kind === 'activity') {
       nodes.push(runActivity.get(state, row.activity, streams));
       for (const branch of [{ run: row.activity.run, events: row.activity.events }, ...row.activity.childRuns.map(run => ({ run, events: run.toolEvents || [] }))]) {
@@ -232,11 +241,12 @@ function renderTranscript() {
     }
     const message = row.message;
     let entry = messageNodes.get(message.id);
-    if (!sameMessage(entry?.message, message)) {
-      const node = createMessageNode(message);
+    const correction = correctionLabel(corrections.get(message.id));
+    if (!sameMessage(entry?.message, message) || entry.correction !== correction) {
+      const node = createMessageNode(message, correction);
       if (entry?.node.open) node.open = true;
       if (entry?.node.querySelector('details')?.open && node.querySelector('details')) node.querySelector('details').open = true;
-      entry = { node, message }; messageNodes.set(message.id, entry);
+      entry = { node, message, correction }; messageNodes.set(message.id, entry);
     }
     nodes.push(entry.node);
   }
@@ -254,7 +264,7 @@ function renderTranscript() {
   mediaOutputs.prune();
   });
 }
-function createMessageNode(message) {
+function createMessageNode(message, correction = '') {
   if (message.role === 'tool') {
     const article = el('article', 'tool-output'); article.dataset.messageId = message.id;
     const details = el('details', 'tool-message'); details.append(el('summary', '', message.toolName || 'Tool result')); appendResult(details, message.content, message.image, false); article.append(details);
@@ -263,7 +273,8 @@ function createMessageNode(message) {
   const article = el('article', `message ${message.fromChatId ? 'agent-message' : message.role}`); article.dataset.messageId = message.id;
   const author = message.fromChatId ? `Agent: ${state.chats.find(chat => chat.id === message.fromChatId)?.title || 'another chat'}` : message.role === 'user' ? 'You' : 'Faber';
   const heading = el('div', 'message-heading', author);
-  if (message.status === 'pending') { article.classList.add('pending-followup'); heading.append(el('span', 'pending-followup-label', 'Pending follow-up')); article.title = 'Kept in the queue until a run reaches a safe point between model/tool steps. A running command is not interrupted.'; }
+  if (correction) heading.append(el('span', 'followup-label', correction));
+  else if (message.status === 'pending') { article.classList.add('pending-followup'); heading.append(el('span', 'pending-followup-label', 'Pending follow-up')); article.title = 'Kept in the queue until a run reaches a safe point between model/tool steps. A running command is not interrupted.'; }
   else if (message.steering) heading.append(el('span', 'followup-label', 'Follow-up'));
   if (message.createdAt) { const time = el('time', '', new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })); time.dateTime = message.createdAt; heading.append(time); }
   article.append(heading);
@@ -365,18 +376,26 @@ async function newChat() {
   if (!currentProject()) { showProjectForm(); return; }
   const version = navigationVersion, chat = await request('chat.create', { projectId: currentProject().id }); await refresh(); if (version === navigationVersion && !remoteConnections.workspace.isOpen()) selectChat(chat.id); return chat;
 }
-async function sendText(text, withImages = false) {
+async function sendText(text, withImages = false, steer = false) {
   const sourceDraftKey = draftKey(); const attachments = withImages ? [...imageDrafts.get(sourceDraftKey)] : [];
   if (attachments.some(item => item.pending)) { notify('Wait for the attachments to finish reading.'); return; }
   if ((!text.trim() && !attachments.length) || sending) return;
   if (!currentProject()) { showProjectForm(); return; }
+  const run = steer ? latestRun(state, currentChat()?.id) : undefined;
+  if (steer && !isActive(run)) { notify('The task has finished. Send the draft as a new message.'); return; }
   sending = true; render();
   drafts.set(sourceDraftKey, $('#prompt').value);
   try {
     const target = currentChat() || await request('chat.create', { projectId: currentProject().id });
     if (!target) return;
     const images = attachments.filter(item => item.image).map(item => item.image);
-    await request('chat.send', { chatId: target.id, text: attachmentMessage(text, attachments), ...(images.length ? { images } : {}) });
+    const params = { chatId: target.id, text: attachmentMessage(text, attachments), ...(images.length ? { images } : {}) };
+    if (steer) {
+      const correction = correctionRequest(pendingCorrections.get(sourceDraftKey), run.id, params.text, attachments);
+      pendingCorrections.set(sourceDraftKey, correction);
+      await request('chat.steer', { ...params, runId: run.id, correctionId: correction.correctionId });
+    } else await request('chat.send', params);
+    pendingCorrections.delete(sourceDraftKey);
     if (draftKey() === sourceDraftKey && $('#prompt').value === text) $('#prompt').value = '';
     if (drafts.get(sourceDraftKey) === text) drafts.delete(sourceDraftKey);
     imageDrafts.remove(sourceDraftKey, attachments.map(item => item.id));
@@ -671,6 +690,7 @@ $('#prompt').addEventListener('compositionstart', () => { composing = true; });
 $('#prompt').addEventListener('compositionend', () => { composing = false; scheduleUIRefresh(); });
 $('#dismiss-notice').addEventListener('click', () => { $('#notice').hidden = true; });
 $('#composer').addEventListener('submit', event => { event.preventDefault(); act(() => sendText($('#prompt').value, true)); });
+$('#steer-message').addEventListener('click', () => act(() => sendText($('#prompt').value, true, true)));
 $('#prompt').addEventListener('input', () => { drafts.set(draftKey(), $('#prompt').value); updateSendButton(); chatControls.render(); $('#prompt').style.height = 'auto'; $('#prompt').style.height = `${Math.min(180, $('#prompt').scrollHeight)}px`; });
 $('#prompt').addEventListener('paste', event => {
   const files = [...(event.clipboardData?.items || [])].filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean);

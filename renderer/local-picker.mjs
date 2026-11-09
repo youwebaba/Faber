@@ -12,7 +12,7 @@ export function localModelLabel(item) {
   return label.length > 48 ? `${label.slice(0, 28)}…${label.slice(-19)}` : label;
 }
 export function localChoices(state, provider, configuredModel = '') {
-  const choices = (state?.models || []).map(item => ({ ...item, value: `download:${item.id}`, source: 'download', group: 'Downloads', disabled: !item.available, label: `${localModelLabel(item)}${Number.isFinite(item.sizeBytes) ? ` · ${formatBytes(item.sizeBytes)}` : ''}${!item.available ? ' — Unavailable' : ''}` }));
+  const choices = (state?.models || []).filter(item => item.format !== 'minimax-music3').map(item => ({ ...item, value: `download:${item.id}`, source: 'download', group: 'Downloads', disabled: !item.available, label: `${localModelLabel(item)}${Number.isFinite(item.sizeBytes) ? ` · ${formatBytes(item.sizeBytes)}` : ''}${!item.available ? ' — Unavailable' : ''}` }));
   const process = state?.process;
   if (process?.modelId && ['loading', 'ready', 'stopping'].includes(process.status)) {
     const running = choices.find(item => item.id === process.modelId);

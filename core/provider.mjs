@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { responsesBody, responseEvents } from './responses.mjs';
 import { validateChatImages } from './images.mjs';
 import { providerUsage } from './usage.mjs';
+import { streamResponsesWebSocket, supportsNativeSteering } from './responses-websocket.mjs';
 
 export function validateBaseUrl(value) {
   const url = new URL(value);
@@ -102,7 +103,7 @@ async function requestError(response, secret) {
   return new Error(`Provider HTTP ${response.status}: ${redact(message || 'Request rejected', secret)}`);
 }
 
-export async function* streamProvider({ provider, messages, tools, signal, host = {}, fetchImpl = fetch }) {
+export async function* streamProvider({ provider, messages, tools, signal, host = {}, fetchImpl = fetch, onSteer, WebSocketImpl }) {
   const ollama = provider.kind === 'ollama';
   const responses = provider.kind === 'openai-responses';
   validateCredentialTransport(provider.baseUrl, provider.hasKey);
@@ -110,10 +111,16 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
   if (account && (provider.kind !== 'openai-responses' || provider.baseUrl !== 'https://api.openai.com/v1')) throw new Error('ChatGPT account credentials can only be used with the official Responses API');
   const secret = account ? await host.getChatGPTToken?.(provider.id, signal) : provider.hasKey ? await host.getSecret?.(provider.id) : undefined;
   if (provider.hasKey && !secret) throw new Error('Provider credential is unavailable; save the API key again');
+  if (supportsNativeSteering(provider) && fetchImpl === fetch) {
+    try { yield* streamResponsesWebSocket({ provider, messages, tools, signal, secret, onSteer, WebSocketImpl }); }
+    catch (error) { throw new Error(redact(error.message, secret), { cause: error }); }
+    return;
+  }
   const connection = new AbortController();
   const timer = setTimeout(() => connection.abort(new Error('Provider connection timed out')), 30000);
   const requestSignal = signal ? AbortSignal.any([signal, connection.signal]) : connection.signal;
   let response;
+  try {
   try { response = await fetchImpl(`${validateBaseUrl(provider.baseUrl)}${ollama ? '/api/chat' : responses ? '/responses' : '/chat/completions'}`, {
     method: 'POST', signal: requestSignal, redirect: 'error',
     headers: { 'Content-Type': 'application/json', ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
@@ -141,6 +148,7 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
     if (ollama) {
       if (frame.message?.content) yield { type: 'delta', text: frame.message.content };
       for (const call of frame.message?.tool_calls || []) {
+        yield { type: 'output_progress', characters: JSON.stringify(call.function?.arguments || {}).length };
         yield { type: 'tool', id: call.id || randomUUID(), name: call.function.name, args: call.function.arguments };
       }
       if (frame.done && frame.done_reason === 'length') completionError = new Error('Model output reached its token limit');
@@ -154,6 +162,8 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
         current.name += call.function?.name || '';
         current.arguments += call.function?.arguments || '';
         calls.set(call.index, current);
+        if ([...calls.values()].reduce((sum, item) => sum + item.arguments.length + item.name.length, 0) > 8_000_000) throw new Error('Provider tool arguments exceed limit');
+        yield { type: 'output_progress', characters: [...calls.values()].reduce((sum, item) => sum + item.arguments.length + item.name.length, 0) };
       }
       // The optional usage-only chunk follows finish_reason, including length.
       if (choice?.finish_reason === 'length') completionError = new Error('Model output reached its token limit');
@@ -167,6 +177,7 @@ export async function* streamProvider({ provider, messages, tools, signal, host 
     try { args = JSON.parse(call.arguments || '{}'); } catch { throw new Error(`Invalid JSON arguments for tool ${call.name}`); }
     yield { type: 'tool', id: call.id || randomUUID(), name: call.name, args };
   }
+  } finally { clearTimeout(timer); connection.abort(new Error('Provider stream closed')); }
 }
 
 export async function testProvider(provider, host = {}, fetchImpl = fetch) {

@@ -1,4 +1,5 @@
 import { displayText, isActive, statusLabel } from './ui-helpers.mjs';
+import { liveOutputLabel, promptUsageLabel } from './prompt-progress.mjs';
 
 export function toolActivityLabel(event) {
   const args = event.args || {}, detail = args.command ?? args.cmd ?? args.path ?? args.url ?? args.task ?? event.summary;
@@ -19,7 +20,7 @@ export function modelProgress(run, stream) {
   return run.toolEvents?.some(isActive) ? { label: 'Running tools…', title: '', pulse: false } : { label: 'Thinking…', title: 'Awaiting the model response.', pulse: true };
 }
 export function createRunActivity({ el, button, appendResult, selectChat, resolveApproval, bindContent }) {
-  const cards = new Map(), tools = new Map(), expanded = new Set();
+  const cards = new Map(), tools = new Map(), summaries = new Map(), expanded = new Set();
   function disclosure(key, className) {
     const node = el('details', className); node.open = expanded.has(key);
     node.addEventListener('toggle', () => { node.open ? expanded.add(key) : expanded.delete(key); }); return node;
@@ -40,12 +41,22 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
     return cached.node;
   }
   return {
+    promptUsage(key, row) {
+      let node = summaries.get(key);
+      if (!node) { node = el('p', 'prompt-usage hint'); summaries.set(key, node); }
+      const label = promptUsageLabel(row);
+      if (node.textContent !== label.text) node.textContent = label.text;
+      node.title = label.title;
+      return node;
+    },
     get(state, activity, streams = new Map()) {
       let cached = cards.get(activity.id);
       const { run, events, childRuns, active, approvals } = activity;
       const branches = [{ run, events, primary: true }, ...childRuns.map(run => ({ run, events: run.toolEvents || [], title: state.chats.find(chat => chat.id === run.chatId)?.title || 'Child agent' }))];
       const progress = modelProgress(isActive(run) ? run : childRuns.find(isActive), streams.get(isActive(run) ? run.id : childRuns.find(isActive)?.id));
-      const signature = JSON.stringify([active, activity.last, approvals, progress, branches.map(item => [item.run.id, item.run.status, item.run.error, modelProgress(item.run, streams.get(item.run.id)), item.events, item.title])]);
+      const activeBranch = branches.find(item => isActive(item.run) && (!item.primary || activity.last));
+      const liveTokens = active && activeBranch ? liveOutputLabel(activeBranch.run, streams.get(activeBranch.run.id)) : '';
+      const signature = JSON.stringify([active, activity.last, approvals, progress, liveTokens, branches.map(item => [item.run.id, item.run.status, item.run.error, modelProgress(item.run, streams.get(item.run.id)), item.events, item.title])]);
       if (!cached) {
         const node = disclosure(`activity:${activity.id}`, 'run-activity'); node.dataset.runId = run.id; node.dataset.activityId = activity.id;
         const summary = el('summary'), label = el('span', 'run-activity-label'); label.setAttribute('role', 'status'); summary.append(label, el('span', 'run-activity-count')); node.append(summary, el('div', 'run-activity-tree'));
@@ -59,7 +70,7 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
       const label = node.querySelector('.run-activity-label'); label.textContent = active ? approvals.length ? 'Waiting for approval…' : progress.label : `Activity · ${statusLabel(status)}`;
       label.classList.toggle('thinking-pulse', active && !approvals.length && progress.pulse); label.title = active ? progress.title : '';
       const count = branches.reduce((total, item) => total + item.events.length, 0);
-      node.querySelector('.run-activity-count').textContent = `${count} tool call${count === 1 ? '' : 's'}`;
+      node.querySelector('.run-activity-count').textContent = [liveTokens, `${count} tool call${count === 1 ? '' : 's'}`].filter(Boolean).join(' · ');
       const tree = el('div', 'run-activity-tree');
       for (const item of branches) {
         const branch = el('section', `run-activity-branch${item.primary ? '' : ' child'}`); branch.dataset.agentRunId = item.run.id;
@@ -77,6 +88,6 @@ export function createRunActivity({ el, button, appendResult, selectChat, resolv
       if (focus?.isConnected) focus.focus({ preventScroll: true });
       return node;
     },
-    reset() { for (const [key, entry] of cards) { if (entry.node.open) expanded.add(`activity:${key}`); } for (const [key, entry] of tools) if (entry.node.open) expanded.add(`tool:${key}`); cards.clear(); tools.clear(); },
+    reset() { for (const [key, entry] of cards) { if (entry.node.open) expanded.add(`activity:${key}`); } for (const [key, entry] of tools) if (entry.node.open) expanded.add(`tool:${key}`); cards.clear(); tools.clear(); summaries.clear(); },
   };
 }

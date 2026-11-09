@@ -43,7 +43,7 @@ test('malformed sizes/types/dimensions and inspection budgets leave unknowns wit
 });
 
 test('cached publisher metadata supplies offline fallback only for matched completed files, with explicit provenance',async t=>{
-  const {directory,write}=await fixture(t);await write('model.safetensors','synthetic model');const model=(await scanLocalModels({directory})).models[0];
+  const {directory,write}=await fixture(t);await write('model.safetensors','synthetic model');await write('config.json','{}');const model=(await scanLocalModels({directory})).models[0];
   const job={status:'completed',directory,modelMetadata:{parameters:1234,quantization:null},files:[{path:'model.safetensors',status:'completed'}]};
   const details=await localModelDetails({directory,model,downloads:[job]});assert.equal(details.parameters,1234);assert.equal(details.metadataSource,'cached-huggingface');assert.match(details.parameterSource,/not rehashed/);assert.equal(details.vram,null);
   assert.equal((await localModelDetails({directory,model,downloads:[{...job,status:'failed'}]})).parameters,null);

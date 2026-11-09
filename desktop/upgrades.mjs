@@ -4,12 +4,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {containedPath} from '../tools/files.mjs';
 import {runProcess} from '../tools/process.mjs';
-import {validUpgradePath,atomicWrite,writeRecoveryRecord,readRecoveryRecord,restoreUpgrade} from './recovery.mjs';
+import {validUpgradePath,atomicWrite,writeRecoveryRecord,readRecoveryRecord,restoreUpgrade,recoveryProfilePath} from './recovery.mjs';
 import {buildNative} from '../native/build.mjs';
 import {parseNativeManifest,verifyNativeRuntime} from '../native/integrity.mjs';
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
-const sourceFolders=['core','desktop','renderer','tools','extensions','model-hub','local-models','bundled-addons','test','native','scripts'];
+const sourceFolders=['core','desktop','renderer','tools','extensions','model-hub','local-models','local-music','bundled-addons','test','native','scripts'];
 const nativeManifest='native/runtime.json';
+const upgradeId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const scratchName=name=>name==='stage'||(name.startsWith('native-output-')&&upgradeId.test(name.slice(14)));
 async function readOrNull(file){try{return await fs.readFile(file);}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function publishNativeBinary(root,{manifest,binaryBytes}){
   const target=await containedPath(root,`native/${manifest.binary}`,{missing:true}),temporary=`${target}.${crypto.randomUUID()}.tmp`;
@@ -21,11 +23,31 @@ async function publishNativeBinary(root,{manifest,binaryBytes}){
 }
 export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nativeBuilder=buildNative,onApplied}){
   const stages=new Map();
+  async function removeScratch(id,name){
+    if(!upgradeId.test(id)||!scratchName(name))throw new Error('Invalid upgrade scratch directory');
+    const dir=await recoveryProfilePath(dataDir,`upgrades/${id}/${name}`);
+    await fs.rm(dir,{recursive:true,force:true,maxRetries:2});
+  }
+  async function expireStages(){
+    let entries;
+    try{
+      const root=await recoveryProfilePath(dataDir,'upgrades');
+      entries=await fs.readdir(root,{withFileTypes:true});
+    }catch(error){if(error.code==='ENOENT')return;throw error;}
+    for(const entry of entries){
+      if(!entry.isDirectory()||!upgradeId.test(entry.name)||stages.has(entry.name))continue;
+      const dir=await recoveryProfilePath(dataDir,`upgrades/${entry.name}`);
+      for(const child of await fs.readdir(dir,{withFileTypes:true})){
+        if(child.isDirectory()&&scratchName(child.name))await removeScratch(entry.name,child.name);
+      }
+    }
+  }
   // Capture bytes at construction, before any asynchronous staging or source edits.
   // Renderer/test changes do not replace modules already loaded by the host.
   function serverSnapshot(){
     const result=new Map();
     function visit(relative){
+      if(relative==='native/target')return;
       const file=path.join(sourceDir,relative);let stat;
       try{stat=lstatSync(file);}catch(error){if(error.code==='ENOENT')return;throw error;}
       if(stat.isSymbolicLink())throw new Error(`Symlinks are not permitted in upgrade source: ${relative}`);
@@ -33,7 +55,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       if(stat.isDirectory())for(const name of readdirSync(file).sort())visit(`${relative}/${name}`);
       else result.set(relative,hash(readFileSync(file)));
     }
-    for(const name of ['core','desktop','tools','extensions','model-hub','local-models','bundled-addons','native','package.json','package-lock.json'])visit(name);
+    for(const name of ['core','desktop','tools','extensions','model-hub','local-models','local-music','bundled-addons','native','package.json','package-lock.json'])visit(name);
     if(result.has(nativeManifest))visit(`native/${parseNativeManifest(JSON.parse(readFileSync(path.join(sourceDir,nativeManifest),'utf8'))).binary}`);
     return result;
   }
@@ -61,7 +83,7 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
   }
   async function sourceInventory(){
     const native=await readOrNull(path.join(sourceDir,nativeManifest)),active=native?parseNativeManifest(JSON.parse(native)).binary:null;
-    const files=[];for(const folder of sourceFolders){try{files.push(...(await inventory(path.join(sourceDir,folder))).filter(p=>folder!=='native'||!p.startsWith('bin/')||p===active).map(p=>`${folder}/${p}`));}catch(error){if(error.code!=='ENOENT')throw error;}}
+    const files=[];for(const folder of sourceFolders){try{files.push(...(await inventory(path.join(sourceDir,folder),'',folder==='native')).filter(p=>folder!=='native'||!p.startsWith('bin/')||p===active).map(p=>`${folder}/${p}`));}catch(error){if(error.code!=='ENOENT')throw error;}}
     for(const name of ['package.json','package-lock.json'])if(await readOrNull(path.join(sourceDir,name))!==null)files.push(name);
     return files.sort();
   }
@@ -99,15 +121,21 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
     if(actual.length!==stage.snapshot.size)throw new Error('Stage contains unverified files');
     if(stage.hasNative){await verifyNativeRuntime(sourceDir);await verifyNativeRuntime(stage.directory,{verifySource:!stage.needsNative||stage.nativeBuilt});}
   }
-  async function inventory(root,prefix=''){
+  async function inventory(root,prefix='',skipCargoTarget=false){
     let files=[];
     for(const entry of await fs.readdir(path.join(root,prefix),{withFileTypes:true})){
       const relative=prefix?`${prefix}/${entry.name}`:entry.name;
+      if(skipCargoTarget&&relative==='target')continue;
       if(entry.isSymbolicLink())throw new Error('Symlinks are not permitted in upgrade source');
-      if(entry.isDirectory())files.push(...await inventory(root,relative));else files.push(relative);
+      if(entry.isDirectory())files.push(...await inventory(root,relative,skipCargoTarget));else files.push(relative);
     }return files.sort();
   }
   const api={
+    expireStages,
+    async close(){
+      stages.clear();
+      await expireStages();
+    },
     backupCore(reason='shell',signal){return coreSnapshot(reason,signal);},
     async stage(changes,signal){
       signal?.throwIfAborted();
@@ -120,38 +148,49 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       const needsNative=changes.some(file=>file.path.startsWith('native/src/'));
       if(needsNative&&!hasNative)throw new Error('Compiled upgrades require the installed native runtime and locked build sources');
       const baseline=new Map();for(const relative of await sourceInventory())baseline.set(relative,hash(await fs.readFile(path.join(sourceDir,relative))));
-      await fs.mkdir(directory,{recursive:true});
-      for(const folder of sourceFolders){
-        const from=path.join(sourceDir,folder);
-        try{await fs.cp(from,path.join(directory,folder),{recursive:true,filter:async file=>{if((await fs.lstat(file)).isSymbolicLink())throw new Error('Upgrade source cannot contain symlinks');return file!==path.join(sourceDir,'native','bin');}});}catch(e){if(e.code!=='ENOENT')throw e;}
-      }
-      if(native)await publishNativeBinary(directory,native);
-      const files=[];
-      for(const item of changes){
-        signal?.throwIfAborted();
-        const target=await containedPath(sourceDir,item.path,{missing:true}),original=await readOrNull(target);
-        const staged=await containedPath(directory,item.path,{missing:true});await fs.mkdir(path.dirname(staged),{recursive:true});await fs.writeFile(staged,item.content);
-        files.push({path:item.path,digest:hash(item.content),base:original===null?null:hash(original)});
-      }
-      const snapshot=new Map();for(const relative of await inventory(directory))snapshot.set(relative,hash(await fs.readFile(path.join(directory,relative))));
-      signal?.throwIfAborted();stages.set(id,{id,directory,files,snapshot,baseline,hasNative,needsNative,nativeBuilt:false,verified:false});
-      return {id,files:files.map(f=>({path:f.path,sha256:f.digest})),status:'staged',message:'Staged only. Verify, then explicitly apply. Stages expire when this app closes.'};
+      await fs.mkdir(dataDir,{recursive:true});
+      await recoveryProfilePath(dataDir,`upgrades/${id}/stage`);
+      try{
+        await fs.mkdir(directory,{recursive:true});
+        for(const folder of sourceFolders){
+          const from=path.join(sourceDir,folder);
+          try{await fs.cp(from,path.join(directory,folder),{recursive:true,filter:async file=>{
+            if(file===path.join(sourceDir,'native','target'))return false;
+            if((await fs.lstat(file)).isSymbolicLink())throw new Error('Upgrade source cannot contain symlinks');
+            return file!==path.join(sourceDir,'native','bin');
+          }});}catch(error){if(error.code!=='ENOENT')throw error;}
+        }
+        for(const name of ['package.json','package-lock.json'])if(baseline.has(name))await fs.copyFile(path.join(sourceDir,name),path.join(directory,name));
+        if(native)await publishNativeBinary(directory,native);
+        const files=[];
+        for(const item of changes){
+          signal?.throwIfAborted();
+          const target=await containedPath(sourceDir,item.path,{missing:true}),original=await readOrNull(target);
+          const staged=await containedPath(directory,item.path,{missing:true});await fs.mkdir(path.dirname(staged),{recursive:true});await fs.writeFile(staged,item.content);
+          files.push({path:item.path,digest:hash(item.content),base:original===null?null:hash(original)});
+        }
+        const snapshot=new Map();for(const relative of await inventory(directory))snapshot.set(relative,hash(await fs.readFile(path.join(directory,relative))));
+        signal?.throwIfAborted();stages.set(id,{id,directory,files,snapshot,baseline,hasNative,needsNative,nativeBuilt:false,verified:false});
+        return {id,files:files.map(f=>({path:f.path,sha256:f.digest})),status:'staged',message:'Staged only. Verify, then explicitly apply. Stages expire when this app closes.'};
+      }catch(error){await removeScratch(id,'stage');throw error;}
     },
     async verify(id,signal){
       const stage=stages.get(id);if(!stage)throw new Error('Unknown stage');stage.verified=false;await verifyIntegrity(stage);
       let compiled;
       if(stage.needsNative&&!stage.nativeBuilt){
         const outputDir=path.join(path.dirname(stage.directory),`native-output-${crypto.randomUUID()}`);
-        compiled=await nativeBuilder({sourceDir:stage.directory,outputDir,signal});
-        await verifyIntegrity(stage);
-        const native=await verifyNativeRuntime(stage.directory,{runtimeDir:outputDir});
-        signal?.throwIfAborted();await publishNativeBinary(stage.directory,native);
-        await atomicWrite(path.join(stage.directory,nativeManifest),native.manifestBytes);
-        stage.snapshot.set(`native/${native.manifest.binary}`,native.manifest.sha256);
-        stage.snapshot.set(nativeManifest,hash(native.manifestBytes));
-        stage.files.push({path:nativeManifest,digest:hash(native.manifestBytes),base:stage.baseline.get(nativeManifest)});
-        stage.nativeBuilt=true;
-        await verifyIntegrity(stage);
+        try{
+          compiled=await nativeBuilder({sourceDir:stage.directory,outputDir,signal});
+          await verifyIntegrity(stage);
+          const native=await verifyNativeRuntime(stage.directory,{runtimeDir:outputDir});
+          signal?.throwIfAborted();await publishNativeBinary(stage.directory,native);
+          await atomicWrite(path.join(stage.directory,nativeManifest),native.manifestBytes);
+          stage.snapshot.set(`native/${native.manifest.binary}`,native.manifest.sha256);
+          stage.snapshot.set(nativeManifest,hash(native.manifestBytes));
+          stage.files.push({path:nativeManifest,digest:hash(native.manifestBytes),base:stage.baseline.get(nativeManifest)});
+          stage.nativeBuilt=true;
+          await verifyIntegrity(stage);
+        }finally{await removeScratch(id,path.basename(outputDir));}
       }
       const tests=[...stage.snapshot.keys()].filter(p=>p.startsWith('test/')&&p.endsWith('.test.mjs'));
       if(!tests.length)throw new Error('Upgrade needs tests');
@@ -174,7 +213,10 @@ export function createUpgrades({sourceDir,dataDir,confirm,runner=runProcess,nati
       signal?.throwIfAborted();await writeRecoveryRecord(dataDir,record);
       try{for(const file of stage.files){signal?.throwIfAborted();const target=await containedPath(sourceDir,file.path,{missing:true});const bytes=await fs.readFile(path.join(stage.directory,file.path));if(hash(bytes)!==file.digest)throw new Error(`Stage changed during activation: ${file.path}`);signal?.throwIfAborted();await atomicWrite(target,bytes);}signal?.throwIfAborted();await writeRecoveryRecord(dataDir,{...record,status:'applied'});}
       catch(error){await restoreUpgrade({dataDir,sourceDir,record});throw error;}
-      stages.delete(id);return {id,applied:true,backupDir,...await activationResult(id,stage.files.map(f=>f.path))};
+      stages.delete(id);
+      let cleanupWarning;
+      try{await removeScratch(id,'stage');}catch(error){cleanupWarning=error.message;}
+      return {id,applied:true,backupDir,...(cleanupWarning?{cleanupWarning}:{}),...await activationResult(id,stage.files.map(f=>f.path))};
     },
     async rollback(signal){
       signal?.throwIfAborted();const record=await readRecoveryRecord(dataDir,sourceDir);
