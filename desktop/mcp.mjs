@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
+import manifest from '../package.json' with {type:'json'};
 import sdk from './vendor/mcp-client.cjs';
 import {validate,checkTool} from '../core/registry.mjs';
 import {atomicWrite} from './recovery.mjs';
@@ -89,7 +90,7 @@ export async function createMcp({dataDir,runtime,host,emit=()=>{},safeMode=false
     for(const row of saved.connections){
       const {enabled,grants,...config}=row;validate(config,endpoint);checkEndpoint(config);
       if(Object.hasOwn(config,'credential')||typeof enabled!=='boolean'||!Array.isArray(grants)||grants.length>256||!config.id||entries.has(config.id))throw new Error('Invalid MCP connection record');
-      for(const g of grants)validate(g,object({name:string(256),fingerprint:string(64),effect:{enum:['read','write']}}));
+      for(const g of grants)validate(g,object({name:string(256),fingerprint:string(64),effect:{enum:['read','write']},revision:string(64)},['name','fingerprint','effect']));
       entries.set(config.id,row);
     }
   }
@@ -108,7 +109,7 @@ export async function createMcp({dataDir,runtime,host,emit=()=>{},safeMode=false
       for(const grant of record.grants){
         const row=session.tools.get(grant.name);if(!row?.qualifiedName||row.fingerprint!==grant.fingerprint)continue;
         const execute=async(args,ctx)=>{
-          if(sessions.get(id)!==session||!session.ready||ctx.project.id!==record.projectId||!entries.get(id)?.grants.some(g=>g.name===row.name&&g.fingerprint===row.fingerprint&&g.effect===grant.effect)||session.tools.get(row.name)?.fingerprint!==row.fingerprint)throw new Error('The project MCP tool or its grant changed.');
+          if(sessions.get(id)!==session||!session.ready||ctx.project.id!==record.projectId||!entries.get(id)?.grants.some(g=>g.name===row.name&&g.fingerprint===row.fingerprint&&g.effect===grant.effect&&g.revision===grant.revision)||session.tools.get(row.name)?.fingerprint!==row.fingerprint)throw new Error('The project MCP tool or its grant changed.');
           if(Buffer.byteLength(JSON.stringify(args))>LIMIT)throw new Error('MCP tool arguments exceed limit.');
           validate(args,row.parameters);
           const controller=new AbortController(),active={name:row.name,fingerprint:row.fingerprint,controller};
@@ -130,7 +131,7 @@ export async function createMcp({dataDir,runtime,host,emit=()=>{},safeMode=false
             throw error;
           }finally{session.active.delete(active);}
         };
-        defs.push({name:row.qualifiedName,description:('External MCP tool from '+record.name+'. '+row.description).slice(0,1000),permission:'network',projectId:record.projectId,alwaysAsk:grant.effect==='write',parameters:row.parameters,execute});
+        defs.push({name:row.qualifiedName,description:('External MCP tool from '+record.name+'. '+row.description).slice(0,1000),permission:'network',projectId:record.projectId,mcpGrant:{fingerprint:row.fingerprint,revision:grant.revision??row.fingerprint,effect:grant.effect},alwaysAsk:grant.effect==='write',parameters:row.parameters,execute});
       }
     }
     runtime.replaceConnectorTools(defs);changed();
@@ -154,7 +155,7 @@ export async function createMcp({dataDir,runtime,host,emit=()=>{},safeMode=false
     if(!project)throw new Error('The selected project is not available.');
     const secret=await host.getSecret('mcp:'+record.id);
     const session={ready:false,tools:new Map(),active:new Set()};
-    const client=new Client({name:'Faber',version:'2.8.0'},{capabilities:{},listMaxPages:8,listChanged:{tools:{onChanged:(error,tools)=>{
+    const client=new Client({name:'Faber',version:manifest.version},{capabilities:{},listMaxPages:8,listChanged:{tools:{onChanged:(error,tools)=>{
       if(sessions.get(record.id)!==session)return;
       if(error){session.error='Discovery failed. Reconnect to review tools.';takeCatalog(record,session,[]);return;}
       try{takeCatalog(record,session,tools);}catch{session.error='Unsupported MCP catalog';takeCatalog(record,session,[]);}
@@ -194,7 +195,7 @@ export async function createMcp({dataDir,runtime,host,emit=()=>{},safeMode=false
       const session=sessions.get(record.id),row=session?.tools.get(params.name);
       if(params.enabled&&(!session?.ready||!row?.qualifiedName||row.fingerprint!==params.fingerprint))throw new Error('Refresh the changed tool before granting it.');
       record.grants=record.grants.filter(g=>g.name!==params.name);
-      if(params.enabled)record.grants.push({name:params.name,fingerprint:params.fingerprint,effect:params.effect});
+      if(params.enabled)record.grants.push({name:params.name,fingerprint:params.fingerprint,effect:params.effect,revision:randomUUID()});
       for(const call of session?.active??[])if(call.name===params.name)call.controller.abort(new Error('MCP tool grant changed.'));
     }else if(method==='mcp.refresh'){
       const session=sessions.get(record.id);if(!session?.ready)throw new Error('Connect this MCP server first.');

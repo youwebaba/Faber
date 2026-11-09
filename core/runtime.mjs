@@ -365,7 +365,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     try {
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
       const policy=await routines.prepareTool(run,tool,args,event,signal);
-      if (!Object.hasOwn(policy,'result')&&(execution.externalSessionId || run.jobId || tool.alwaysAsk || host.isAutomaticTool?.(tool, tool.permission) !== true)) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`,policy.forceApproval || tool.alwaysAsk);
+      if (!Object.hasOwn(policy,'result')&&!policy.resourceApproved&&(execution.externalSessionId || run.jobId || tool.alwaysAsk || host.isAutomaticTool?.(tool, tool.permission) !== true)) await approve(run, tool.permission, `${name}\n${JSON.stringify(args)}`,policy.forceApproval || tool.alwaysAsk);
       signal.throwIfAborted();
       if (operation.superseded) throw new Error('Action superseded by steering before execution');
       if(!Object.hasOwn(policy,'result'))await routines.dispatchTool(run,event);

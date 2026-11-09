@@ -96,8 +96,15 @@ function workbook(bytes,args){
     dim.setAttribute('ref',address(Math.min(used.start.row,area.start.row),Math.min(used.start.col,area.start.col))+':'+address(Math.max(used.end.row,area.end.row),Math.max(used.end.col,area.end.col)));
   }
   files[dest]=serialize(part);
-  const calc=elements(book,'calcPr')[0];
-  if(calc){calc.setAttribute('fullCalcOnLoad','1');files['xl/workbook.xml']=serialize(book);}
+  let calc=children(book.documentElement,'calcPr')[0];
+  if(!calc){
+    calc=book.createElementNS(book.documentElement.namespaceURI,'calcPr');
+    calc.setAttribute('calcId','0');
+    const later=new Set(['oleSize','customWorkbookViews','pivotCaches','smartTagPr','smartTagTypes','webPublishing','fileRecoveryPr','webPublishObjects','extLst']);
+    const next=Array.from(book.documentElement.childNodes).find(child=>child.namespaceURI===book.documentElement.namespaceURI&&later.has(child.localName));
+    book.documentElement.insertBefore(calc,next||null);
+  }
+  calc.setAttribute('fullCalcOnLoad','1');files['xl/workbook.xml']=serialize(book);
   const output=zipSync(files,{level:1});if(output.length>32*1024*1024)throw new Error('Updated workbook exceeds 32 MiB.');
   return {sheet:args.sheet,range:args.range,values,output};
 }

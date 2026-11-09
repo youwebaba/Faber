@@ -95,7 +95,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     detail.textContent = choice ? `${choice.source === 'download' ? choice.relativePath || choice.label : choice.id}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
     const ownOperation = operation && operation.value === select.value;
     status.textContent = ownOperation ? operation.label : !loadingList && !choices.length ? 'No local model files were found. Download a GGUF in Models, then refresh this folder.' : info.note;
-    if(native&&needsProfile)status.textContent+=' '+choice.quantizationWarning;
+    if(native&&!precision.ready())status.textContent+=' '+choice.quantizationWarning;
     if(native&&state.process?.modelId===choice.id&&state.process.quantization)status.textContent+=` Requested load: ${state.process.quantization.mode==='none'?'original float32':state.process.quantization.mode.toUpperCase()}.${state.process.observed?.quantization?.accepted?' Native loader accepted this profile; individual layers may use different precision.':''}`;
     if ((!choice || choice.source === 'download') && state.runtime?.available === false&&choice?.format!=='safetensors') status.textContent += ` ${state.runtime.reason || 'The local model runtime is unavailable.'}`;
     if (isLocalOllama(provider) && state.ollama?.error) status.textContent += ` Ollama: ${state.ollama.error}`;

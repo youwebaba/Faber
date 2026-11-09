@@ -10,9 +10,9 @@ const {zipSync,unzipSync}=zipXml;
 const namespace='http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const relns='http://schemas.openxmlformats.org/package/2006/relationships';
 const worksheet='<worksheet xmlns="'+namespace+'"><dimension ref="A1:C2"/><sheetData><row r="1"><c r="A1" s="1" t="n"><v>3</v></c><c r="C1"><f>A1*2</f><v>6</v></c></row></sheetData></worksheet>';
-async function fixture(t){
+async function fixture(t,calculation='<calcPr calcId="1"/>'){
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'Faber-workbook-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
-  const inputs={'xl/workbook.xml':'<workbook xmlns="'+namespace+'" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="1"/></workbook>',
+  const inputs={'xl/workbook.xml':'<workbook xmlns="'+namespace+'" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets>'+calculation+'</workbook>',
     'xl/_rels/workbook.xml.rels':'<Relationships xmlns="'+relns+'"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
     'xl/worksheets/sheet1.xml':worksheet,'xl/styles.xml':'<styleSheet xmlns="'+namespace+'"/>','xl/media/image.dat':'binary fixture bytes'};
   const parts=Object.fromEntries(Object.entries(inputs).map(([k,v])=>[k,Buffer.from(v)])),filename=path.join(root,'sample.xlsx');
@@ -40,4 +40,10 @@ test('workbook reader refuses malformed archives, out-of-project names and overs
   await assert.rejects(f.read({...f.range,path:'../outside.xlsx'}),/escapes/);
   f.parts['xl/worksheets/sheet1.xml']=Buffer.from('<!DOCTYPE sheet><sheet/>');const bad=zipSync(f.parts);await fs.writeFile(f.filename,bad);
   await assert.rejects(f.write({values:[[1,2]],expectedSha256:createHash('sha256').update(bad).digest('hex')}),/DTD/);
+});
+test('editing a workbook without calculation properties requests recalculation in schema order',async t=>{
+  const f=await fixture(t,'<extLst/>'),first=await f.read();
+  await f.write({values:[[6,'demo']],expectedSha256:first.sha256});
+  const contents=Buffer.from(unzipSync(await fs.readFile(f.filename))['xl/workbook.xml']).toString();
+  assert.match(contents,/<\/sheets><calcPr[^>]*fullCalcOnLoad="1"[^>]*\/><extLst/);
 });
