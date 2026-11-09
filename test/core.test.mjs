@@ -253,6 +253,21 @@ test('native Ollama adapter handles tools, images and NDJSON; errors never becom
   assert.deepEqual(tested, { ok: true, models: ['installed-model'] });
 });
 
+test('loopback prompt evaluation can wait for headers until Stop or the run deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  for(const local of [true,false]){
+    const stop=new AbortController();let entered,requestSignal;
+    const called=new Promise(resolve=>{entered=resolve;});
+    const fetchImpl=(_url,options)=>new Promise((_resolve,reject)=>{
+      requestSignal=options.signal;requestSignal.addEventListener('abort',()=>reject(requestSignal.reason),{once:true});entered();
+    });
+    const iterator=streamProvider({provider:{kind:'ollama',baseUrl:local?'http://127.0.0.1:11434':'https://model.example.invalid',model:'fixture'},messages:[],tools:[],signal:stop.signal,fetchImpl});
+    const rejected=assert.rejects(iterator.next(),local?/Stopped/:/connection timed out/);
+    await called;t.mock.timers.tick(31000);assert.equal(requestSignal.aborted,!local);
+    if(local)stop.abort(new Error('Stopped'));await rejected;
+  }
+});
+
 test('vision messages follow all tool responses, preserving provider call ordering', () => {
   const messages = [{ role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'screen', args: {} }, { id: 'b', name: 'read', args: {} }] }, { role: 'tool', content: '{}', toolCallId: 'a', image: 'data:image/png;base64,YQ==' }, { role: 'tool', content: '{}', toolCallId: 'b' }];
   for (const kind of ['openai', 'ollama']) assert.deepEqual(providerMessages(messages, kind).map(message => message.role), ['assistant', 'tool', 'tool', 'user']);
