@@ -14,7 +14,7 @@ import {recycleModel} from './recycle.mjs';
 import {localModelDetails} from './details.mjs';
 import {contextTokensSchema} from '../core/controls.mjs';
 import {createSafetensorsRuntime} from './safetensors-runtime.mjs';
-import {nativeQuantization,quantizationSchema} from './quantization.mjs';
+import {savedNativeQuantization,resolveNativeQuantization,quantizationSchema} from './quantization.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const id = { type: 'string', minLength: 1, maxLength: 300 };
@@ -49,7 +49,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
   const store = await openStore(path.join(dataDir, 'local-models'), { version: 1, providerId: null });
   if (store.state.version !== 1 || (store.state.providerId !== null && typeof store.state.providerId !== 'string')) throw new Error('Invalid local-model manager state');
   store.state.configuration ||= structuredClone(defaultConfiguration);validate(store.state.configuration,configurationSchema);
-  store.state.loadProfiles||={};if(typeof store.state.loadProfiles!=='object'||Array.isArray(store.state.loadProfiles))throw new Error('Invalid native load profiles');for(const profile of Object.values(store.state.loadProfiles))nativeQuantization(profile);
+  store.state.loadProfiles||={};if(typeof store.state.loadProfiles!=='object'||Array.isArray(store.state.loadProfiles))throw new Error('Invalid native load profiles');
   const executableFile = await executablePath(executable), ollama = createOllamaControl({ runtime, fetchImpl });
   const safetensors = await createSafetensorsRuntime({dataDir,executable:safetensorsExecutable,fetchImpl,verifyImpl:safetensorsVerify});
   const hardware=createHardware({executable:executableFile,backendDirectories,runner:hardwareRunner});
@@ -85,7 +85,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       runtime: { available: !!executableFile, safetensors:safetensors.status, ...(!executableFile ? { reason: 'llama-server is not installed. Install Ollama or put llama-server on PATH, then restart Faber.' } : {}) }, process: processState });
   };
   function publish() { try { emit({ type: 'localModels', state: snapshot() }); } catch { /* Detached UI does not own the process. */ } }
-  async function scan() { const hub = await getHubState(),scanned=await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads });scanned.models=await Promise.all(scanned.models.map(async model=>model.format==='safetensors'?{...await safetensors.describe(scanned.directory,model),quantization:nativeQuantization(store.state.loadProfiles[model.id])}:model));library=scanned;return library; }
+  async function scan() { const hub = await getHubState(),scanned=await scanLocalModels({ directory: hub.downloadDirectory, downloads: hub.downloads });scanned.models=await Promise.all(scanned.models.map(async model=>model.format==='safetensors'?{...await safetensors.describe(scanned.directory,model),...savedNativeQuantization(store.state.loadProfiles[model.id])}:model));library=scanned;return library; }
   const hardwareState=async signal=>({...await hardware.inspect(signal),configuration:structuredClone(store.state.configuration),observed:processState.observed||null});
   const controlOnly = (run, callerRunId) => run.id === callerRunId && Array.isArray(run.modelCalls) && run.modelCalls.length === 0;
   async function ensureIdle(callerRunId) {
@@ -175,7 +175,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if (!model.available || !['gguf','safetensors'].includes(model.format)) throw new Error(model.reason || 'Choose a complete model supported by this runtime');
       const nativeSafe=model.format==='safetensors';
       if(!nativeSafe&&quantization!==undefined)throw new Error('On-load quantization applies to original Safetensors packages only. Choose a published GGUF encoding or its existing runtime controls.');
-      if(nativeSafe)quantization=nativeQuantization(quantization??store.state.loadProfiles[model.id]);
+      if(nativeSafe)quantization=resolveNativeQuantization(quantization,store.state.loadProfiles[model.id]);
       if(!nativeSafe&&!executableFile)throw new Error(snapshot().runtime.reason);
       const detected=nativeSafe?null:await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=nativeSafe?[]:launchArguments(requested,detected);
       if(contextTokens!==null){

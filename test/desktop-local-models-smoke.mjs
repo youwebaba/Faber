@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
+import {scanLocalModels} from '../local-models/library.mjs';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function createLocalModelSmoke(dataDir, modelHub) {
   const directory = path.join(path.dirname(dataDir), `${path.basename(dataDir)}-models`); await fs.mkdir(directory);
@@ -11,6 +12,7 @@ export async function createLocalModelSmoke(dataDir, modelHub) {
   await fs.writeFile(path.join(directory, 'model.safetensors'), '{}');
   await fs.writeFile(path.join(directory,'config.json'),JSON.stringify({model_type:'llama'}));await fs.writeFile(path.join(directory,'tokenizer.json'),'{}');
   await modelHub.request('models.settings.save', { downloadDirectory: directory });
+  const native=(await scanLocalModels({directory})).models.find(model=>model.format==='safetensors');await fs.mkdir(path.join(dataDir,'local-models'),{recursive:true});await fs.writeFile(path.join(dataDir,'local-models','state.json'),JSON.stringify({version:1,providerId:null,loadProfiles:{[native.id]:{mode:'future_fixture_precision',opaque:{keep:true}}}}));
   const children = [], script = fileURLToPath(new URL('./desktop-local-models.fixture.mjs', import.meta.url)),nativeScript=fileURLToPath(new URL('./desktop-safetensors.fixture.mjs',import.meta.url));
   return { directory, children, options: { executable: process.execPath,safetensorsExecutable:process.execPath,safetensorsVerify:async()=>true, pollMs: 50, loadTimeoutMs: 15000,
     spawnImpl: (_executable, args, options) => { const child = spawn(process.execPath, [args.length===2?nativeScript:script, ...args], { ...options, env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' } }); children.push(child); return child; },
@@ -55,7 +57,7 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   await wait(() => evaluate(`document.querySelector('#local-model-status').textContent.includes('Controlled incompatible')`), 'visible runtime failure');
   const failureScreenshot = await capture('local-model-failure.png');
   const native=(await state()).models.find(item=>item.format==='safetensors');assert.equal(native.available,true);
-  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled');await change('#local-model-quantization','q4_0');await click('#local-model-start');
+  await change('#chat-local-model',`download:${native.id}`);await wait(()=>evaluate(`document.querySelector('#local-model-start').disabled&&document.querySelector('#local-model-quantization').value===''&&document.querySelector('#local-model-status').textContent.includes('unsupported in this version')`),'unknown profile requires an explicit supported selection');await change('#local-model-quantization','q4_0');await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'native Start enabled after profile choice');await click('#local-model-start');
   await wait(async()=>(await state()).process.status==='ready','native ready');const nativeReady=(await state()).process;assert.equal(nativeReady.observed.backend,'cpu');
   assert.deepEqual(nativeReady.quantization,{mode:'q4_0'});assert.equal(nativeReady.observed.quantization.accepted,true);
   assert.notEqual((await runtime.request('state.get')).chats.find(item=>item.id===chat.id).model,nativeReady.model);

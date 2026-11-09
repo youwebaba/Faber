@@ -55,6 +55,11 @@ Q8_0. Select the mode before Start; change a loaded model with Stop and another
 Start. A successful selection is remembered for that model. Published GGUF
 encodings and external connections retain their own settings.
 
+If a newer release saved a precision profile this version cannot load, Faber
+retains that setting and shows **Choose a supported profile**. Start remains
+disabled until a supported selection is made. Agent default Start also rejects
+the unsupported saved choice. Unrelated settings changes preserve the newer data.
+
 Quantization happens inside the native loader using the original weights. Loading
 can take longer and temporarily require float32 RAM. Norms, embeddings, output
 heads and other layers can retain different precision. The picker reports the
