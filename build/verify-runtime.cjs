@@ -21,4 +21,5 @@ module.exports=async context=>{
   await verifyPreviewAssets(context.packager.projectDir);
   const {verifyTimedMediaAssets}=await import('../desktop/media-preview.mjs');
   await verifyTimedMediaAssets(context.packager.projectDir);
+  const {verifySceneAssets}=await import('../desktop/scene-assets.mjs');await verifySceneAssets(context.packager.projectDir);
 };

@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {callWorkerControl} from '../desktop/worker-control.cjs';
+import {acquireProfileOwner} from '../desktop/profile-owner.cjs';
+test('a malformed boot status opens paused with a usable handoff rather than retaining an unreachable kernel owner', {skip:process.platform!=='win32'},async t=>{const root=await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(),'faber-boot-status-'))),dataDir=path.join(root,'Faber');await fs.mkdir(path.join(dataDir,'boot-worker'),{recursive:true});await fs.writeFile(path.join(dataDir,'boot-worker','state.json'),JSON.stringify({schemaVersion:1,enabled:true,profileId:'default'}));await fs.writeFile(path.join(dataDir,'boot-worker','process-state.json'),'invalid-status-fixture');const child=spawn(process.execPath,[fileURLToPath(new URL('../desktop/boot-worker.cjs',import.meta.url)),'--worker-profile','default','--isolated-local-app-data',root],{windowsHide:true,stdio:'ignore'});t.after(async()=>{if(child.exitCode===null)child.kill();await fs.rm(root,{recursive:true,force:true});});let status;for(let i=0;i<200;i++){try{status=await callWorkerControl({dataDir,command:'status',timeoutMs:500});break;}catch(error){if(!['ENOENT','ECONNREFUSED'].includes(error.code))throw error;}await new Promise(resolve=>setTimeout(resolve,20));}assert.ok(status);assert.equal(status.paused,true);await callWorkerControl({dataDir,command:'shutdown'});for(let i=0;i<200&&child.exitCode===null;i++)await new Promise(resolve=>setTimeout(resolve,10));assert.equal(child.exitCode,0);const owner=await acquireProfileOwner(dataDir);await owner.close();});

@@ -41,6 +41,15 @@ async function fixture(t, options = {}) {
   return { remoteHost, remoteController, hostStore, controllerStore, events, calls, dial, raw, begin, pair, invite, get port() { return port; }, setClock(value) { clock = value; }, async restart() { await remoteHost.stop(); ({ port } = await remoteHost.start()); } };
 }
 function credentials(f) { return JSON.parse(f.controllerStore.values.get('remote-controller-v1')).connections[0]; }
+test('changing a paired relay verifies the same TLS host before saving the endpoint',windows,async t=>{
+  const f=await fixture(t),connection=await f.pair(),before=credentials(f);
+  await assert.rejects(f.remoteController.changeRelay(connection.id,'wss://unapproved.invalid'));
+  assert.deepEqual(credentials(f),before);
+  const url='wss://second-fixture.trycloudflare.com';
+  await f.remoteController.changeRelay(connection.id,url);
+  assert.deepEqual(credentials(f),{...before,relayUrl:url});
+  assert.equal(f.calls.at(-1).method,'workspace.rpc');
+});
 const auth = connection => ({ Authorization: 'Bearer ' + connection.token, 'X-Faber-Device': connection.deviceId });
 
 test('remote pairing requires local acceptance, persists only token hashes on host, and exposes no secrets', windows, async t => {

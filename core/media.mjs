@@ -2,12 +2,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validate } from './registry.mjs';
+import {sceneUri,sceneLimits} from '../renderer/preview/scene-data.mjs';
 
 export const mediaBytesLimit = 512 * 1024 * 1024;
 export const mediaChunkLimit = 256 * 1024;
 const uuid = '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$';
 export const mediaIdSchema = { type: 'string', pattern: uuid, minLength: 36, maxLength: 36 };
 export const mediaFormats = Object.freeze({
+  '.glb':['scene','model/gltf-binary'],'.gltf':['scene','model/gltf+json'],'.stl':['scene','model/stl'],
   '.wav': ['audio', 'audio/wav'], '.mp3': ['audio', 'audio/mpeg'], '.m4a': ['audio', 'audio/mp4'],
   '.ogg': ['audio', 'audio/ogg'], '.mp4': ['video', 'video/mp4'], '.webm': ['video', 'video/webm'],
   '.pdf': ['document', 'application/pdf'], '.docx': ['document', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -23,27 +25,33 @@ export const mediaNotesSchemas = {
   delete: { type: 'object', properties: { ...notesOwner, noteId: mediaIdSchema }, required: [...Object.keys(notesOwner), 'noteId'], additionalProperties: false },
 };
 const refProperties = {
-  id: mediaIdSchema, kind: { enum: ['audio','video','document','vector','animation','midi','caption'] }, mimeType: { type: 'string', maxLength: 100 }, revision: { type: 'string', pattern: '^[a-f0-9]{64}$', minLength: 64, maxLength: 64 },
-  bytes: { type: 'integer', minimum: 1, maximum: mediaBytesLimit }, name: { type: 'string', minLength: 1, maxLength: 180 },
+  id: mediaIdSchema, kind: { enum: ['audio','video','document','vector','animation','midi','caption','scene','asset'] }, mimeType: { type: 'string', maxLength: 100 }, revision: { type: 'string', pattern: '^[a-f0-9]{64}$', minLength: 64, maxLength: 64 },
+  storage:{enum:['scene']},bytes: { type: 'integer', minimum: 1, maximum: mediaBytesLimit }, name: { type: 'string', minLength: 1, maxLength: 180 },
 };
 const baseRefSchema={type:'object',additionalProperties:false,required:['id','kind','mimeType','bytes','name'],properties:refProperties};
 const memberSchema={type:'object',additionalProperties:false,properties:{label:{type:'string',minLength:1,maxLength:100},media:baseRefSchema},required:['label','media']};
-const refSchema = {...baseRefSchema,properties:{...refProperties,title:{type:'string',minLength:1,maxLength:100},tracks:{type:'array',minItems:2,maxItems:8,items:memberSchema},captions:{type:'array',minItems:1,maxItems:4,items:memberSchema}}};
+const refSchema = {...baseRefSchema,properties:{...refProperties,storage:{enum:['scene']},graphRevision:refProperties.revision,assets:{type:'array',maxItems:32,items:{type:'object',additionalProperties:false,required:['name','media'],properties:{name:{type:'string',minLength:1,maxLength:250},media:baseRefSchema}}},title:{type:'string',minLength:1,maxLength:100},tracks:{type:'array',minItems:2,maxItems:8,items:memberSchema},captions:{type:'array',minItems:1,maxItems:4,items:memberSchema}}};
+const assetFormats={'.bin':'application/octet-stream','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg'};
+export function graphRevision(ref){return createHash('sha256').update(JSON.stringify([ref.revision,(ref.assets||[]).map(row=>[row.name,row.media.revision,row.media.mimeType,row.media.bytes]).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)])).digest('hex');}
 export function validateMediaRef(value) {
   validate(value, refSchema);
-  const format = mediaFormats[path.extname(value.name).toLowerCase()];
+  const extension=path.extname(value.name).toLowerCase(),format = value.kind==='asset'?['asset',assetFormats[extension]]:mediaFormats[extension];
   if (/[\\/:\x00-\x1f\x7f]/.test(value.name) || !format || format[0] !== value.kind || format[1] !== value.mimeType) throw new Error('Invalid chat media reference');
   if (previewLimits[value.kind] && (value.bytes > previewLimits[value.kind] || !value.revision)) throw new Error('Invalid preview revision or size');
   if(timedMediaLimits[value.kind]&&(value.bytes>timedMediaLimits[value.kind]||!value.revision))throw new Error('Invalid timed-media revision or size');
+  if(['scene','asset'].includes(value.kind)&&(!value.revision||value.storage!=='scene'||value.bytes>sceneLimits.root))throw new Error('Invalid 3D revision or size');
+  if(value.kind==='scene'&&value.graphRevision){if(!Array.isArray(value.assets))throw new Error('Invalid 3D artifact group');const names=new Set(),ids=new Set([value.id]);let total=value.bytes;for(const row of value.assets){if(sceneUri(row.name)!==row.name||names.has(row.name)||ids.has(row.media.id))throw new Error('Invalid duplicate 3D asset');names.add(row.name);ids.add(row.media.id);validateMediaRef(row.media);if(row.media.kind!=='asset')throw new Error('Invalid 3D asset');total+=row.media.bytes;}if(total>sceneLimits.total||graphRevision(value)!==value.graphRevision)throw new Error('Invalid 3D artifact revision');}
+  else if(value.assets||value.graphRevision)throw new Error('Invalid 3D artifact group');
   if(value.tracks||value.captions){if(!['audio','video','midi'].includes(value.kind)||!value.revision||value.tracks&&(value.kind!=='audio'||value.mimeType!=='audio/wav'))throw new Error('Invalid media group');const members=[...(value.tracks||[]),...(value.captions||[])],ids=new Set();for(const member of members){validateMediaRef(member.media);if(!member.media.revision||ids.has(member.media.id))throw new Error('Invalid duplicate media member');ids.add(member.media.id);}if(value.tracks&&(value.tracks[0].media.id!==value.id||value.tracks.some(row=>row.media.mimeType!=='audio/wav'||row.media.bytes>32*1024*1024)||value.tracks.reduce((sum,row)=>sum+row.media.bytes,0)>64*1024*1024))throw new Error('Stems require bounded PCM WAV tracks');if(value.captions?.some(row=>row.media.kind!=='caption'))throw new Error('Invalid caption member');}
   return value;
 }
 export function sourceMediaRefs(source) {
   const candidates = [...(Array.isArray(source?.mediaRefs) ? source.mediaRefs.slice(0,8) : []), source?.result?.media];
-  return candidates.filter(value => { try { validateMediaRef(value); return true; } catch { return false; } }).filter((value,index,all) => all.findIndex(ref => ref.id === value.id) === index);
+  return candidates.filter(value => { try { validateMediaRef(value); return value.kind!=='asset'&&(value.kind!=='scene'||!!value.graphRevision); } catch { return false; } }).filter((value,index,all) => all.findIndex(ref => ref.id === value.id) === index);
 }
-export function mediaReferenceTree(source){return sourceMediaRefs(source).flatMap(ref=>[ref,...(ref.tracks||[]).map(row=>row.media),...(ref.captions||[]).map(row=>row.media)]).filter((ref,index,all)=>all.findIndex(row=>row.id===ref.id)===index);}
+export function mediaReferenceTree(source){return sourceMediaRefs(source).flatMap(ref=>[ref,...(ref.tracks||[]).map(row=>row.media),...(ref.captions||[]).map(row=>row.media),...(ref.assets||[]).map(row=>row.media)]).filter((ref,index,all)=>all.findIndex(row=>row.id===ref.id)===index);}
 function checkSignature(bytes, ext) {
+  if(['.glb','.gltf','.stl','.bin','.jpg','.jpeg'].includes(ext))return; // The complete scene validator checks these before publication.
   const text = (start, end) => bytes.toString('ascii', start, end);
   const valid = ext === '.wav' ? bytes.length >= 44 && text(0,4) === 'RIFF' && text(8,12) === 'WAVE'
     : ext === '.mp3' ? text(0,3) === 'ID3' || bytes.length > 3 && bytes[0] === 0xff && (bytes[1] & 0xe6) === 0xe2
@@ -76,7 +84,7 @@ export function createMediaStore({ dataDir, findReference, assertAnnotations = (
     await fs.mkdir(owner,{recursive:true,mode:0o700});
     if (await fs.realpath(owner) !== owner) throw new Error('Invalid chat media storage');
     // Earlier releases ignore this suffix, preserving new attachments across rollback.
-    return path.join(owner, id + (previewLimits[kind]?'.preview.bin':timedMediaLimits[kind]||revision?'.music.bin':'.bin'));
+    return path.join(owner, id + (['scene','asset'].includes(kind)?'.scene.bin':previewLimits[kind]?'.preview.bin':timedMediaLimits[kind]||revision?'.music.bin':'.bin'));
   }
   return {
     async notes(action, params, signal) {
@@ -118,9 +126,10 @@ export function createMediaStore({ dataDir, findReference, assertAnnotations = (
       const result = (noteWrites.get(file) || Promise.resolve()).catch(() => {}).then(operation); noteWrites.set(file, result);
       try { return await result; } finally { if (noteWrites.get(file) === result) noteWrites.delete(file); }
     },
-    async publish({ chatId, file, name, signal, revisioned = false }) {
+    async publish({ chatId, file, name, signal, revisioned = false, asset = false, storage }) {
       signal?.throwIfAborted();
-      const ext = path.extname(name).toLowerCase(), format = mediaFormats[ext];
+      const ext = path.extname(name).toLowerCase(), format = asset?assetFormats[ext]&&['asset',assetFormats[ext]]:mediaFormats[ext];
+      if(storage!==undefined&&storage!=='scene')throw new Error('Invalid media storage');
       if (!format) throw new Error('Choose supported audio, video, PDF, DOCX, SVG, GIF or APNG media');
       const stat = await file.stat();
       if (!stat.isFile() || stat.size < 1 || stat.size > mediaBytesLimit) throw new Error('Media must be a nonempty file up to 512 MiB');
@@ -128,10 +137,11 @@ export function createMediaStore({ dataDir, findReference, assertAnnotations = (
       if(stat.size>(timedMediaLimits[format[0]]||mediaBytesLimit))throw new Error('Timed media exceeds its bounded file size');
       const head = Buffer.alloc(Math.min(65536, stat.size));
       const { bytesRead } = await file.read(head, 0, head.length, 0);
-      checkSignature(head.subarray(0,bytesRead), ext);
+      if(!asset)checkSignature(head.subarray(0,bytesRead), ext);
       name = path.basename(name).replace(/[\\/:\x00-\x1f\x7f]/g, '_');
       if (name.length > 180) name = name.slice(0,180-ext.length) + ext;
-      const media = { id: randomUUID(), kind: format[0], mimeType: format[1], bytes: stat.size, name }, digest = previewLimits[format[0]]||timedMediaLimits[format[0]]||revisioned ? createHash('sha256') : null;
+      if(['scene','asset'].includes(format[0])&&stat.size>sceneLimits.root)throw new Error('3D file exceeds 64 MiB');
+      const media = { id: randomUUID(), kind: format[0], mimeType: format[1], bytes: stat.size, name,...(['scene','asset'].includes(format[0])?{storage:'scene'}:{}) }, digest = ['scene','asset'].includes(format[0])||previewLimits[format[0]]||timedMediaLimits[format[0]]||revisioned ? createHash('sha256') : null;
       const target = await filePath(chatId,media.id,media.kind,revisioned), temporary = target + '.tmp';
       let output, complete = false, renamed = false;
       try {
@@ -184,7 +194,7 @@ export function createMediaStore({ dataDir, findReference, assertAnnotations = (
       unpublished.delete(chatId);
       for (const id of ids) {
         let published = false; try { published = !!findReference(chatId,id); } catch { /* A canceled tool did not publish its snapshot. */ }
-        if (!published) { await fs.rm(await filePath(chatId,id),{force:true});await fs.rm(await filePath(chatId,id,'document'),{force:true});await fs.rm(await filePath(chatId,id,'midi'),{force:true}); }
+        if (!published) { await fs.rm(await filePath(chatId,id),{force:true});await fs.rm(await filePath(chatId,id,'document'),{force:true});await fs.rm(await filePath(chatId,id,'midi'),{force:true});await fs.rm(await filePath(chatId,id,'scene'),{force:true}); }
       }
     },
     async prune(chatIds, remove = false) {
@@ -196,7 +206,7 @@ export function createMediaStore({ dataDir, findReference, assertAnnotations = (
         const folder = path.join(directory,owner);
         if ((await fs.lstat(folder)).isSymbolicLink() || !(await fs.stat(folder)).isDirectory() || await fs.realpath(folder) !== folder) throw new Error('Invalid chat media storage');
         for (const name of await fs.readdir(folder)) {
-          const match = /^([0-9a-f-]{36})(?:\.(?:preview|music))?\.bin(\.tmp|\.notes\.json(?:\.[0-9a-f-]{36}\.tmp)?)?$/.exec(name);
+          const match = /^([0-9a-f-]{36})(?:\.(?:preview|music|scene))?\.bin(\.tmp|\.notes\.json(?:\.[0-9a-f-]{36}\.tmp)?)?$/.exec(name);
           if (!match || !new RegExp(uuid).test(match[1])) continue;
           let keep = false;
           if (!remove && (!match[2] || match[2] === '.notes.json') && known.has(owner)) { try { keep = !!findReference(known.get(owner),match[1]); } catch { /* Interrupted or deleted chat output. */ } }

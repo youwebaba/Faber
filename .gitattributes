@@ -13,3 +13,5 @@ native/.cargo/config.toml text eol=lf
 build/licenses/** -text
 renderer/vendor/pdfjs/** -text
 renderer/vendor/spessasynth/** -text -whitespace linguist-vendored
+renderer/preview/scene* -text
+renderer/preview/scene-bundled.mjs -whitespace linguist-vendored

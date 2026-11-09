@@ -24,6 +24,7 @@ import {createRemoteService,remoteMethods} from './remote-service.mjs';
 import {createGateway} from './gateway.mjs';
 import {workbookTools} from '../tools/workbook.mjs';
 import {createMcp,mcpMethods} from './mcp.mjs';
+import {createOutlook,outlookMethods} from './outlook.mjs';
 import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
 import {imageTools} from '../tools/images.mjs';
@@ -34,6 +35,11 @@ import {previewScheme,previewProtocol} from './media-preview.mjs';
 import {createBrowserManager,browserMethods} from './browser.mjs';
 import {createBackgroundWorker,workerMethods} from './background.mjs';
 import {routineSchemas} from '../core/routines.mjs';
+import {openProfileActionLedger} from './action-ledger.cjs';
+import {createRoutineBackups,backupMethods} from './routine-backups.mjs';
+import {createBootControl,bootMethods} from './boot-control.mjs';
+import {startWorkerControl} from './worker-control.cjs';
+import {createWorkerUpdate} from './worker-update.cjs';
 
 const bootstrap=globalThis.__FABER_BOOTSTRAP__;
 const sourceDir=bootstrap?.sourceDir||path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -71,20 +77,25 @@ const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.star
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
 methods.add('upgrades.list');
-for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods])methods.add(method);
-let mcp,mcpError;
+for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods,...outlookMethods])methods.add(method);
+let mcp,mcpError,outlook,outlookError;
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
-let worker,tray,openWindow,showRequested=false,desktopLocked=false;
+let worker,tray,openWindow,showRequested=false,desktopLocked=false,routineBackups,bootControl,workerControl,installerQuiescing=false;
+for(const method of backupMethods)methods.add(method);
+for(const method of bootMethods)methods.add(method);
 const visibleLaunchArgs=()=>process.argv.slice(1).filter((value,index,args)=>!['--background-worker','--worker-profile'].includes(value)&&args[index-1]!=='--worker-profile');
 const emit=event=>{if(window&&!window.isDestroyed())window.webContents.send('faber:event',event);};
 async function confirm(message){if(smokeFaber||smokeInstalled)return true;const result=await dialog.showMessageBox(window,{type:'warning',title:'Faber — explicit approval',message,buttons:['Cancel','Approve'],defaultId:0,cancelId:0,noLink:true});return result.response===1;}
 const secretFile=path.join(dataDir,'secrets.json');
+const actionLedger=await (bootstrap?.openProfileActionLedger||openProfileActionLedger)({dataDir,registryRoot:profiles.privatePaths[0],isolated:smoke});
+const workerUpdate=await (bootstrap?.createWorkerUpdate||createWorkerUpdate)({directory:path.join(actionLedger.directory,'updates'),namespace:actionLedger.namespace,protocol:1});
 let secretQueue=Promise.resolve();
 async function secrets(){try{return JSON.parse(await fs.readFile(secretFile,'utf8'));}catch(error){if(error.code==='ENOENT')return {};throw error;}}
 const host={
+  actionLedger,
   safeMode:recoveryStatus.safeMode,
   interactionAvailable:()=>!!window&&!window.isDestroyed()&&window.isVisible()&&!window.isMinimized()&&!desktopLocked,
-  privatePaths:profiles.privatePaths,
+  privatePaths:[...profiles.privatePaths,actionLedger.directory],
   async getSecret(id){const values=await secrets();if(!values[id])return '';if(!safeStorage.isEncryptionAvailable())throw new Error('Windows credential encryption is unavailable');return safeStorage.decryptString(Buffer.from(values[id],'base64'));},
   setSecret(id,value){const result=secretQueue.catch(()=>{}).then(async()=>{if(!safeStorage.isEncryptionAvailable())throw new Error('Cannot save API key: Windows credential encryption is unavailable');if(typeof id!=='string'||!id||['__proto__','constructor','prototype'].includes(id))throw new Error('Invalid secret ID');const values=await secrets();if(value)values[id]=safeStorage.encryptString(value).toString('base64');else delete values[id];await atomicWrite(secretFile,JSON.stringify(values));});secretQueue=result;return result;},
   async chooseDirectory(){const result=await dialog.showOpenDialog(window,{properties:['openDirectory','createDirectory']});return result.canceled?null:result.filePaths[0];},
@@ -114,6 +125,7 @@ const host={
   async routineIdleUnload(modelId,idleMs){const state=await runtime.request('state.get'),local=await localModels.request('localModels.list');if(local.process.modelId!==modelId||local.process.status!=='ready')return;const runs=state.runs.filter(run=>run.providerId===local.managedProviderId);if(runs.some(run=>['running','waiting_approval'].includes(run.status))||state.jobs.some(job=>job.definition.localModelId===modelId&&['loading_model','running','waiting_approval','waiting_resource'].includes(job.status)))return {retryAfterMs:Math.max(1000,idleMs)};const last=Math.max(0,...runs.map(run=>Date.parse(run.endedAt||run.startedAt))),remaining=idleMs-(Date.now()-last);if(remaining>0)return {retryAfterMs:remaining};await localModels.request('localModels.stop');},
   modelDisplayName:(providerId,model)=>providerId.startsWith('chatgpt:')?chatgpt?.status().accounts.find(account=>account.providerId===providerId)?.models.find(item=>item.id===model)?.name:localModels?.modelDisplayName(providerId,model),
   isAutomaticTool:(tool,permission)=>browser?.isAutomaticTool(tool,permission)===true||extensions?.isAutomaticTool(tool,permission)===true,
+  routineResourceScope:(projectId,tools)=>outlook?.routineScope(projectId,tools),
   assertProviderAvailable:(providerId,model,options)=>{if(providerId.startsWith('chatgpt:')){if(!chatgpt)throw new Error('ChatGPT account connection is unavailable');return chatgpt.assertAvailable(providerId,model,options);}return localModels?.assertProviderAvailable(providerId,model,options);},
   reloadExtensions:()=>extensions.reload(),
   backupCore:signal=>upgrades.backupCore('shell',signal),
@@ -121,16 +133,21 @@ const host={
 };
 app.on('window-all-closed',()=>{if(!worker?.enabled||quitting)app.quit();});
 async function shutdown(){
+  try{await workerControl?.close();}catch(error){console.error('Worker control close failed:',error.message);}
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
   try{await mcp?.close();}catch(error){failures.push(error);}
+  try{await outlook?.close();}catch(error){failures.push(error);}
   const results=await Promise.allSettled([browser?.close(),music?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
   for(const result of results)if(result.status==='rejected')failures.push(result.reason);
   try{await extensions?.close();}catch(error){failures.push(error);}
   try{await localModels?.close();}catch(error){failures.push(error);}
   try{await upgrades?.close();}catch(error){failures.push(error);}
   try{await worker?.close();}catch(error){failures.push(error);}tray?.destroy();
+  try{await actionLedger.close();}catch(error){failures.push(error);}
+  routineBackups?.close();
+  try{await bootControl?.close();}catch(error){failures.push(error);}
   await featureFixture?.close();await reloadFixture?.close();if(browserParking&&!browserParking.isDestroyed())browserParking.destroy();
   for(const error of failures)console.error('Shutdown failed:',error);return failures.length===0;
 }
@@ -163,6 +180,7 @@ protocol.handle('faber',async request=>{
 protocol.handle('faber-preview',request=>previewProtocol(request,sourceDir,app.isPackaged?path.join(process.resourcesPath,'media-runtime'):undefined));
 const workerSmoke=smokeWorker?await import('../test/desktop-worker-smoke.mjs'):null;
 runtime=await createRuntime({dataDir,sourceDir,host,...(workerSmoke?{provider:workerSmoke.workerProvider}:{})});
+routineBackups=createRoutineBackups({runtime,ledger:actionLedger,confirm:message=>smokeWorker?true:confirm(message),chooseSave:async()=>{if(smokeWorker)return path.join(dataDir,'routine-backup-smoke.json');const value=await dialog.showSaveDialog(window,{title:'Back up routine definitions and job evidence',defaultPath:'Faber-routines.faber-routines.json',filters:[{name:'Faber routine backup',extensions:['json']}]});return value.canceled?null:value.filePath;},chooseOpen:async()=>{if(smokeWorker)return path.join(dataDir,'routine-backup-smoke.json');const value=await dialog.showOpenDialog(window,{title:'Restore routine evidence',properties:['openFile'],filters:[{name:'Faber routine backup',extensions:['json']}]});return value.canceled?null:value.filePaths[0];}});
 worker=await createBackgroundWorker({dataDir,sourceDir,profileId:profiles.currentId,app,isAttached:()=>!!window&&!window.isDestroyed(),closeWindow:async()=>{window?.close();},pause:async()=>{await runtime.request('routines.pause',{paused:true});const state=await runtime.request('state.get');for(const id of new Set(state.runs.filter(run=>['running','waiting_approval'].includes(run.status)).map(run=>run.chatId)))await runtime.request('chat.forceStop',{chatId:id});},quit:()=>app.quit(),emit:event=>runtime.emit(event),allowLoginMutation:!smoke});
 desktopLocked=!['active','idle'].includes(powerMonitor.getSystemIdleState(1));
 powerMonitor.on('lock-screen',()=>{desktopLocked=true;});powerMonitor.on('unlock-screen',()=>{desktopLocked=false;});
@@ -194,8 +212,9 @@ const modelSmoke=smokeModels||smokeFaber?await import('../test/desktop-models-sm
 modelHub=await createModelHub({dataDir,sourceDir,host,emit:event=>runtime.emit(event),...(reloadFixture?{fetchImpl:reloadFixture.fetchImpl}:featureFixture?{fetchImpl:featureFixture.fetchImpl}:modelSmoke?{fetchImpl:modelSmoke.createHubSmokeFetch()}: {})});
 const localSmoke=smokeLocalModels||smokeUIReload||smokeFaber||smokeB12||smokeB201?await import('../test/desktop-local-models-smoke.mjs'):null;
 const localFixture=localSmoke?await localSmoke.createLocalModelSmoke(dataDir,modelHub):null;
-if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
+if(localFixture)localFixture.options.hardwareRunner=async(_executable,args)=>({code:0,stdout:args.includes('--help')?'--device --n-gpu-layers --threads-batch --cpu-mask-batch --cpu-strict-batch --load-mode --list-devices --ctx-size --parallel --verbosity --spec-type draft-mtp draft-simple --spec-draft-model --spec-draft-n-max --slots --spec-draft-device --spec-draft-ngl':args.includes('--list-devices')?'  CUDA0: Fixture GPU (8192 MiB, 7000 MiB free)':'Controlled fixture runtime',stderr:''});
 localModels=await createLocalModels({dataDir,runtime,getHubState:()=>modelHub.request('models.state'),emit:event=>runtime.emit(event),trashItem:host.trashItem,withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?packagedRuntime(bootstrap.resourcesPath):{}),...localFixture?.options,...(smokeSchedules?{executable:process.env.FABER_REPORT_RUNNER}:{} )});
+bootControl=await (bootstrap?.createBootControl||createBootControl)({runtime,localModels,dataDir,namespace:actionLedger.namespace,profileId:profiles.currentId,executable:process.execPath,trustedRoot:bootstrap?.trustedRoot||sourceDir,confirm,allowRegistration:app.isPackaged&&!smoke});
 music=createLocalMusic({dataDir,sourceDir,getHubState:()=>modelHub.request('models.state'),withModelFiles:modelHub.withModelFiles,...(bootstrap?.packaged?{runtimeDirectory:path.join(bootstrap.resourcesPath,'music-runtime')}:{})});
 extensions=createAddons({dataDir,runtime,confirm,safeMode:recoveryStatus.safeMode,bundledSource:bootstrap?.bundledSource||path.join(sourceDir,'bundled-addons'),bundledResources:{lightpanda:bootstrap?.addonResources||path.join(sourceDir,'.runtime','lightpanda')},chooseAddon:host.chooseAddon,openPath:host.openPath,emit:event=>runtime.emit(event)});
 upgrades=createUpgrades({sourceDir:reloadFixture?.sourceDir||featureFixture?.upgradeSourceDir||sourceDir,dataDir,confirm:reloadFixture?async()=>true:confirm,onApplied:({id})=>runtime.emit({type:'uiUpdate',id})});
@@ -207,9 +226,16 @@ runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{mcp=await createMcp({dataDir,runtime,host,emit,safeMode:recoveryStatus.safeMode});void mcp.restore().catch(error=>{mcpError=error.message;});}catch(error){mcpError=error.message;}
+if(!recoveryStatus.safeMode){try{outlook=await createOutlook({dataDir,runtime,host,emit});runtime.registerTools(outlook.tools);}catch(error){outlookError=error.message;}}
 try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
 gateway=await createGateway({dataDir,runtime,host,emit:event=>runtime.emit(event)});
 await runtime.startRoutines();
+workerControl=await (bootstrap?.startWorkerControl||startWorkerControl)({dataDir,kind:'interactive',handler:async(command,args)=>{
+  if(command==='status')return {kind:'interactive',pid:process.pid,version:app.getVersion(),protocol:1};
+  if(command==='handoff')throw new Error('The signed-in worker already owns this profile; launch its interface normally');
+  if(command==='prepare_update'){installerQuiescing=true;try{if(typeof args.toVersion!=='string'||args.toVersion.length>100||typeof args.updateId!=='string')throw new Error('Installer must identify its target release and transaction');const state=await runtime.request('state.get');const result=await workerUpdate.prepare({id:args.updateId,fromVersion:app.getVersion(),toVersion:args.toVersion,fromProtocol:state.workerProtocol||1,toProtocol:args.toProtocol||1,wasPaused:state.workerQueue.paused,quiesce:()=>runtime.checkpointWorker(),checkpoint:()=>runtime.workerCheckpointState()});setImmediate(()=>app.quit());return {checkpointed:true,transactionId:result.id,pid:process.pid};}catch(error){installerQuiescing=false;throw error;}}
+  if(command==='shutdown'){await runtime.checkpointWorker();setImmediate(()=>app.quit());return {checkpointed:true,pid:process.pid};}throw new Error('Unknown lifecycle command');
+}});
 if(!smoke&&(await runtime.request('state.get')).projects.length===0){const project=await runtime.request('project.create',{name:'Faber',path:sourceDir});await runtime.request('chat.create',{projectId:project.id,title:'New chat'});}
 function applyZoom(value){if(window&&!window.isDestroyed()&&Number.isFinite(value)&&value>=0.75&&value<=1.5&&lastZoom!==value){window.webContents.setZoomFactor(value);lastZoom=value;}}
 browserChats=(await runtime.request('state.get')).chats;
@@ -245,11 +271,14 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   if(!window||event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||event.senderFrame.url!=='faber://app/index.html')throw new Error('Untrusted request frame');
   if(!methods.has(method))throw new Error('Invalid bridge request');
   validateRequestPayload(method,params);
-  if((switchingProfile||quitting)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
+  if((switchingProfile||quitting||installerQuiescing)&&!['state.get','profiles.list','app.recoveryStatus'].includes(method))throw new Error('Faber is restarting or switching profiles');
   if(mediaMethods.includes(method))return media.request(method,params);
   if(method==='upgrades.list'){validate(params,{type:'object',properties:{},additionalProperties:false});return upgrades.list();}
   if(workerMethods.includes(method))return worker.request(method,params);
+  if(backupMethods.includes(method))return routineBackups.request(method,params);
+  if(bootMethods.includes(method))return bootControl.request(method,params);
   if(mcpMethods.includes(method)){if(!mcp)throw new Error(mcpError||'MCP connections are unavailable');return mcp.request(method,params);}
+  if(outlookMethods.includes(method)){if(!outlook)throw new Error(outlookError||'Outlook is unavailable in Safe Mode');return outlook.request(method,params);}
   if(method==='app.uiReady'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!uiReady){uiReady=true;clearTimeout(bootTimer);bootstrap?.onReady?.();}return {ready:true,...recoveryStatus};}
   if(method==='app.recoveryStatus'){validate(params,{type:'object',properties:{},additionalProperties:false});return {...recoveryStatus};}
   if(method==='app.restartNormal'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!await confirm('Restart Faber normally? Addons enabled in this profile may run.'))return {restarting:false};app.relaunch({args:visibleLaunchArgs().filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true};}

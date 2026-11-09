@@ -9,7 +9,7 @@ const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 const allowed=/^(core|desktop|renderer|tools|extensions|model-hub|local-models|test)\/[a-zA-Z0-9_./-]+\.(mjs|cjs|js|json|html|css|ps1)$/;
 const rustSource=/^native\/src\/[a-zA-Z0-9_./-]+\.rs$/;
 const nativeManifest='native/runtime.json';
-export function validUpgradePath(value){return typeof value==='string'&&(allowed.test(value)||rustSource.test(value)||value==='native/worker.mjs')&&!value.split('/').some(p=>!p||p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/boot-state.cjs','desktop/packaged-paths.mjs','desktop/profile-path.cjs','desktop/profile-owner.cjs'].includes(value.toLowerCase());}
+export function validUpgradePath(value){return typeof value==='string'&&(allowed.test(value)||rustSource.test(value)||value==='native/worker.mjs')&&!value.split('/').some(p=>!p||p==='.'||p==='..')&&!['desktop/recovery.mjs','desktop/bootstrap.cjs','desktop/boot-state.cjs','desktop/packaged-paths.mjs','desktop/profile-path.cjs','desktop/profile-owner.cjs','desktop/action-ledger.cjs','desktop/worker-update.cjs','desktop/boot-task.mjs','desktop/boot-task.ps1','desktop/boot-launch.ps1','desktop/boot-worker.cjs','desktop/boot-runtime.mjs','desktop/boot-control.mjs','desktop/worker-update-cli.cjs','desktop/worker-control.cjs'].includes(value.toLowerCase());}
 async function safePath(root,relative,{generated=false}={}){
   if(!validUpgradePath(relative)&&!(generated&&(relative===nativeManifest||/^native\/bin\/[a-f0-9]{64}(?:\.exe)?$/.test(relative))))throw new Error('Invalid recovery path');
   const base=await fs.realpath(root),target=path.resolve(base,relative);let probe=target;

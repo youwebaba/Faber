@@ -257,17 +257,24 @@ async function connectPinned(route, fingerprint, dial, signal) {
   if (signal.aborted) { raw.destroy(); signal.throwIfAborted(); }
   return new Promise((resolve, reject) => {
     const socket = tls.connect({ socket: raw, servername: authority, minVersion: 'TLSv1.2', rejectUnauthorized: false });
-    const stop = () => socket.destroy(new Error('Remote request canceled.'));
-    const failed = () => { signal.removeEventListener('abort', stop); socket.destroy(); reject(new Error('Remote secure connection failed.')); };
-    signal.addEventListener('abort', stop, { once: true }); socket.once('error', failed);
+    let settled=false;
+    function fail(message){
+      if(settled)return;settled=true;signal.removeEventListener('abort',stop);
+      socket.destroy();reject(new Error(message));
+    }
+    const stop=()=>fail('Remote request canceled.');
+    socket.on('error',()=>fail('Remote secure connection failed.'));
+    socket.once('close',()=>fail('Remote secure connection closed during handshake.'));
+    signal.addEventListener('abort', stop, { once: true });
+    if(signal.aborted){stop();return;}
     socket.once('secureConnect', () => {
       try {
         const peer = socket.getPeerCertificate().raw;
         if (!peer || !equalHash(hash(peer), fingerprint)) throw new Error();
         const cert = new X509Certificate(peer);
         if (Date.parse(cert.validFrom) > Date.now() || Date.parse(cert.validTo) <= Date.now()) throw new Error();
-        signal.removeEventListener('abort', stop); socket.removeListener('error', failed); socket.on('error', () => {}); resolve(socket);
-      } catch { signal.removeEventListener('abort', stop); socket.removeListener('error', failed); socket.destroy(); reject(new Error('Remote host certificate does not match the pairing identity.')); }
+        if(settled)return;settled=true;signal.removeEventListener('abort',stop);resolve(socket);
+      } catch { fail('Remote host certificate does not match the pairing identity.'); }
     });
   });
 }
@@ -308,7 +315,7 @@ export async function createRemoteController({ host, dial, onChange, now = Date.
     }
   } catch { throw new Error('Remote controller encrypted storage is invalid; saved data is preserved.'); }
   let pending = null, closed = false, queue = Promise.resolve();
-  const active = new Map(), forgotten = new Set();
+  const active = new Map(), forgotten = new Set(), moving = new Set();
   const status = () => ({ connections: saved.connections.filter(connection => !forgotten.has(connection.id)).map(publicConnection), pending: pending ? { id: pending.id || null, hostName: pending.hostName, name: pending.name, expiresAt: pending.expiresAt } : null, activeRequests: active.size });
   const changed = () => notify(onChange, status());
   const serial = callback => { const result = queue.catch(() => {}).then(callback); queue = result; return result; };
@@ -358,12 +365,27 @@ export async function createRemoteController({ host, dial, onChange, now = Date.
     },
     cancelPairing() { pending = null; for (const item of active.values()) if (item.connectionId === 'pairing') item.controller.abort(); changed(); return status(); },
     async request(connectionId, method, params = {}, { signal } = {}) {
+      if(moving.has(connectionId))throw new Error('The relay address is being verified.');
       const connection = saved.connections.find(item => item.id === connectionId && !forgotten.has(item.id));
       if (!connection) throw new Error('Saved remote host is unavailable.');
       const result = await call(connectionId, connection, '/request', { method, params }, signal);
       return result.result;
     },
     disconnect(connectionId) { for (const item of active.values()) if (!connectionId || item.connectionId === connectionId) item.controller.abort(); changed(); return status(); },
+    changeRelay(connectionId,relayUrl){
+      return serial(async()=>{
+        const old=saved.connections.find(item=>item.id===connectionId&&!forgotten.has(item.id));
+        if(!old||closed)throw Error('Saved remote host is unavailable.');
+        const candidate={...old,...routePolicy({...old,relayUrl},options)};
+        moving.add(connectionId);service.disconnect(connectionId);
+        try{
+          await call(connectionId,candidate,'/request',{method:'workspace.rpc',params:{method:'workspace.ping',params:{}}});
+          if(closed||forgotten.has(connectionId))throw Error('Remote connection changed.');
+          const next={...saved,connections:saved.connections.map(item=>item.id===connectionId?candidate:item)};
+          await writeVault(host,controllerVault,next);saved=next;changed();return status();
+        }finally{moving.delete(connectionId);}
+      });
+    },
     forget(connectionId) {
       forgotten.add(connectionId); service.disconnect(connectionId);
       return serial(async () => { const next = { ...saved, connections: saved.connections.filter(item => item.id !== connectionId) }; await writeVault(host, controllerVault, next); saved = next; changed(); return status(); });

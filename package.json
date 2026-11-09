@@ -8,6 +8,7 @@
   "main": "desktop/bootstrap.cjs",
   "scripts": {
     "prepare:work-tools": "node scripts/prepare-work-tools.mjs",
+    "prepare:scenes": "node scripts/prepare-scenes.mjs",
     "start": "electron .",
     "test": "node --test test/*.test.mjs",
     "smoke": "electron . --smoke",
@@ -40,7 +41,8 @@
     "electron-builder": "26.18.0",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
-    "marked": "18.1.3"
+    "marked": "18.1.3",
+    "three": "0.187.0"
   },
   "build": {
     "appId": "ai.clocal.faber",
@@ -105,7 +107,9 @@
     ],
     "npmRebuild": false,
     "asarUnpack": [
-      "native/bin/**"
+      "native/bin/**",
+      "desktop/boot-launch.ps1",
+      "desktop/boot-task.ps1"
     ],
     "beforePack": "build/verify-runtime.cjs",
     "afterPack": "scripts/privacy-after-pack.cjs",

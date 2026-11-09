@@ -4,11 +4,12 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import {scanLocalModels} from '../local-models/library.mjs';
+import {readGGUFMetadata} from '../local-models/details.mjs';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 export async function createLocalModelSmoke(dataDir, modelHub) {
   const directory = path.join(path.dirname(dataDir), `${path.basename(dataDir)}-models`); await fs.mkdir(directory);
   const header = Buffer.alloc(24); header.write('GGUF'); header.writeUInt32LE(3, 4);
-  for (const name of ['Fixture-Q4_K_M.gguf', 'Failure-Q4_K_M.gguf', 'Split-Q8_0-00001-of-00002.gguf', 'mmproj-Fixture.gguf']) await fs.writeFile(path.join(directory, name), header);
+  for (const name of ['Fixture-Q4_K_M.gguf', 'Failure-Q4_K_M.gguf', 'Split-Q8_0-00001-of-00002.gguf', 'mmproj-Fixture.gguf','MtpTarget-Q8_0.gguf','MtpDraft-Q4_K_M.gguf']) await fs.writeFile(path.join(directory, name), header);
   const tensorHeader=Buffer.from(JSON.stringify({'model.layers.0.self_attn.q_proj.weight':{dtype:'F32',shape:[32,32],data_offsets:[0,4096]}})),tensorPrefix=Buffer.alloc(8);tensorPrefix.writeBigUInt64LE(BigInt(tensorHeader.length));
   await fs.writeFile(path.join(directory,'model.safetensors'),Buffer.concat([tensorPrefix,tensorHeader,Buffer.alloc(4096)]));
   await fs.writeFile(path.join(directory,'config.json'),JSON.stringify({model_type:'llama',num_hidden_layers:2,hidden_size:32,num_attention_heads:2,num_key_value_heads:2,max_position_embeddings:256}));await fs.writeFile(path.join(directory,'tokenizer.json'),'{}');
@@ -17,14 +18,16 @@ export async function createLocalModelSmoke(dataDir, modelHub) {
   const children = [], script = fileURLToPath(new URL('./desktop-local-models.fixture.mjs', import.meta.url)),nativeScript=fileURLToPath(new URL('./desktop-safetensors.fixture.mjs',import.meta.url));
   const fixtureExecutable=await fs.realpath(process.execPath); // Trusted Electron dependency caches may use a junction.
   return { directory, children, options: { executable: process.execPath,safetensorsExecutable:fixtureExecutable,safetensorsVerify:async()=>true, pollMs: 50, loadTimeoutMs: 15000,
+    speculationReader:(filename,options)=>path.basename(filename).startsWith('Mtp')?Promise.resolve({complete:true,architecture:'qwen35',splitCount:null,tensors:['eh_proj','enorm','hnorm','shared_head_norm'].map(part=>({name:`blk.24.nextn.${part}.weight`,elements:1024}))}):readGGUFMetadata(filename,options),
     spawnImpl: (_executable, args, options) => { const child = spawn(process.execPath, [args.length===2?nativeScript:script, ...args], { ...options, env: { ...options.env, ELECTRON_RUN_AS_NODE: '1' } }); children.push(child); return child; },
   } };
 }
 export async function runLocalModelSmoke({ window, runtime, localModels, chat, dataDir, fixture }) {
+  window.webContents.on('console-message',event=>{if(event.level==='error'||event.level>=2)console.error('Model fixture renderer:',event.message);});
   const evaluate = code => window.webContents.executeJavaScript(code);
-  const wait = async (predicate, label) => { const until = Date.now() + 20000; while (Date.now() < until) { if (await predicate()) return; await pause(75); } throw new Error(`Timed out: ${label}`); };
+  const wait = async (predicate, label) => { const until = Date.now() + 20000; while (Date.now() < until) { if (await predicate()) return; await pause(75); } const diagnostic=await evaluate(`JSON.stringify({selected:document.querySelector('#chat-local-model')?.value,status:document.querySelector('#local-model-status')?.textContent,error:document.querySelector('#local-model-error')?.textContent,startDisabled:document.querySelector('#local-model-start')?.disabled,stopDisabled:document.querySelector('#local-model-stop')?.disabled})`);throw new Error(`Timed out: ${label}; ${diagnostic}`); };
   const click = selector => evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
-  const change = (selector, value) => evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  const change = (selector, value) => evaluate(`(()=>{const node=document.querySelector(${JSON.stringify(selector)});node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('change',{bubbles:true}));if(node.value!==${JSON.stringify(value)})throw new Error('Selection changed synchronously: '+${JSON.stringify(selector)}+' -> '+node.value);})()`);
   const state = () => localModels.request('localModels.list');
   const capture = async name => { await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))'); await pause(100); const target = path.join(dataDir, name); await fs.writeFile(target, (await window.webContents.capturePage()).toPNG()); return target; };
   const initial = await state(), model = initial.models.find(item => item.relativePath === 'Fixture-Q4_K_M.gguf');
@@ -74,11 +77,16 @@ export async function runLocalModelSmoke({ window, runtime, localModels, chat, d
   await runtime.request('chat.update',{id:chat.id,grants:['computer']});await runtime.request('tool.run',{chatId:chat.id,name:'local_model_start',args:{modelId:native.id}});await wait(async()=>(await state()).process.status==='ready','agent native Start');
   assert.deepEqual((await state()).process.quantization,{mode:'q5_0'},'Agent default Start restores the successful per-model profile');
   await runtime.request('tool.run',{chatId:chat.id,name:'local_model_stop',args:{}});await wait(async()=>(await state()).process.status==='stopped','agent native Stop');
+  const mtpTarget=(await state()).models.find(item=>item.relativePath==='MtpTarget-Q8_0.gguf'),mtpDraft=(await state()).models.find(item=>item.relativePath==='MtpDraft-Q4_K_M.gguf');
+  assert.equal((await localModels.request('localModels.details',{modelId:mtpTarget.id})).speculation.nativeMtp.supported,true);await evaluate(`new Promise(resolve=>{const dialog=document.querySelector('dialog[open]');dialog.addEventListener('close',()=>resolve(true),{once:true});dialog.close();})`);await click('#model-picker');await change('#chat-connection','__local_files__');await wait(()=>evaluate(`!!document.querySelector('#chat-local-model option[value="download:${mtpTarget.id}"]')`),'MTP model reopened');
+  await change('#chat-local-model',`download:${mtpTarget.id}`);await wait(()=>evaluate(`!document.querySelector('#local-model-speculation option[value="native_mtp"]').disabled`),'native MTP capability');await change('#local-model-speculation','native_mtp');await evaluate(`(()=>{const count=document.querySelector('#local-model-spec-tokens');count.value='0';count.dispatchEvent(new Event('input',{bubbles:true}));})()`);assert.equal(await evaluate(`document.querySelector('#local-model-start').disabled`),true);await change('#local-model-speculation','off');await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled&&document.querySelector('#local-model-spec-tokens').value==='3'`),'Off restores valid disabled token count');await change('#local-model-speculation','native_mtp');await evaluate(`(()=>{const count=document.querySelector('#local-model-spec-tokens');count.value='4';count.dispatchEvent(new Event('input',{bubbles:true}));})()`);await click('#local-model-start');await wait(async()=>(await state()).process.status==='ready','picker native MTP ready');assert.equal((await state()).process.observed.speculation.tokens,4);await wait(()=>evaluate(`document.querySelector('#local-model-speculation-effective').textContent.includes('draft-mtp')`),'visible effective MTP');await click('#local-model-stop');await wait(async()=>(await state()).process.status==='stopped','picker MTP Stop');
+  await runtime.request('tool.run',{chatId:chat.id,name:'local_model_configure',args:{mode:'cpu',gpuIds:[],cpuIds:[],threads:2,memoryMap:true}});await change('#local-model-speculation','draft_model');await change('#local-model-draft',mtpDraft.id);await wait(()=>evaluate(`!document.querySelector('#local-model-start').disabled`),'separate draft Start enabled');await click('#local-model-start');await wait(async()=>(await state()).process.status==='ready','picker separate draft ready');assert.equal((await state()).process.observed.speculation.draft.id,mtpDraft.id);await click('#local-model-stop');await wait(async()=>(await state()).process.status==='stopped','picker draft Stop');
   assert.ok(!(await fs.readdir(fixture.directory)).some(name=>name.startsWith('.faber-safetensors-')));
   const nativeScreenshot=await capture('local-safetensors-ready-stop.png');
   assert.ok(fixture.children.every(child => child.exitCode !== null || child.signalCode));
   assert.ok(!(await fs.readdir(path.join(dataDir, 'local-models'))).some(name => name.endsWith('.key')));
   const report = { ok: true, realRenderer: true, controlledChildProcesses: fixture.children.length, registeredTools: 3, explicitSelection: true, startReadyStop: true, cancelLoading: true, incompatibleError: true, keyFilesRemoved: true, nativePickerStartUseStop:true,nativeChatThroughPrivatePipe:true,nativeAgentTools:true,nativeStagingRemoved:true, readyScreenshot, failureScreenshot,nativeScreenshot };
   report.nativeSlider=true;report.nativeThreeResourceEstimates=true;report.nativeEffectivePrecision=true;report.fitScreenshot=fitScreenshot;
+  report.nativeMtpPicker=true;report.separateDraftPicker=true;report.speculationTokenCount=true;report.effectiveSpeculation=true;
   const reportPath = path.join(dataDir, 'local-model-smoke-report.json'); await fs.writeFile(reportPath, JSON.stringify(report, null, 2)); return { ...report, reportPath };
 }

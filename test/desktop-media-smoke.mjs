@@ -8,6 +8,8 @@ import { createRelayHostAdapter, connectRelayController, generateRouteSecret, de
 import { createRelayServer } from '../relay/server.mjs';
 import { waveFixture, webmFixture } from './fixtures/media.mjs';
 import { prepareDocumentMedia } from './desktop-document-media.fixture.mjs';
+import {prepareSceneMedia} from './desktop-scene-media.fixture.mjs';
+import {verifyRemoteJobInbox} from './desktop-remote-jobs-smoke.mjs';
 import {prepareTimedMedia} from './desktop-timed-media.fixture.mjs';
 import {randomUUID} from 'node:crypto';
 
@@ -83,6 +85,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await documents.run('#transcript');
     await documents.malformed('#transcript');
     const timed=await prepareTimedMedia({window,runtime,chat,project,bridge,until,save,checks,capture,videoBytes:originals.get('motion.webm')});await timed.run('#transcript');
+    const scenes=await prepareSceneMedia({window,chat,project,bridge,until,save,checks,capture});await scenes.run('#transcript');
     for (const ref of refs) await save({ chatId: chat.id, mediaId: ref.id }, originals.get(ref.name), 'local-' + ref.name);
     await save({ chatId: chat.id, image: png }, Buffer.from(png.split(',')[1], 'base64'), 'local-pixel.png');
     await bridge('clipboard.copyImage', { chatId: chat.id, image: png });
@@ -130,9 +133,10 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await js(`document.querySelector('#remote-projects [data-remote-device-id="${connection.id}"][data-remote-chat-id="${chat.id}"]').click()`);
     await until(() => js(`window.mediaSmokeLocalPlayer.paused&&!window.mediaSmokeLocalPlayer.hasAttribute('src')`), 'local media released on remote route');
     await until(() => js(`!!document.querySelector('#remote-transcript [data-media-id="${video.id}"]')`), 'remote media refs'); await showMedia();
+    await verifyRemoteJobInbox({window,runtime,project,until,checks});
     for (const ref of refs) await playback(`#remote-transcript [data-media-id="${ref.id}"] ${ref.kind}`, 'paired TLS ' + ref.kind);
     await documents.run('#remote-transcript',connection.id);
-    await timed.run('#remote-transcript',connection.id);await timed.canceledRemote('#remote-transcript',id=>{delayedMediaId=id;},()=>Promise.resolve(canceledTransfer),()=>Promise.resolve(delayedTransferStarted));
+    await timed.run('#remote-transcript',connection.id);await scenes.run('#remote-transcript',connection.id);await timed.canceledRemote('#remote-transcript',id=>{delayedMediaId=id;},()=>Promise.resolve(canceledTransfer),()=>Promise.resolve(delayedTransferStarted));canceledTransfer=false;delayedTransferStarted=false;await scenes.canceledRemote('#remote-transcript',id=>{delayedMediaId=id;},()=>Promise.resolve(canceledTransfer),()=>Promise.resolve(delayedTransferStarted));await scenes.open('#remote-transcript');
     await capture('media-remote-players');
     for (const ref of refs) await save({ chatId: chat.id, mediaId: ref.id, deviceId: connection.id }, originals.get(ref.name), 'remote-' + ref.name);
     const transcript = await controller.request(connection.id, 'chat.read', { chatId: chat.id, imageMode: 'references', mediaMode: 'references' });
@@ -157,6 +161,7 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     console.log('Media smoke: stopping relay adapter');await bounded(adapter.close(),'relay stop');adapter=null;
     runtime.emit({ type: 'remote', state: { ...remoteState, devices: [{ id: connection.id, name: 'Media fixture host', role: 'host', online: false }] } });
     await until(() => js(`window.mediaSmokeRemotePlayer.paused&&!window.mediaSmokeRemotePlayer.hasAttribute('src')&&document.querySelector('#content-context-menu').hidden`), 'offline release and menu closure');
+    await scenes.stopped('#remote-transcript');
     checks.push('remote player and open menu survive local state refresh; offline clears sources and closes its menu');
     console.log('Media smoke: restoring relay adapter');adapter=await bounded(createRelayHostAdapter({...route,registrationSecret:secret,targetPort:port,allowLocalRelay:true}),'relay restore');
     runtime.emit({type:'remote',state:{...remoteState,devices:[{id:connection.id,name:'Media fixture host',role:'host',online:true}]}});
@@ -165,7 +170,8 @@ export async function runMediaSmoke({ window, runtime, chat, dataDir, remote }) 
     await bounded(timed.reconnect('#remote-transcript'),'timed reconnect',20000);
     console.log('Media smoke: revoking device');await bounded(receiver.revokeDevice(pending.id),'device revocation');
     console.log('Media smoke: verifying revoked save');await bounded(assert.rejects(bridge('media.save', { chatId: chat.id, mediaId: video.id, deviceId: connection.id })),'revoked save');
-    checks.push('host revocation blocks subsequent remote media access');
+    await bounded(assert.rejects(bridge('media.save',{chatId:chat.id,mediaId:scenes.refs[1].assets[0].media.id,deviceId:connection.id})),'revoked 3D dependency save');
+    checks.push('host revocation blocks subsequent remote media and 3D dependency access');
     await bounded(assert.rejects(bridge('media.notes.read',{chatId:chat.id,mediaId:documents.refs[0].id,revision:documents.refs[0].revision,deviceId:connection.id})),'revoked annotation read');
   } finally {
     dialog.showSaveDialog = originalSave; remote.request = originalRemote; clipboard.writeImage = originalCopyImage; clipboard.writeText = originalCopyText;
