@@ -22,6 +22,8 @@ import {getProfileDirectory,createProfiles,assertProfileSwitchAllowed} from './p
 import {validate} from '../core/registry.mjs';
 import {createRemoteService,remoteMethods} from './remote-service.mjs';
 import {createGateway} from './gateway.mjs';
+import {workbookTools} from '../tools/workbook.mjs';
+import {createMcp,mcpMethods} from './mcp.mjs';
 import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
 import {imageTools} from '../tools/images.mjs';
@@ -68,7 +70,8 @@ const gatewayMethods=new Set(['gateway.status','gateway.configure','gateway.star
 const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename','profiles.switch']);
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
 methods.add('upgrades.list');
-for(const method of [...workerMethods,...Object.keys(routineSchemas)])methods.add(method);
+for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods])methods.add(method);
+let mcp,mcpError;
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 let worker,tray,openWindow,showRequested=false,desktopLocked=false;
 const visibleLaunchArgs=()=>process.argv.slice(1).filter((value,index,args)=>!['--background-worker','--worker-profile'].includes(value)&&args[index-1]!=='--worker-profile');
@@ -112,6 +115,7 @@ async function shutdown(){
   clearTimeout(bootTimer);voice?.close();media?.close();const failures=[];
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
+  try{await mcp?.close();}catch(error){failures.push(error);}
   const results=await Promise.allSettled([browser?.close(),music?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
   for(const result of results)if(result.status==='rejected')failures.push(result.reason);
   try{await extensions?.close();}catch(error){failures.push(error);}
@@ -190,9 +194,10 @@ await upgrades.expireStages().catch(error=>console.error('Expired upgrade cleanu
 // Recognition errors can leave a live session; only an explicit off event clears the reload barrier.
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
-runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):fileTools()),...imageTools(),...mediaTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
+runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):fileTools()),...imageTools(),...mediaTools(),...workbookTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
+try{mcp=await createMcp({dataDir,runtime,host,emit,safeMode:recoveryStatus.safeMode});void mcp.restore().catch(error=>{mcpError=error.message;});}catch(error){mcpError=error.message;}
 try{remote=await createRemoteService({dataDir,host,operatorDir:smoke?undefined:path.join(process.env.LOCALAPPDATA??app.getPath('appData'),'FaberRelay'),dispatch:runtime.remoteRequest,emit,powerMonitor,powerSaveBlocker,safeMode:recoveryStatus.safeMode,suspended:()=>quitting||switchingProfile});}catch(error){remoteStartupError=error.message;}
 gateway=await createGateway({dataDir,runtime,host,emit:event=>runtime.emit(event)});
 await runtime.startRoutines();
@@ -233,6 +238,7 @@ ipcMain.handle('faber:request',async(event,method,params={})=>{
   if(mediaMethods.includes(method))return media.request(method,params);
   if(method==='upgrades.list'){validate(params,{type:'object',properties:{},additionalProperties:false});return upgrades.list();}
   if(workerMethods.includes(method))return worker.request(method,params);
+  if(mcpMethods.includes(method)){if(!mcp)throw new Error(mcpError||'MCP connections are unavailable');return mcp.request(method,params);}
   if(method==='app.uiReady'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!uiReady){uiReady=true;clearTimeout(bootTimer);bootstrap?.onReady?.();}return {ready:true,...recoveryStatus};}
   if(method==='app.recoveryStatus'){validate(params,{type:'object',properties:{},additionalProperties:false});return {...recoveryStatus};}
   if(method==='app.restartNormal'){validate(params,{type:'object',properties:{},additionalProperties:false});if(!await confirm('Restart Faber normally? Addons enabled in this profile may run.'))return {restarting:false};app.relaunch({args:visibleLaunchArgs().filter(value=>value!=='--safe-mode')});app.quit();return {restarting:true};}

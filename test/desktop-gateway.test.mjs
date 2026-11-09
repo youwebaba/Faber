@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { createGateway, gatewayToolNames } from '../desktop/gateway.mjs';
 import { createRuntime } from '../core/runtime.mjs';
 import { fileTools } from '../tools/files.mjs';
+import mcpClient from '../desktop/vendor/mcp-client.cjs';
 
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 const user = [{ role: 'user', content: 'Reply to this client only.' }];
@@ -39,6 +40,18 @@ async function fixture(t, options = {}) {
   return result;
 }
 function frames(text) { return text.split('\n').filter(line => line.startsWith('data: ') && line !== 'data: [DONE]').map(line => JSON.parse(line.slice(6))); }
+
+test('the official MCP client initializes, lists and reads through the Faber gateway',async t=>{
+  const f=await fixture(t);await f.start();
+  const client=new mcpClient.Client({name:'Faber interoperability check',version:'1'},{capabilities:{}});
+  const transport=new mcpClient.StreamableHTTPClientTransport(new URL(await f.url('/mcp')),{requestInit:{headers:{Authorization:'Bearer '+f.token}}});
+  try{
+    await client.connect(transport,{timeout:5000});const catalog=await client.listTools();
+    assert.ok(catalog.tools.some(tool=>tool.name==='files_read'));
+    const result=await client.callTool({name:'files_read',arguments:{path:'hello.txt'}},{timeout:5000});
+    assert.ok(result.content.some(item=>item.text?.includes('project-only-content')));
+  }finally{await client.close();}
+});
 async function raw(url, headers) {
   return new Promise((resolve, reject) => { const request = http.request(url, { headers }, response => { let body = ''; response.setEncoding('utf8'); response.on('data', chunk => body += chunk); response.on('end', () => resolve({ status: response.statusCode, body })); }); request.on('error', reject); request.end(); });
 }
