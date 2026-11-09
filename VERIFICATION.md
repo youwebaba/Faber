@@ -29,7 +29,8 @@ the original bytes. [Model package checks](docs/a2.5-model-packages.md) · [Musi
 
 The upgrade regression suite passed 26 tests, including interrupted staging,
 expired temporary directories, retained rollback files, profile junctions and
-exclusion of Cargo output before traversal. The Rust worker passed four tests.
+exclusion of Cargo output before traversal. The Rust worker passed five tests,
+including a physical read budget spanning multiple tokenizer blocks.
 
 The GGUF experiment opened three real model files, applying the desktop
 8 MiB budget and five-second deadline. Each row is one inspection on this PC.
@@ -37,9 +38,9 @@ The counts are file read/seek calls. Timings exclude process startup.
 
 | Header | Original calls and time | Grouped tokenizer reads and time |
 | --- | --- | --- |
-| Qwen3.5 9B Q8_0 | 386,719 reads + 386,616 seeks, 513 ms | 602 reads + 477 seeks, 19 ms |
-| Gemma 4 12B Q5_K_M | 371,171 reads + 371,044 seeks, 491 ms | 566 reads + 405 seeks, 19 ms |
-| Qwen3.8 27B IQ2_S | 386,723 reads + 386,609 seeks, 537 ms | 617 reads + 481 seeks, 19 ms |
+| Qwen3.5 9B Q8_0 | 386,719 reads + 386,616 seeks, 513 ms | 602 reads + 311 seeks, 24 ms |
+| Gemma 4 12B Q5_K_M | 371,171 reads + 371,044 seeks, 491 ms | 566 reads + 253 seeks, 37 ms |
+| Qwen3.8 27B IQ2_S | 386,723 reads + 386,609 seeks, 537 ms | 617 reads + 314 seeks, 37 ms |
 
 Grouping reads increased physical reads from 3.0–3.1 MB to 6.3–7.4 MB per
 file. All stayed below the original budget and returned the same parsed byte

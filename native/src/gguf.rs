@@ -84,12 +84,13 @@ impl<R: Read + Seek> Reader<R> {
 
     fn skip_strings(&mut self, mut count: u64) -> Result<(), String> {
         let mut block = [0; 16 * 1024];
+        let mut buffered = 0;
         while count != 0 {
             self.check(8)?;
             // Every remaining string has an eight-byte length. Stay inside the array and inspection budget.
             let size = (count * 8).min(block.len() as u64).min(self.remaining).min(self.size - self.offset);
             let start = self.offset;
-            self.input.read_exact(&mut block[..size as usize]).map_err(|_| "Truncated GGUF metadata")?;
+            self.input.read_exact(&mut block[buffered..size as usize]).map_err(|_| "Truncated GGUF metadata")?;
             let end = start + size;
             while count != 0 && end.saturating_sub(self.offset) >= 8 {
                 self.check(8)?;
@@ -103,8 +104,15 @@ impl<R: Read + Seek> Reader<R> {
                 self.advance(length, false);
                 count -= 1;
             }
-            if self.offset != end {
-                self.input.seek(SeekFrom::Start(self.offset)).map_err(|error| error.to_string())?;
+            if self.offset < end {
+                // Carry a partial length into the next block without reading those bytes twice.
+                buffered = (end - self.offset) as usize;
+                block.copy_within((self.offset - start) as usize..size as usize, 0);
+            } else {
+                buffered = 0;
+                if self.offset > end {
+                    self.input.seek(SeekFrom::Start(self.offset)).map_err(|error| error.to_string())?;
+                }
             }
         }
         Ok(())
@@ -321,6 +329,32 @@ mod tests {
             if expected.is_ok() {
                 assert_eq!(grouped.input.position(), scalar.input.position());
             }
+        }
+    }
+
+    #[test]
+    fn tokenizer_blocks_stay_within_the_physical_read_budget() {
+        struct Meter { data: Cursor<Vec<u8>>, bytes: u64 }
+        impl Read for Meter {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.data.read(buffer)?;
+                self.bytes += count as u64;
+                Ok(count)
+            }
+        }
+        impl Seek for Meter {
+            fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> { self.data.seek(pos) }
+        }
+        let mut data = Vec::new();
+        for _ in 0..6_000 { data.extend(1_u64.to_le_bytes()); data.push(b'a'); }
+        let size = data.len() as u64;
+        for budget in [16_384_u64, 32_769, size] {
+            let mut reader = Reader {
+                input: Meter { data: Cursor::new(data.clone()), bytes: 0 }, size, remaining: budget,
+                offset: 0, deadline: MAX_SAFE_INTEGER, bytes_read: 0,
+            };
+            assert_eq!(reader.skip_strings(6_000).is_ok(), budget == size);
+            assert!(reader.input.bytes <= budget);
         }
     }
 }
