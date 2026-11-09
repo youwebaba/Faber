@@ -15,6 +15,12 @@ Publish each version as a separate full GitHub release with a new tag, the full
 Windows installer, its SHA-256 checksum and patch notes. Keep previous tags and
 assets available for rollback and for backporting individual fixes.
 
+Faber is in closed development. Keep source, releases, installers and tester
+access in the private repository. A public launch can be reconsidered at 10.0
+or later with a separate release decision. Prioritize functioning core workflows,
+project and credential boundaries, data recovery and an installer smoke check.
+Track extended device, WAN and endurance coverage separately during closed use.
+
 Read `ADDONS.md` before authoring a removable feature. b1 includes only local
 addon management; no online addon sharing, publishing, catalog or OTA updates.
 
