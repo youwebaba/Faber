@@ -1,6 +1,6 @@
-# Installing Faber a3.0
+# Installing Faber a3.0.1
 
-Run `Faber-Setup-a3.0-x64.exe`. This is a per-user Windows x64 installation with
+Run `Faber-Setup-a3.0.1-x64.exe`. This is a per-user Windows x64 installation with
 Desktop/Start menu shortcuts and a normal `Faber.exe`; no terminal needs to stay
 open. Electron and the local model runtime are included. Node.js, npm and Ollama
 are not required to use the installed app's managed GGUF path. The compiled Rust
@@ -22,30 +22,30 @@ it after browser sessions are idle. WSL2 must already be available; local chat a
 model controls do not require WSL. The addon can be disabled or uninstalled in Addons. Online addon
 sharing and over-the-air updates are not included.
 
-The a3.0 installer is unsigned. Windows may display an
+The a3.0.1 installer is unsigned. Windows may display an
 unknown-publisher warning.
 Only use the artifact from the trusted project source; signing is not configured.
 
-## a3.0 release identity and workbench
+## a3.0.1 release identity and workbench
 
-The interface/release name is **a3.0**. The package/app version is `3.0.0` and
-the Windows build version is `3.0.0.0`. The installer upgrades an a2.9 installation.
+The interface/release name is **a3.0.1**. The package/app version is `3.0.1` and
+the Windows build version is `3.0.1.0`. Older-profile upgrade and retry checks are in progress for this patch.
 Download the current installer from
 [GitHub Releases](https://github.com/youwebaba/Faber/releases). Source/application
 checks and release history are recorded in
 [VERIFICATION.md](VERIFICATION.md); installer checksums and publication records
 accompany the release assets.
 
-a3.0 seeds its stock workbench at `%LOCALAPPDATA%\FaberWorkbench\3.0.0`.
+a3.0.1 seeds its stock workbench at `%LOCALAPPDATA%\FaberWorkbench\3.0.1`.
 Profiles, credentials, addons and configured model folders carry over. Custom
 core edits belong to the workbench for their original version. Reinstalling
-a3.0 reuses its own workbench.
+a3.0.1 reuses its own workbench.
 
 Previous full releases remain available for rollback. Close Faber
 before running a previous installer to select its retained workbench.
 Rollback shares existing profile data; retain a profile backup before upgrading.
 
-For the latest remote chat controls, install a3.0 on both PCs. The separate `Faber-Relay-a3.0.zip`
+For the latest remote chat controls, install a3.0.1 on both PCs. The separate `Faber-Relay-a3.0.1.zip`
 operator kit contains only the relay source, locked dependency metadata, operator
 launcher and instructions; Node.js 24+ is required on the relay PC. Extract it,
 run `relay\Start-FaberRelay.ps1`, then pair through Settings. The desktop installer
@@ -218,7 +218,7 @@ source, minimal Linux root filesystem and certificate bundle identified in
 After deliberately editing a bundled addon's source, review the change and run
 `npm run prepare:addons` to update its shipped approval digest before packaging.
 
-Output is `release\Faber-Setup-a3.0-x64.exe`; the unpacked executable is
+Output is `release\Faber-Setup-a3.0.1-x64.exe`; the unpacked executable is
 `release\win-unpacked\Faber.exe`. Installer revision, appId and versioned workbench
 semantics are tested separately from deterministic unit fixtures. The optional
 live GPU proof requires an existing model and explicit command-line flags; it is

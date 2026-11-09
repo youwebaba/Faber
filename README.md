@@ -1,4 +1,4 @@
-# Faber a3.0
+# Faber a3.0.1
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,6 +7,11 @@ with a Codex-style interface, shared tools, agent delegation, voice, and upgrade
 the agents can author. It has its own source, launchers and release lifecycle.
 
 Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
+
+**a3.0.1 addresses startup when upgrading older profiles.** The focused patch
+handles profiles created before jobs and routines and retries after an interrupted
+upgrade checkpoint. Installer validation is in progress.
+[a3.0.1 notes](docs/a3.0.1-release-notes.md)
 
 **a3.0 adds consented live video and brings the media and worker workflows together.**
 Choose a camera, screen or window and review the selected source and paired
