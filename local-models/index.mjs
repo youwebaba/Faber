@@ -129,13 +129,14 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       }
       signal.throwIfAborted();
       if (current !== operation || operation.didExit) throw new Error('Local model process changed during startup');
-      let contextCapacityTokens=null,thinkingSupported=false;
+      let contextCapacityTokens=null,thinkingSupported=false,visionSupported=null;
       try {
         const response=await fetchImpl(`${operation.baseUrl}/props`,{redirect:'error',signal:AbortSignal.any([signal,AbortSignal.timeout(1500)]),headers:{Authorization:`Bearer ${operation.key}`}});
         if(response.ok){
           let size=0;const chunks=[];
           for await(const chunk of response.body){size+=chunk.length;if(size>1024*1024)throw new Error('Runtime properties exceed inspection limit');chunks.push(chunk);}
           const properties=JSON.parse(Buffer.concat(chunks).toString('utf8')),value=properties.default_generation_settings?.n_ctx;
+          if(typeof properties.modalities?.vision==='boolean')visionSupported=properties.modalities.vision;
           if(Number.isSafeInteger(value)&&value>0)contextCapacityTokens=value;
           const template=typeof properties.chat_template==='string'?properties.chat_template.replace(/\{#[\s\S]*?#\}/g,''):'';
           // Template-declared parameter support; the model still determines how it responds.
@@ -146,6 +147,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if(operation.contextTokens!==null&&contextCapacityTokens!==operation.contextTokens)throw new Error(`Requested ${operation.contextTokens} context tokens, but the runtime reported ${contextCapacityTokens??'no verified capacity'}. The model was stopped; choose a supported context size and start again.`);
       signal.throwIfAborted();
       if(current!==operation||operation.didExit)throw new Error('Local model process changed during context inspection');
+      if(operation.vision?.available&&visionSupported===false)throw new Error('The runtime declined the selected vision projector. The model was stopped; use a compatible model/projector pair and runtime.');
       const nativeObservation=operation.native?.observed();
       const observed=operation.native?{backend:'cpu',gpuLayers:0,totalLayers:null,devices:[],verified:true,quantization:nativeObservation.quantization,precision:nativeObservation.precision,memory:await processMemory(operation.child?.pid)}:observePlacement(operation.placementLogs+operation.logTails.join('\n'));
       let speculationObserved={mode:'off',tokens:0,verified:true};
@@ -172,7 +174,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       store.state.connection={baseUrl:`${operation.baseUrl}/v1`,model:operation.alias,displayName:model.label,modelId:model.id,thinkingSupported,format:model.format};await store.save(store.state);
       signal.throwIfAborted();
       operation.originSignal?.removeEventListener('abort', operation.abortOrigin);
-      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,speculation:operation.speculation,...(operation.native?{quantization:operation.quantization}:{}),contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
+      processState = { status: 'ready', operationId: operation.id, modelId: model.id, providerId, model: operation.alias, stage: 'Loaded and ready',requested:operation.requested,observed,speculation:operation.speculation,...(operation.vision?{vision:{...operation.vision,runtimeSupported:visionSupported}}:{}),...(operation.native?{quantization:operation.quantization}:{}),contextTokens:operation.contextTokens,contextCapacityTokens,thinkingSupported }; publish();
     } catch (error) {
       if (current !== operation) return;
       const stopped = operation.controller.signal.aborted;
@@ -196,13 +198,19 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
       if (!model) throw new Error('Model files changed or left the configured folder. Refresh the local model list.');
       if (!model.available || !['gguf','safetensors'].includes(model.format)) throw new Error(model.reason || 'Choose a complete model supported by this runtime');
       const nativeSafe=model.format==='safetensors';
+      const vision=nativeSafe?undefined:structuredClone(model.vision),directory=library.directory;
+      const revalidate=async()=>{
+        await scan();originSignal.throwIfAborted();
+        const selected=library.models.find(item=>item.id===model.id);
+        if(library.directory!==directory||!selected||!selected.available||JSON.stringify(selected.vision)!==JSON.stringify(vision)||speculationPlan.draft&&!library.models.some(item=>item.id===speculationPlan.draft.id))throw new Error('Model, draft or vision projector files changed during validation; refresh the library.');
+      };
       speculation=resolveSpeculation(speculation,store.state.speculationProfiles[model.id]);
       if(!nativeSafe&&quantization!==undefined)throw new Error('On-load quantization applies to original Safetensors packages only. Choose a published GGUF encoding or its existing runtime controls.');
       if(nativeSafe)quantization=resolveNativeQuantization(quantization,store.state.loadProfiles[model.id]);
       if(!nativeSafe&&!executableFile)throw new Error(snapshot().runtime.reason);
       const detected=nativeSafe?null:await hardware.inspect(originSignal),requested=structuredClone(store.state.configuration),hardwareArgs=nativeSafe?[]:launchArguments(requested,detected);
       const speculationPlan=await prepareSpeculation({directory:library.directory,model,models:library.models,profile:speculation,capabilities:detected?.speculation,configuration:requested,signal:originSignal,reader:speculationReader});
-      if(speculation.mode!=='off'){await scan();if(!library.models.some(item=>item.id===model.id)||speculationPlan.draft&&!library.models.some(item=>item.id===speculationPlan.draft.id))throw new Error('Target or draft files changed during validation; refresh the library');}
+      await revalidate();
       hardwareArgs.push(...speculationPlan.args);
       if(contextTokens!==null){
         if(nativeSafe)throw new Error('This native Safetensors CPU loader currently supports Default context only. Select Default and start again.');
@@ -210,22 +218,27 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
         // One slot gives each queued request the selected capacity instead of dividing it across slots.
         hardwareArgs.push('--ctx-size',String(contextTokens),'--parallel','1');
       }
-      const files=await Promise.all([...model.files,...speculationPlan.draftFiles,...(nativeSafe?model.supportFiles||[]:[])].map(async relative=>{const target=await outputPath(library.directory,relative);const stat=await fs.lstat(target);return {target,dev:stat.dev,ino:stat.ino};}));
+      const modelFiles=[...model.files,...speculationPlan.draftFiles,...(nativeSafe?model.supportFiles||[]:[])],projectorFiles=vision?.projector?.files||[];
+      const files=await Promise.all([...modelFiles,...projectorFiles].map(async relative=>{const target=await outputPath(directory,relative);const stat=await fs.lstat(target);if(!stat.isFile()||stat.isSymbolicLink())throw new Error('Model file changed; refresh the library');return {target,dev:stat.dev,ino:stat.ino,size:stat.size,mtimeMs:stat.mtimeMs,ctimeMs:stat.ctimeMs};}));
+      if(files.slice(modelFiles.length).some(file=>files.slice(0,modelFiles.length).some(other=>file.dev===other.dev&&file.ino===other.ino)))throw new Error('The vision projector aliases language-model weights; choose a distinct matching projector.');
       originSignal.throwIfAborted();
       const operationId = randomUUID(), keyFile = path.join(dataDir, 'local-models', `${operationId}.key`), key = randomBytes(32).toString('hex');
       const port = nativeSafe?null:await freePort(); originSignal?.throwIfAborted();
       try { await fs.writeFile(keyFile, key, { mode: 0o600, flag: 'wx' }); }
       catch (error) { if (error.code !== 'EEXIST') await fs.rm(keyFile, { force: true }).catch(() => {}); throw error; }
       if (originSignal?.aborted) { await fs.rm(keyFile, { force: true }); originSignal.throwIfAborted(); }
-      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',speculationLogs:'',speculation,speculationPlan,logTails:['',''],requested,files,contextTokens,quantization, didExit: false, originSignal };
+      const operation = { id: operationId, controller: new AbortController(), keyFile, key, alias: `faber-${model.id.slice(0, 16)}`, baseUrl: `http://127.0.0.1:${port}`, logs: '',placementLogs:'',speculationLogs:'',speculation,speculationPlan,vision,logTails:['',''],requested,files,contextTokens,quantization, didExit: false, originSignal };
       current = operation;
-      processState = { status: 'loading', operationId, modelId, stage: nativeSafe?'Loading Safetensors on native CPU runtime':'Loading GGUF into local runtime',requested,contextTokens,speculation,...(nativeSafe?{quantization}: {}) }; publish();
+      processState = { status: 'loading', operationId, modelId, stage: nativeSafe?'Loading Safetensors on native CPU runtime':'Loading GGUF into local runtime',requested,contextTokens,speculation,...(vision?{vision}:{}),...(nativeSafe?{quantization}: {}) }; publish();
       operation.abortOrigin = () => { operation.controller.abort(originSignal.reason); void Promise.resolve().then(() => stopFile()).catch(() => {}); };
       originSignal?.addEventListener('abort', operation.abortOrigin, { once: true });
       const env = nativeSafe?null:hardware.environment();
       try {
-        let binary=executableFile,args=['--model', path.join(library.directory, model.relativePath), '--host', '127.0.0.1', '--port', String(port), '--alias', operation.alias, '--api-key-file', keyFile, '--offline', '--no-webui', '--no-mmproj', '--jinja',...hardwareArgs],environment=env;
+        let binary=executableFile,args=['--model', path.join(directory, model.relativePath), '--host', '127.0.0.1', '--port', String(port), '--alias', operation.alias, '--api-key-file', keyFile, '--offline', '--no-webui', ...(vision?.available?['--mmproj',await outputPath(directory,vision.projector.relativePath)]:['--no-mmproj']), '--jinja',...hardwareArgs],environment=env;
         if(nativeSafe){operation.native=await safetensors.prepare({directory:library.directory,model,operation,nativePort:port,configuration:requested,contextTokens});binary=operation.native.executable;args=operation.native.args;environment=operation.native.env;operation.baseUrl=operation.native.baseUrl;}
+        await revalidate();
+        for(const file of files){const target=await outputPath(directory,path.relative(directory,file.target).split(path.sep).join('/')),stat=await fs.lstat(target);if(!stat.isFile()||stat.dev!==file.dev||stat.ino!==file.ino||stat.size!==file.size||stat.mtimeMs!==file.mtimeMs||!nativeSafe&&stat.ctimeMs!==file.ctimeMs)throw new Error('Model or vision projector changed before launch; refresh the library.');}
+        originSignal.throwIfAborted();
         const child = spawnImpl(binary,args, { cwd: path.dirname(binary), env:environment, windowsHide: true, detached: process.platform !== 'win32', stdio: [nativeSafe?'pipe':'ignore', 'pipe', 'pipe'] });
         operation.child = child;
         operation.exited = new Promise(resolve => {
@@ -343,6 +356,7 @@ export async function createLocalModels({ dataDir, runtime, getHubState, emit = 
     assertProviderAvailable(providerId, model, options={}) {
       if (providerId === store.state.providerId && (closed || starting || stopping || processState.status !== 'ready' || processState.model !== model)) throw new Error('Start this downloaded local model and wait until it is ready before sending a chat.');
       if(providerId===store.state.providerId&&!ownedConnection(providerId,model))throw new Error('The managed local connection was edited. Stop and start the downloaded model to restore its connection, or use a separate API connection.');
+      if(providerId===store.state.providerId&&options.hasImages===true&&store.state.connection?.format==='gguf'&&!processState.vision?.available)throw new Error('This downloaded GGUF is loaded for text only. In Models, download its matching vision companion from the same pinned model revision, then stop and restart the downloaded model before sending images.');
       if(providerId===store.state.providerId&&options.contextTokens!=null&&options.contextTokens!==processState.contextCapacityTokens)throw new Error(`Restart this downloaded local model with the chat's selected ${options.contextTokens}-token context before sending. Current capacity: ${processState.contextCapacityTokens??'unknown'}.`);
       if (ollamaTransitions.has(modelKey(providerId, model))) throw new Error('Wait for this local model to finish loading or stopping before sending a chat.');
     },

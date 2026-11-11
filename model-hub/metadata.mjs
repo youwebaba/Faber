@@ -2,6 +2,7 @@ import { repoId, revision, validFilePath } from './paths.mjs';
 import { quantizationCatalog, auxiliaryGGUF } from './quantizations.mjs';
 import { packageCatalog, musicComponent } from './packages.mjs';
 import { fetchFile } from './transfer.mjs';
+import { visionCompanions, visionProjector } from './vision.mjs';
 
 const GiB = 1024 ** 3;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -59,13 +60,13 @@ export function modelDetails(raw, requestedRepo, requestedRevision) {
     const kind = format(file), weight = kind !== 'other';
     const auxiliary = auxiliaryGGUF(file);
     const shard = /-\d+-of-\d+/i.test(file);
-    return { path: file, size, sha256: hash?.toLowerCase() || null, weight, format: kind,
+    return { path: file, size, sha256: hash?.toLowerCase() || null, weight, format: kind, ...(visionProjector(file) ? { role: 'vision-projector' } : {}),
       ...(kind === 'gguf' && !shard && !auxiliary ? { vram: estimateVram(size, 'This selected GGUF weight file') } : {}) };
   });
   const totalBytes = files.every(file => file.size !== null) ? files.reduce((sum, file) => sum + file.size, 0) : null;
   if (totalBytes !== null && !Number.isSafeInteger(totalBytes)) throw new Error('Repository size exceeds supported integer range');
   const variants = quantizationCatalog(files, estimateVram);
-  return { ...summary, revision: pinned, files, quantizations: variants.filter(variant => !musicComponent(variant.files[0])), packages: packageCatalog(files, {}, variants, estimateVram), totalBytes, sizeBytes: totalBytes, sizeLabel: 'All files in this pinned revision; may include multiple variants' };
+  return { ...summary, revision: pinned, files, visionCompanions: visionCompanions(files), quantizations: variants.filter(variant => !musicComponent(variant.files[0])), packages: packageCatalog(files, {}, variants, estimateVram), totalBytes, sizeBytes: totalBytes, sizeLabel: 'All files in this pinned revision; may include multiple variants' };
 }
 
 export function httpError(status) {

@@ -29,10 +29,16 @@ The desktop allowlists these requests and delegates to the hub manager:
   public models, bounded result count; format is `all`, `gguf` or `safetensors`.
 - `models.inspect` `{repoId,revision?}` → model summary plus pinned `revision`,
   `files:[]`, `quantizations:[]` and `totalBytes` for the current revision.
-- `models.download` `{repoId,revision,files?:string[],quantizationId?:string,packageId?:string,components?:object}`
+- `models.download` `{repoId,revision,files?:string[],quantizationId?:string,projector?:string,packageId?:string,components?:object}`
   → background download job. Supply exactly one selection method. A variant ID
   expands its authoritative file list after re-inspecting the pinned revision.
   Never automatically fetch every quantization.
+  With a GGUF `quantizationId`, `projector` can be `auto`, `none`, or an exact
+  matching `visionCompanions` path. Auto chooses one matching projector,
+  preferring Q8_0. Omitted projector retains a weights-only selection for
+  existing API callers. Every companion is revalidated at the pinned revision.
+  For an existing download, `files:[companionPath]` downloads only the auxiliary
+  file in that same repository/revision destination; it does not redownload the model.
   A package ID selects its complete authoritative file group. Music3 also
   requires exactly one offered variant ID for each of `language_model`,
   `rvq_depth_decoder`, `condition_encoder`, `transformer` and `vocoder` in
@@ -61,6 +67,23 @@ missing, duplicated or inconsistent shards make it unavailable for variant
 download. Unknown names and auxiliary weights remain in the manual file list.
 Sizes and VRAM estimates describe the entire selected variant. This downloads
 published quantizations; it does not convert weights into another quantization.
+
+Inspection also returns `visionCompanions:[{path,size,sha256,role:'vision-projector',modelFiles:[]}]`.
+Each companion lists main files with the same model stem and folder. Generic
+`mmproj` names match only when that folder contains one main model family.
+Unrelated or split projector files remain manual files; they are never offered
+as standalone quantizations. A companion filename is a pairing hint, not proof
+that the runtime supports its architecture. Download job files retain the role.
+
+The model browser includes a **Vision companion** selector when a matching
+projector is offered; selecting a GGUF quantization includes Q8_0 by default,
+or users can choose another companion or **Text only — no companion**. To add
+vision to an existing download, open **Models → Downloads & library**, select
+the model, choose **Add or update vision companion**, then **Download vision
+companion only**. The existing-model action inspects its original pinned revision.
+The local chat picker reports the companion that Start will load. Companion
+files are not independently startable models. No inspection or download runs
+silently at startup.
 
 Inspection also returns `packages:[]`. Safetensors packages include the actual
 `weight_map` shards from a bounded, pinned `.safetensors.index.json` read,

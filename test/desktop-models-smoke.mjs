@@ -12,17 +12,22 @@ const musicRepo='fixture/MiniMax-Music3-GGUF',musicRoles=['language_model','rvq_
 const musicPayloads=new Map(musicRoles.map(role=>{const bytes=Buffer.alloc(64);bytes.write('GGUF');bytes.writeUInt32LE(3,4);return [`MiniMax-Music3-${role}-${['condition_encoder','vocoder'].includes(role)?'F32':'Q8_0'}.gguf`,bytes];}));
 musicPayloads.set('LICENSE',Buffer.from('Fixture license'));musicPayloads.set('MiniMax-Music3-language_model-Q5_K_M.gguf',musicPayloads.values().next().value);
 const musicMetadata={id:musicRepo,sha:revision,tags:['gguf'],siblings:[...musicPayloads].map(([rfilename,bytes])=>({rfilename,size:bytes.length,lfs:{size:bytes.length,sha256:digest(bytes)}}))};
+const visionRepo='fixture/Qwen3.5-Vision-GGUF',visionStem='Qwen3.5-9B-Kimi-k3-Distilled',visionMain=`${visionStem}.Q4_K_M.gguf`,visionQ8=`${visionStem}.mmproj-Q8_0.gguf`,visionF16=`${visionStem}.mmproj-f16.gguf`;
+const visionBytes=Buffer.alloc(64);visionBytes.write('GGUF');visionBytes.writeUInt32LE(3,4);
+const visionPayloads=new Map([visionMain,visionF16,visionQ8,'Other.mmproj-Q8_0.gguf'].map(name=>[name,visionBytes]));
+const visionMetadata={id:visionRepo,sha:revision,tags:['gguf'],siblings:[...visionPayloads].map(([rfilename,bytes])=>({rfilename,size:bytes.length,lfs:{size:bytes.length,sha256:digest(bytes)}}))};
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 export function createHubSmokeFetch(){return async(input,options={})=>{
   const url=new URL(input);
   if(url.origin!=='https://huggingface.co')throw new Error('Controlled smoke never uses external network');
-  if(url.pathname==='/api/models')return Response.json([metadata,musicMetadata]);
+  if(url.pathname==='/api/models')return Response.json([metadata,musicMetadata,visionMetadata]);
   if(url.pathname===`/api/models/${repoId}`||url.pathname===`/api/models/${repoId}/revision/${revision}`)return Response.json(metadata);
   if(url.pathname===`/api/models/${musicRepo}`||url.pathname===`/api/models/${musicRepo}/revision/${revision}`)return Response.json(musicMetadata);
-  const music=url.pathname.startsWith(`/${musicRepo}/resolve/`),prefix=`/${music?musicRepo:repoId}/resolve/${revision}/`;
+  if(url.pathname===`/api/models/${visionRepo}`||url.pathname===`/api/models/${visionRepo}/revision/${revision}`)return Response.json(visionMetadata);
+  const music=url.pathname.startsWith(`/${musicRepo}/resolve/`),vision=url.pathname.startsWith(`/${visionRepo}/resolve/`),prefix=`/${vision?visionRepo:music?musicRepo:repoId}/resolve/${revision}/`;
   if(!url.pathname.startsWith(prefix))throw new Error(`Unexpected controlled smoke request: ${url.pathname}`);
-  const bytes=(music?musicPayloads:payloads).get(decodeURIComponent(url.pathname.slice(prefix.length)));if(!bytes)throw new Error('Unknown smoke fixture file');
+  const bytes=(vision?visionPayloads:music?musicPayloads:payloads).get(decodeURIComponent(url.pathname.slice(prefix.length)));if(!bytes)throw new Error('Unknown smoke fixture file');
   let offset=0,canceled=false;
   return new Response(new ReadableStream({
     async pull(controller){await pause(35);if(canceled)return;if(options.signal?.aborted){controller.error(options.signal.reason??new Error('Aborted'));return;}if(offset===bytes.length){controller.close();return;}const next=bytes.subarray(offset,offset+1024);offset+=next.length;controller.enqueue(next);},
@@ -96,6 +101,32 @@ export async function runModelHubSmoke({window,modelHub,runtime,chat,dataDir}){
   const musicAgent=await tool('hf_download_model',{repoId:musicRepo,revision,packageId:pipeline.id,components},['files']);assert.match(musicAgent.approvals[0].summary,/6 selected files/);await until(async()=> (await state()).downloads.find(job=>job.id===musicAgent.result.id&&job.status==='completed'),'agent pipeline package');
   await until(()=>js(`Array.from(document.querySelectorAll('#disk-library-grid .model-repo')).some(node=>node.textContent.includes('MiniMax-Music3 pipeline'))`),'Music3 disk library pipeline');
   checks.push('Music3 UI requires five component choices, downloads only one variant per role, and normal agent package downloads preserve files approval');await capture('models-music3-package');
+  await click('#model-browse-tab');await click(`#model-results [data-repo-id="${visionRepo}"]`);await until(()=>js(`!!document.querySelector('#model-quantizations .quantization-pill')`),'vision GGUF variant');
+  await click('#model-quantizations .quantization-pill');
+  assert.equal(await js(`document.querySelector('#model-vision-projector').value`),visionQ8);
+  assert.match(await js(`document.querySelector('#model-selection-summary').textContent`),/2 files selected/);
+  assert.equal(await js(`Array.from(document.querySelector('#model-vision-projector').options).some(option=>option.value==='Other.mmproj-Q8_0.gguf')`),false);
+  await js(`(()=>{const select=document.querySelector('#model-vision-projector');select.value='';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);assert.match(await js(`document.querySelector('#model-selection-summary').textContent`),/1 file selected/);
+  await js(`(()=>{const select=document.querySelector('#model-vision-projector');select.value=${JSON.stringify(visionQ8)};select.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#model-vision-companion').scrollIntoView({block:'center'});})()`);await capture('models-vision-selection');
+  await click('#model-download-selected');
+  const visionFull=await until(async()=> (await state()).downloads.find(job=>job.repoId===visionRepo&&job.status==='completed'),'full model and Q8 vision companion');
+  assert.deepEqual(visionFull.files.map(file=>file.path),[visionMain,visionQ8]);await assert.rejects(fs.access(path.join(visionFull.directory,visionF16)));
+  // Remove only the isolated fixture companion to exercise adding vision to an existing text-only download.
+  await fs.unlink(path.join(visionFull.directory,visionQ8));await click('#disk-library-refresh');
+  const visionModel=await until(()=>js(`window.faber.request('localModels.list').then(state=>state.models.find(model=>model.files.some(file=>file.endsWith(${JSON.stringify(visionMain)}))))`),'existing vision model in library');
+  await until(()=>js(`!!document.querySelector('#disk-library-grid [data-model-id="${visionModel.id}"] .model-card-main')`),'existing vision disk card');
+  await click(`#disk-library-grid [data-model-id="${visionModel.id}"] .model-card-main`);await click('[data-action="add-vision-companion"]');
+  await until(()=>js(`!!document.querySelector('#model-download-projector')&&document.querySelector('#model-vision-projector').value===${JSON.stringify(visionQ8)}`),'existing model companion action');
+  assert.match(await js(`document.querySelector('#model-detail').textContent`),new RegExp(`Pinned revision: ${revision}`));
+  assert.equal(await js(`document.querySelector('#model-download-selected').disabled`),true);
+  await click('#model-download-projector');
+  const visionOnly=await until(async()=> (await state()).downloads.find(job=>job.repoId===visionRepo&&job.id!==visionFull.id&&job.status==='completed'),'companion-only download');
+  assert.deepEqual(visionOnly.files.map(file=>file.path),[visionQ8]);assert.equal(digest(await fs.readFile(path.join(visionFull.directory,visionMain))),digest(visionBytes));
+  const visionState=await js(`window.faber.request('localModels.list')`),visionModels=visionState.models.filter(model=>model.files.some(file=>file.includes(visionStem)));
+  assert.equal(visionModels.length,1);assert.equal(visionModels[0].vision.available,true);assert.ok(visionModels[0].vision.projector.relativePath.endsWith(visionQ8));assert.ok(!visionState.models.some(model=>model.files.some(file=>/mmproj/.test(file))));
+  await click('#model-browse-tab');await click('#model-quantizations .quantization-pill');await js(`(()=>{const select=document.querySelector('#model-vision-projector');select.value=${JSON.stringify(visionF16)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);await click('#model-download-selected');
+  const visionAlternate=await until(async()=> (await state()).downloads.find(job=>job.repoId===visionRepo&&job.files.some(file=>file.path===visionF16)&&job.status==='completed'),'explicit F16 companion');assert.deepEqual(visionAlternate.files.map(file=>file.path),[visionMain,visionF16]);
+  checks.push('GGUF vision defaults to matching Q8_0, supports F16/text-only selection, and the existing-model action downloads only the pinned companion; projectors never appear as standalone models');await capture('models-vision-companion');
   window.setSize(1100,760);await click('#model-browse-tab');await capture('models-browser-compact');
   await click('#open-settings');await click('[data-settings-category="models"].nav-button');await js(`document.querySelector('#model-download-settings').scrollIntoView({block:'center'})`);await capture('models-settings-compact');await click('#close-modal');
   const result={ok:true,kind:'deterministic-controlled-fetch',checks,destination,completed:{id:completed.id,file,bytes:weights.length,sha256:digest(weights)},canceled:{id:canceled.id,status:canceled.status},screenshots};

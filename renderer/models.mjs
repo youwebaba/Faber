@@ -1,4 +1,4 @@
-import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest } from './model-helpers.mjs';
+import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest, availableVisionCompanions } from './model-helpers.mjs';
 import { createDiskLibrary } from './library.mjs';
 import { createPackageChoices } from './model-packages.mjs';
 
@@ -39,7 +39,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
   const openRoot = button('Open download folder', () => request('models.openDirectory'));
   libraryHeading.append(directory, openRoot); downloads.append(libraryHeading);
   const libraryNote = el('p', 'hint', 'Files found on disk and active downloads. Stop a model before deleting it. Recycle Bin storage is freed when you empty the bin.'); downloads.append(libraryNote);
-  const diskLibrary = createDiskLibrary({ request, el, button, actions, notify, inspect: async repoId => { showTab('browse'); await inspect(repoId); } }); downloads.append(diskLibrary.root);
+  const diskLibrary = createDiskLibrary({ request, el, button, actions, notify, inspect: async (repoId, revision, modelFiles) => { showTab('browse'); await inspect(repoId, revision, modelFiles); } }); downloads.append(diskLibrary.root);
   const history = el('details', 'model-transfer-history'); history.append(el('summary', '', 'Past transfer records'), el('p', 'hint', 'Records do not prove files are still on disk. Use the disk library above for current model files.'));
   const jobs = el('div', 'model-jobs'); history.append(jobs); downloads.append(history); panel.append(downloads);
   const footer = el('div', 'model-footer'); const transferStatus = el('span', 'hint'); const viewTransfers = button('View downloads', () => showTab('downloads'), 'text-button');
@@ -110,20 +110,20 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     const link = el('a', 'model-page-link', label); link.href = `https://huggingface.co/${repoId.split('/').map(encodeURIComponent).join('/')}`;
     link.addEventListener('click', event => { event.preventDefault(); request('models.openPage', { repoId }).catch(error => notify(errorText(error), true)); }); return link;
   }
-  async function inspect(repoId) {
+  async function inspect(repoId, revision, modelFiles) {
     detail.hidden = false; columns.classList.add('has-detail');
     const current = nextInspect(); inspected = undefined; selected.clear();
     for (const row of results.children) row.setAttribute('aria-pressed', String(row.dataset.repoId === repoId));
     detail.replaceChildren(el('p', 'hint', 'Loading file metadata…')); detail.scrollTop = 0;
     try {
-      const model = await request('models.inspect', { repoId }); if (!current()) return;
-      inspected = model; renderDetail(model);
+      const model = await request('models.inspect', { repoId, ...(revision ? { revision } : {}) }); if (!current()) return;
+      inspected = model; renderDetail(model, modelFiles);
     } catch (error) {
       if (!current()) return;
-      detail.replaceChildren(el('h2', 'model-repo', repoId), el('p', 'error-text', errorText(error)), el('p', 'hint', 'For restricted models, request access on Hugging Face and save a token with permission to read the repository in Settings.'), pageLink(repoId), button('Download settings', showSettings), button('Try again', () => inspect(repoId)));
+      detail.replaceChildren(el('h2', 'model-repo', repoId), el('p', 'error-text', errorText(error)), el('p', 'hint', 'For restricted models, request access on Hugging Face and save a token with permission to read the repository in Settings.'), pageLink(repoId), button('Download settings', showSettings), button('Try again', () => inspect(repoId, revision, modelFiles)));
     }
   }
-  function renderDetail(model) {
+  function renderDetail(model, existingModelFiles = []) {
     detail.replaceChildren();
     let quantization;
     const variantButtons = [];
@@ -164,7 +164,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     const checkboxes = [];
     for (const file of model.files || []) {
       const row = el('label', 'model-file'); const check = el('input'); check.type = 'checkbox'; check.value = file.path; check.dataset.path = file.path;
-      const text = el('span', 'model-file-name'); text.append(el('strong', '', file.path), el('small', '', `${file.format || (file.weight ? 'Weights' : 'Supporting file')}${file.sha256 ? ' · SHA-256 available' : ''}${file.vram ? ` · VRAM estimate ${formatVram(file.vram)}` : ''}`));
+      const text = el('span', 'model-file-name'); text.append(el('strong', '', file.path), el('small', '', `${file.role === 'vision-projector' ? 'Vision companion · not a standalone model' : file.format || (file.weight ? 'Weights' : 'Supporting file')}${file.sha256 ? ' · SHA-256 available' : ''}${file.vram ? ` · VRAM estimate ${formatVram(file.vram)}` : ''}`));
       if (file.vram?.note) text.title = file.vram.note;
       row.append(check, text, el('span', 'model-file-size', formatBytes(file.size))); files.append(row); checkboxes.push(check);
       check.addEventListener('change', () => { packages.clear(); quantization = undefined; check.checked ? selected.add(file.path) : selected.delete(file.path); updateSelection(); });
@@ -173,6 +173,19 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     const manual = el('details', 'model-manual-files'); manual.id = 'model-manual-files'; manual.open = !model.quantizations?.length;
     manual.open = !model.quantizations?.length && !model.packages?.length;
     manual.append(el('summary', '', 'Advanced: select individual files'), el('p', 'hint', 'Manual selection may omit required weights or support data. Original repository subfolders are preserved.'), files); detail.append(manual);
+    const vision = el('section', 'model-vision-companion'); vision.id = 'model-vision-companion';
+    const projector = el('select'); projector.id = 'model-vision-projector'; projector.setAttribute('aria-label', 'Vision companion');
+    const visionNote = el('p', 'hint'); visionNote.setAttribute('role', 'status');
+    const companionOnly = button('Download vision companion only', async () => {
+      if (!projector.value || downloading) return;
+      downloading = true; updateSelection();
+      try { await request('models.download', { repoId: model.id, revision: model.revision, files: [projector.value] }); notify('Vision companion queued. Existing model weights will not be downloaded again.'); await refresh(); showTab('downloads'); }
+      catch (error) { notify(errorText(error), true); }
+      finally { downloading = false; updateSelection(); }
+    }); companionOnly.id = 'model-download-projector';
+    vision.append(el('h3', '', 'Vision companion'), el('p', 'hint', 'A matching projector enables image input for a compatible GGUF runtime. Q8_0 is selected when offered. To add vision to an existing download, download only its companion at the same pinned revision.'), projector, visionNote, companionOnly); detail.append(vision);
+    let companionSignature;
+    projector.addEventListener('change', updateSelection);
     const selection = el('div', 'model-selection'); const summary = el('span', 'hint'); summary.id = 'model-selection-summary';
     let downloading = false;
     const download = el('button', 'button primary', 'Download selected files'); download.type = 'button'; download.id = 'model-download-selected';
@@ -181,7 +194,7 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
       if (downloading || !chosen.count || !model.revision) return;
       downloading = true; updateSelection();
       try {
-        const job = await request('models.download', modelDownloadRequest(model, chosen.paths, quantization, packages.selected()));
+        const job = await request('models.download', modelDownloadRequest(model, chosen.paths, quantization, packages.selected(), quantization ? projector.value || 'none' : undefined));
         notify(`Download queued for ${job.repoId}. Track progress in Downloads & library.`); await refresh(); showTab('downloads');
       } catch (error) { notify(errorText(error), true); }
       finally { downloading = false; updateSelection(); }
@@ -189,6 +202,16 @@ export function createModelsBrowser({ request, subscribe, el, button, field, act
     const clear = button('Clear selection', () => { packages.clear(); quantization = undefined; selected.clear(); checkboxes.forEach(check => { check.checked = false; }); updateSelection(); }, 'text-button');
     selection.append(summary, clear, download); detail.append(selection);
     function updateSelection() {
+      const companions = availableVisionCompanions(model, quantization?.files || existingModelFiles).filter(file => file.modelFiles.length);
+      const signature = JSON.stringify([quantization?.id, companions.map(file => file.path)]);
+      if (signature !== companionSignature) {
+        companionSignature = signature; projector.replaceChildren();
+        for (const file of companions) { const option = el('option', '', `${file.path} · ${formatBytes(file.size)}`); option.value = file.path; projector.append(option); }
+        const none = el('option', '', 'Text only — no companion'); none.value = ''; projector.append(none); projector.value = companions[0]?.path || '';
+      }
+      vision.hidden = !companions.length; companionOnly.disabled = downloading || !projector.value;
+      visionNote.textContent = projector.value ? `${quantization ? 'Included with the selected quantization. ' : ''}Companion-only download: ${formatBytes(companions.find(file => file.path === projector.value)?.size)}. This file is not independently startable.` : 'No vision companion selected. The model can still be used for text.';
+      if (quantization) { for (const file of model.visionCompanions || []) selected.delete(file.path); if (projector.value) selected.add(projector.value); checkboxes.forEach(check => { check.checked = selected.has(check.value); }); }
       const chosen = selectedFiles(model.files || [], selected);
       for (const { choice, variant } of variantButtons) choice.setAttribute('aria-pressed', String(quantization?.id === variant.id));
       variantSummary.textContent = quantization ? `${quantization.label}. ${quantization.files.length} file${quantization.files.length === 1 ? '' : 's'}; VRAM estimate ${formatVram(quantization.vram)}.` : chosen.count ? 'Custom file selection. Review that every required shard is included.' : 'Select one variant to see its exact download size.';

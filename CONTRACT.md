@@ -6,11 +6,17 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a3.0.1 (application version 3.0.1), including
+This contract describes Faber a3.0.2 (application version 3.0.2), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
 assets, and earlier chronological evidence remains separate.
+
+a3.0.2 pairs a downloaded GGUF with a complete matching vision projector.
+Companion downloads retain the main model's repository revision and destination.
+Local discovery rejects incomplete, linked or ambiguous companions; text-only
+models keep the explicit no-projector runtime path. Model startup uses only local
+files and performs no companion download. See [a3.0.2 notes](docs/a3.0.2-release-notes.md).
 
 ## Remote desktop sessions
 

@@ -35,13 +35,20 @@ export function quantizationGroups(variants = []) {
   return [...groups].sort(([a], [b]) => a - b).map(([bits, variants]) => ({ bits, variants }));
 }
 
-export function modelDownloadRequest(model, files, quantization, selectedPackage) {
+export function availableVisionCompanions(model, modelFiles = []) {
+  return (model.visionCompanions || []).filter(file => !modelFiles.length || modelFiles.some(path => file.modelFiles.includes(path))).sort((a, b) => {
+    const rank = file => /[_.-]Q8_0\.gguf$/i.test(file.path) ? 0 : /[_.-](?:BF16|F16)\.gguf$/i.test(file.path) ? 1 : 2;
+    return rank(a) - rank(b) || (a.size ?? Infinity) - (b.size ?? Infinity) || a.path.localeCompare(b.path);
+  });
+}
+
+export function modelDownloadRequest(model, files, quantization, selectedPackage, projector) {
   if (selectedPackage) {
     if (!selectedPackage.complete) throw new Error(selectedPackage.reason || 'Select all five Music3 components.');
     return { repoId: model.id, revision: model.revision, packageId: selectedPackage.id, ...(selectedPackage.type === 'minimax-music3' ? { components: selectedPackage.choices } : {}) };
   }
   if (quantization && !quantization.complete) throw new Error(quantization.reason || 'This quantization is incomplete.');
-  return { repoId: model.id, revision: model.revision, ...(quantization ? { quantizationId: quantization.id } : { files }) };
+  return { repoId: model.id, revision: model.revision, ...(quantization ? { quantizationId: quantization.id, ...(projector ? { projector } : {}) } : { files }) };
 }
 
 export function downloadProgress(job) {

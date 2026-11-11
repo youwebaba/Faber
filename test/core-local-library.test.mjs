@@ -119,3 +119,36 @@ test('untracked Qwen main GGUF stays discoverable from a library root containing
   const root=await scanLocalModels({directory}),revision=await scanLocalModels({directory:path.join(directory,...repository.split('/'))});
   assert.deepEqual(root.models.map(model=>model.relativePath),[`${repository}/${base}`]);assert.deepEqual(revision.models.map(model=>model.relativePath),[base]);assert.ok(root.models[0].available&&revision.models[0].available);
 });
+
+test('vision discovery chooses one complete precision variant and keeps auxiliary weights out of chat models',async t=>{
+  const {directory,write}=await fixture(t);
+  for(const name of ['Qwen3.5-0.8B-Q4_K_M-00001-of-00002.gguf','Qwen3.5-0.8B-Q4_K_M-00002-of-00002.gguf','mmproj-Qwen3.5-0.8B-F16.gguf','mmproj-Qwen3.5-0.8B-Q8_0.gguf','mmproj-other-Q8_0.gguf'])await write(name);
+  let model=(await scanLocalModels({directory})).models[0];assert.equal(model.vision.status,'available');assert.equal(model.vision.projector.relativePath,'mmproj-Qwen3.5-0.8B-Q8_0.gguf');assert.equal(model.files.length,2);assert.equal((await scanLocalModels({directory})).models.length,1);
+  const original=model.vision.projector.id;await fs.utimes(path.join(directory,model.vision.projector.relativePath),new Date(),new Date(Date.now()+20000));model=(await scanLocalModels({directory})).models[0];assert.notEqual(model.vision.projector.id,original);
+  await write('mmproj-Qwen3.5-0.8B-Q8_0.gguf',Buffer.from('incomplete'));model=(await scanLocalModels({directory})).models[0];assert.equal(model.vision.projector.relativePath,'mmproj-Qwen3.5-0.8B-F16.gguf');
+});
+
+test('tracked projector pairing requires complete matching source ownership including supplemental pinned downloads',async t=>{
+  const {directory,write}=await fixture(t),main='Qwen-Q4_K_M.gguf',projector='mmproj-Qwen-Q8_0.gguf';await write(main);await write(projector);
+  const record=(files,extra={})=>({id:files.join(','),directory,repoId:'owner/model',revision:'a'.repeat(40),status:'completed',files:files.map(path=>({path,size:64,status:'completed'})),...extra});
+  const scan=async downloads=>(await scanLocalModels({directory,downloads})).models[0];
+  assert.equal((await scan([record([main]),record([projector])])).vision.available,true);
+  for(const downloads of [[record([main])],[record([main]),record([projector],{revision:'b'.repeat(40)})],[record([main]),record([projector],{repoId:'other/model'})],[record([main]),record([projector],{status:'downloading'})],[record([projector])]])assert.equal((await scan(downloads)).vision.available,false);
+  assert.equal((await scan([record([main,projector])])).vision.available,true);
+});
+
+test('manual shared folders only pair exact stems or one unambiguous generic projector',async t=>{
+  const {directory,write}=await fixture(t);await write('Qwen-Q4_K_M.gguf');await write('mmproj-Q8_0.gguf');
+  assert.equal((await scanLocalModels({directory})).models[0].vision.available,true);
+  await write('Other-Q4_K_M.gguf');let models=(await scanLocalModels({directory})).models;assert.ok(models.every(model=>model.vision.status==='ambiguous'));
+  await write('mmproj-Qwen-F16.gguf');models=(await scanLocalModels({directory})).models;assert.equal(models.find(model=>model.relativePath.startsWith('Qwen')).vision.projector.relativePath,'mmproj-Qwen-F16.gguf');assert.equal(models.find(model=>model.relativePath.startsWith('Other')).vision.available,false);
+});
+
+test('projector shards must be complete, and partial/invalid/linked projectors are never paired',async t=>{
+  const {directory,write}=await fixture(t);await write('Qwen-Q4_K_M.gguf');await write('mmproj-Qwen-Q8_0-00001-of-00002.gguf');
+  assert.equal((await scanLocalModels({directory})).models[0].vision.available,false);
+  await write('mmproj-Qwen-Q8_0-00002-of-00002.gguf');let model=(await scanLocalModels({directory})).models[0];assert.equal(model.vision.projector.files.length,2);
+  await fs.rm(path.join(directory,'mmproj-Qwen-Q8_0-00002-of-00002.gguf'));await write('mmproj-Qwen-F16.partial.gguf');await write('mmproj-Qwen-BF16.gguf',Buffer.alloc(64));await write('outside/real.gguf');
+  const linked=path.join(directory,'mmproj-Qwen-F32.gguf');try{await fs.symlink(path.join(directory,'outside','real.gguf'),linked,'file');}catch(error){if(error.code!=='EPERM')throw error;}
+  model=(await scanLocalModels({directory})).models.find(item=>item.relativePath==='Qwen-Q4_K_M.gguf');assert.equal(model.vision.available,false);assert.equal(model.available,true);
+});
