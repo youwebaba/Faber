@@ -61,6 +61,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   const select = el('select'); select.id = 'chat-local-model'; label.append(select);
   const directory = el('p', 'hint local-model-directory'); directory.id = 'local-model-directory';
   const detail = el('p', 'hint'); detail.id = 'local-model-detail';
+  const vision = el('p', 'hint'); vision.id = 'local-model-vision';
   const status = el('p', 'local-model-status'); status.id = 'local-model-status'; status.setAttribute('role', 'status');
   const progress = el('progress'); progress.id = 'local-model-progress'; progress.setAttribute('aria-label', 'Local model operation'); progress.hidden = true;
   const error = el('p', 'error-text hint'); error.id = 'local-model-error'; error.setAttribute('role', 'alert'); error.hidden = true;
@@ -68,7 +69,7 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
   const precision=createPrecisionControls({request,el,onChange:()=>{showError('');render();}});
   const speculation=createSpeculationControls({request,el,onChange:()=>{showError('');render();}});
   const hardware = createHardwareControls({ request, el, onChange: () => render() });
-  root.append(label, directory, detail,precision.root,speculation.root, status, progress, error, controls, el('p', 'hint', 'Start loads the model without changing this chat. Stop unloads the model; it does not stop a chat run. Use in this chat applies your selection to the next run.'));
+  root.append(label, directory, detail,vision,precision.root,speculation.root, status, progress, error, controls, el('p', 'hint', 'Start loads the model without changing this chat. Stop unloads the model; it does not stop a chat run. Use in this chat applies your selection to the next run.'));
   root.append(hardware.root);
   let state = {}, provider, configuredModel = '', choices = [], enabled = false, disposed = false, loadingList = false, operation, connectionEpoch = 0, optionsSignature;
   const nextList = requestGate();
@@ -95,6 +96,8 @@ export function createLocalPicker({ request, subscribe, el, onChange, onManagedP
     const choice = selected(); const info = selection();
     const native=choice?.format==='safetensors';precision.setContext(state,choice);speculation.setContext(state,choice);
     detail.textContent = choice ? `${choice.source === 'download' ? choice.relativePath || choice.label : choice.id}${choice.files?.length ? ` · ${choice.files.length} file${choice.files.length === 1 ? '' : 's'}` : ''}` : '';
+    vision.hidden = choice?.source !== 'download' || choice?.format !== 'gguf';
+    vision.textContent = choice?.vision?.available ? `Vision companion: ${choice.vision.projector?.relativePath || 'matching projector'}. Start loads it for image input.` : `Text only. ${choice?.vision?.reason || 'No matching vision companion found.'} Add one in Models → Downloads & library → model details → Add or update vision companion.`;
     const ownOperation = operation && operation.value === select.value;
     status.textContent = ownOperation ? operation.label : !loadingList && !choices.length ? 'No local model files were found. Download a GGUF in Models, then refresh this folder.' : info.note;
     if(native&&!precision.ready())status.textContent+=' '+choice.quantizationWarning;

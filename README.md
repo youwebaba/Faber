@@ -1,4 +1,4 @@
-# Faber a3.0.1
+# Faber a3.0.2
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -8,10 +8,12 @@ the agents can author. It has its own source, launchers and release lifecycle.
 
 Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
 
-**a3.0.1 addresses startup when upgrading older profiles.** The focused patch
-handles profiles created before jobs and routines and retries after an interrupted
-upgrade checkpoint. Installer validation is in progress.
-[a3.0.1 notes](docs/a3.0.1-release-notes.md)
+**a3.0.2 connects GGUF vision models to their matching vision companion.**
+The model browser includes a compatible projector with the selected quantization
+and can add one to an existing download without downloading its main weights again.
+Starting a matching local pair enables image input. Models without a complete,
+unambiguous companion stay text only.
+[a3.0.2 notes](docs/a3.0.2-release-notes.md)
 
 **a3.0 adds consented live video and brings the media and worker workflows together.**
 Choose a camera, screen or window and review the selected source and paired

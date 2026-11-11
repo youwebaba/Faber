@@ -48,7 +48,8 @@ async function until(manager, status) { for (let i = 0; i < 300; i++) { const st
 test('native MTP must be confirmed at readiness, persists per target, reports counters and refuses missing heads before spawning',async t=>{
  const tensors=['eh_proj','enorm','hnorm','shared_head_norm'].map(part=>({name:`blk.24.nextn.${part}.weight`,elements:1024}));let heads=true,f;
  f=await fixture(t,{speculationReader:async()=>({architecture:'qwen35',complete:true,tensors:heads?tensors:[],splitCount:null}),hardwareRunner:async(_exe,args)=>({code:0,stdout:args[0]==='--help'?'--device --n-gpu-layers --threads-batch --load-mode --ctx-size --parallel --verbosity --spec-type draft-mtp draft-simple --spec-draft-model --spec-draft-n-max --slots --spec-draft-device --spec-draft-ngl':'Fixture runtime',stderr:''}),fetchImpl:async url=>String(url).endsWith('/health')?Response.json({}, {status:f.readiness.ready?200:503}):String(url).endsWith('/props')?Response.json({}):String(url).endsWith('/slots')?Response.json([{speculative:true}]):Response.json({data:[{id:f.children.at(-1).args[f.children.at(-1).args.indexOf('--alias')+1]}]})});
- const model=(await f.manager.request('localModels.list')).models[0],profile={mode:'native_mtp',tokens:4};await f.manager.request('localModels.start',{modelId:model.id,speculation:profile});f.children[0].stderr.write("I spec common_specu: adding speculative implementation 'draft-mtp'\nI spec common_specu: - n_max=4, n_min=0, p_min=0.00\n");f.readiness.ready=true;const ready=await until(f.manager,'ready');assert.deepEqual(ready.models[0].speculation,profile);assert.equal(ready.process.observed.speculation.implementation,'draft-mtp');
+ await fs.writeFile(path.join(f.directory,'mmproj-fixture-Q8_0.gguf'),header());
+ const model=(await f.manager.request('localModels.list')).models[0],profile={mode:'native_mtp',tokens:4};await f.manager.request('localModels.start',{modelId:model.id,speculation:profile});assert.ok(f.children[0].args.includes('--mmproj'));f.children[0].stderr.write("I spec common_specu: adding speculative implementation 'draft-mtp'\nI spec common_specu: - n_max=4, n_min=0, p_min=0.00\n");f.readiness.ready=true;const ready=await until(f.manager,'ready');assert.deepEqual(ready.models[0].speculation,profile);assert.equal(ready.process.observed.speculation.implementation,'draft-mtp');
  f.children[0].stderr.write('I slot print_timing: id 0 | task 0 | draft acceptance = 0.75 (3 accepted / 4 generated)\n');await pause(2);assert.equal((await f.manager.request('localModels.list')).process.observed.speculation.metrics.acceptedTokens,3);await f.manager.request('localModels.stop');
  heads=false;await assert.rejects(f.manager.request('localModels.start',{modelId:model.id}),/no complete embedded/);assert.equal(f.children.length,1);await assert.rejects(f.manager.request('localModels.start',{providerId:'unrelated',model:'remote',speculation:profile}),/owned downloaded/);
  heads=true;await f.manager.request('localModels.start',{modelId:model.id});await until(f.manager,'failed');assert.equal(f.children[1].exitCode,0,'Missing effective implementation stops the process instead of silently disabling MTP');
@@ -73,6 +74,47 @@ test('owned GGUF lifecycle uses validated files, registers only after readiness,
   f.state.runs[0].status = 'completed'; const stopped = await f.manager.request('localModels.stop'); assert.equal(stopped.process.status, 'stopped'); assert.equal(child.exitCode, 0); assert.throws(() => f.manager.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/);
   await assert.rejects(fs.access(child.args[child.args.indexOf('--api-key-file') + 1])); assert.ok(!JSON.stringify(f.events).includes(f.secrets.get(ready.process.providerId)));
   await f.manager.close(); const reopened = await createLocalModels(f.options); try { assert.equal((await reopened.request('localModels.list')).managedProviderId, ready.managedProviderId); assert.throws(() => reopened.assertProviderAvailable(ready.process.providerId, ready.process.model), /Start this/); } finally { await reopened.close(); }
+});
+
+test('managed GGUF passes the selected complete projector path and reports it while loading and ready',async t=>{
+  const f=await fixture(t);for(const name of ['mmproj-fixture-F16.gguf','mmproj-fixture-Q8_0.gguf'])await fs.writeFile(path.join(f.directory,name),header());
+  const model=(await f.manager.request('localModels.list')).models[0],started=await f.manager.request('localModels.start',{modelId:model.id});
+  const args=f.children[0].args;assert.equal(args[args.indexOf('--mmproj')+1],await fs.realpath(path.join(f.directory,'mmproj-fixture-Q8_0.gguf')));assert.ok(!args.includes('--no-mmproj'));assert.equal(started.process.vision.projector.id,model.vision.projector.id);
+  f.readiness.ready=true;const ready=await until(f.manager,'ready');assert.equal(ready.process.vision.available,true);assert.equal(ready.process.vision.runtimeSupported,null);assert.equal(ready.process.vision.projector.relativePath,'mmproj-fixture-Q8_0.gguf');
+  assert.doesNotThrow(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{hasImages:true}));
+});
+
+test('owned text-only GGUF image requests explain the companion download and restart without guarding external providers',async t=>{
+  const f=await fixture(t),model=(await f.manager.request('localModels.list')).models[0];f.readiness.ready=true;await f.manager.request('localModels.start',{modelId:model.id});const ready=await until(f.manager,'ready');
+  assert.doesNotThrow(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{hasImages:false}));
+  assert.doesNotThrow(()=>f.manager.assertProviderAvailable('unrelated','unrelated',{hasImages:true}));
+  assert.throws(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{hasImages:true}),/download its matching vision companion.*stop and restart/);
+  await fs.writeFile(path.join(f.directory,'mmproj-fixture-Q8_0.gguf'),header());assert.equal((await f.manager.request('localModels.list')).models[0].vision.available,true);
+  assert.throws(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{hasImages:true}),/stop and restart/);
+  await f.manager.request('localModels.stop');await f.manager.request('localModels.start',{modelId:model.id});await until(f.manager,'ready');assert.doesNotThrow(()=>f.manager.assertProviderAvailable(ready.process.providerId,ready.process.model,{hasImages:true}));
+});
+
+test('an explicit runtime rejection of vision fails loading and stops its child',async t=>{
+  let f;f=await fixture(t,{fetchImpl:async url=>String(url).endsWith('/props')?Response.json({modalities:{vision:false}}):String(url).endsWith('/health')?Response.json({}):Response.json({data:[{id:f.children.at(-1).args[f.children.at(-1).args.indexOf('--alias')+1]}]})});
+  await fs.writeFile(path.join(f.directory,'mmproj-fixture-Q8_0.gguf'),header());const model=(await f.manager.request('localModels.list')).models[0];await f.manager.request('localModels.start',{modelId:model.id});const failed=await until(f.manager,'failed');assert.match(failed.process.error,/declined.*vision projector/);assert.equal(f.children[0].exitCode,0);assert.equal(f.state.providers.length,1);
+});
+
+test('projector mutation or ownership changes during hardware preparation reject before spawning',async t=>{
+  for(const mode of ['replacement','owner']){
+    let f,changed=false;const downloads=[];
+    f=await fixture(t,{getHubState:async()=>({downloadDirectory:f.directory,downloads}),hardwareRunner:async(_exe,args)=>{
+      if(!changed){changed=true;if(mode==='owner')downloads.push({id:'new-owner',directory:f.directory,repoId:'other/model',revision:'b'.repeat(40),status:'completed',files:[{path:'mmproj-fixture-Q8_0.gguf',size:24,status:'completed'}]});else{const file=path.join(f.directory,'mmproj-fixture-Q8_0.gguf'),stat=await fs.stat(file);await fs.writeFile(file,header());await fs.utimes(file,stat.atime,stat.mtime);}}
+      return {code:0,stdout:args[0]==='--help'?'--device --n-gpu-layers --load-mode':'Fixture runtime',stderr:''};
+    }});
+    await fs.writeFile(path.join(f.directory,'mmproj-fixture-Q8_0.gguf'),header());const model=(await f.manager.request('localModels.list')).models[0];await assert.rejects(f.manager.request('localModels.start',{modelId:model.id}),/vision projector files changed/);assert.equal(f.children.length,0);
+  }
+});
+
+test('projector hardlinks to target weights are rejected, and deleting loaded sidecar aliases is fenced',async t=>{
+  const f=await fixture(t),projector=path.join(f.directory,'mmproj-fixture-Q8_0.gguf');await fs.link(path.join(f.directory,'fixture-Q4_K_M.gguf'),projector);let model=(await f.manager.request('localModels.list')).models[0];await assert.rejects(f.manager.request('localModels.start',{modelId:model.id}),/aliases language-model weights/);assert.equal(f.children.length,0);
+  await fs.rm(projector);await fs.writeFile(projector,header());await f.manager.close();let moved=0;const manager=await createLocalModels({...f.options,withModelFiles:async(_directory,_files,operation)=>operation(),trashItem:async file=>{moved++;await fs.rm(file);}});t.after(()=>manager.close());model=(await manager.request('localModels.list')).models[0];await manager.request('localModels.start',{modelId:model.id});await fs.rename(projector,path.join(f.directory,'renamed-weights.gguf'));
+  const alias=(await manager.request('localModels.list')).models.find(item=>item.relativePath==='renamed-weights.gguf');await assert.rejects(manager.request('localModels.delete',{modelId:alias.id}),/Stop the loaded/);assert.equal(moved,0);await manager.request('localModels.stop');
+  await fs.rename(path.join(f.directory,'renamed-weights.gguf'),projector);model=(await manager.request('localModels.list')).models[0];await manager.request('localModels.delete',{modelId:model.id});assert.equal(moved,1);await fs.access(projector);
 });
 
 test('native load quantization cannot silently affect GGUF or external Ollama routes',async t=>{

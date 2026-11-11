@@ -406,6 +406,9 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     return full ? projected : workingMessages(chat, projected);
   }
   async function modelTurn(run, configuration, messages, tools, purpose = 'response') {
+    if (messages.some(message => message.image || (message.role === 'user' && message.images?.length))) {
+      host.assertProviderAvailable?.(configuration.id, configuration.model, { hasImages: true });
+    }
     const chat = find('chats', run.chatId), execution = live.get(run.id), controller = new AbortController();
     const signal = AbortSignal.any([execution.controller.signal, controller.signal]);
     const attempt = { controller, purpose, steerVersion: execution.steerVersion || 0 };
@@ -667,7 +670,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
     const model = chat.model || find('providers', chat.providerId).model;
     const selected=singleTool?null:controls(chat);
     const chatOptions=selected?{contextTokens:selected.contextTokens,thinking:selected.thinking.selected,thinkingMode:selected.thinking.mode,reasoningEffort:selected.reasoning?.selected??null,defaultReasoningEffort:selected.reasoning?.default!=='none'&&selected.reasoning?.default?selected.reasoning.default:selected.reasoning?.efforts.find(effort=>effort!=='none')}:undefined;
-    if (!singleTool) host.assertProviderAvailable?.(chat.providerId, model,{contextTokens:chat.contextTokens??null,thinking:chat.thinking??null,reasoningEffort:chat.reasoningEffort??null});
+    if (!singleTool) host.assertProviderAvailable?.(chat.providerId, model,{contextTokens:chat.contextTokens??null,thinking:chat.thinking??null,reasoningEffort:chat.reasoningEffort??null,...(images?.length ? {hasImages:true} : {})});
     const modelDisplayName = host.modelDisplayName?.(chat.providerId, model) || model;
     const parent = parentRunId ? find('runs', parentRunId) : null;
     const sameProject = !parent || find('chats', parent.chatId).projectId === chat.projectId;
@@ -866,6 +869,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
             return { runId: previous.runId, messageId: previous.messageId, status: previous.status, mode: previous.mode, ...(previous.waitingFor ? { waitingFor: previous.waitingFor } : {}) };
           }
           if (!run || run.id !== params.runId) throw new Error('The intended task has finished or changed; send a new message instead.');
+          if (params.images?.length) host.assertProviderAvailable?.(run.providerId, run.model, { hasImages: true });
           const execution = live.get(run.id);
           if (!execution || execution.controller.signal.aborted) throw new Error('Chat is stopping; wait for it to settle');
           if ((run.steering || []).filter(item => ['queued', 'accepted'].includes(item.status)).length >= 32) throw new Error('Too many pending corrections');
@@ -891,6 +895,7 @@ export async function createRuntime({ dataDir, sourceDir, host = {}, provider: i
         if (run) {
           if (!live.has(run.id) || live.get(run.id).controller.signal.aborted) throw new Error('Chat is stopping; wait for it to settle');
           if (chat.inbox?.length >= 32) throw new Error('Chat followup queue is full');
+          if (params.images?.length) host.assertProviderAvailable?.(run.providerId, run.model, { hasImages: true });
           const message = { id: randomUUID(), text: params.text, source: 'user', runId: run.id, createdAt: now(), ...(params.images?.length ? { images: [...params.images] } : {}) };
           (run.promptMessageIds ||= []).push(message.id);
           (chat.inbox ||= []).push(message); await changed();

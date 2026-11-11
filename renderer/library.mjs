@@ -86,6 +86,14 @@ export function createDiskLibrary({ request, el, button, actions, notify, inspec
     detail.append(el('pre', 'result-content', model ? [...model.files, ...(model.supportFiles || [])].join('\n') : job.files.map(file => `${file.path} · ${formatBytes(file.size)}`).join('\n')));
     if (model?.supportFiles?.length) detail.append(el('p', 'hint', 'Configuration, tokenizer and index support files are retained when recycling weights because other packages may share them.'));
     if (model?.reason) detail.append(el('p', 'hint error-text', model.reason));
+    if (model?.format === 'gguf') {
+      const vision = model.vision;
+      detail.append(el('p', 'hint', vision?.available ? `Vision companion available: ${vision.projector?.relativePath || 'matching projector'}.` : `Text only. ${vision?.reason || 'No matching vision companion is available.'}`));
+      if (job?.repoId && job.revision) {
+        const companion = button('Add or update vision companion', () => inspect(job.repoId, job.revision, job.files.filter(file => file.role !== 'vision-projector').map(file => file.path)));
+        companion.dataset.action = 'add-vision-companion'; detail.append(companion, el('p', 'hint', 'Inspect the original pinned revision, then choose Download vision companion only. Existing model weights stay on disk.'));
+      } else detail.append(el('p', 'hint', 'For manually copied models, inspect the matching publisher and revision in Browse, then choose Download vision companion only.'));
+    }
     if (job?.repoId) detail.append(button('Inspect publisher quantizations', () => inspect(job.repoId)));
     detail.append(el('p', 'hint', 'Use the model selector in chat to choose hardware, start a compatible local model, and apply it to a chat.'));
   }

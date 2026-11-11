@@ -13,9 +13,9 @@ const empty = { type: 'object', properties: {}, additionalProperties: false };
 const sse = frames => new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join(''));
 const responseUsage = { input_tokens: 100, output_tokens: 20, input_tokens_details: { cached_tokens: 30 }, output_tokens_details: { reasoning_tokens: 5 } };
 const expectedUsage = { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30, reasoningTokens: 5 };
-async function fixture(t, kind, fetchImpl, provider) {
+async function fixture(t, kind, fetchImpl, provider, host) {
   const root = await fs.mkdtemp(join(tmpdir(), 'faber-media-usage-test-'));
-  const options = { sourceDir: join(root, 'source'), dataDir: join(root, 'data'), provider: provider || (args => streamProvider({ ...args, fetchImpl })) };
+  const options = { sourceDir: join(root, 'source'), dataDir: join(root, 'data'), provider: provider || (args => streamProvider({ ...args, fetchImpl })), host };
   const runtime = await createRuntime(options);
   t.after(async () => { await runtime.close(); await fs.rm(root, { recursive: true, force: true }); });
   const saved = await runtime.request('provider.save', { name: 'Protocol fixture', kind, baseUrl: 'http://localhost:1/v1', model: 'fixture' });
@@ -32,6 +32,28 @@ async function until(runtime, predicate) {
   });
 }
 const finish = (runtime, id) => until(runtime, state => state.runs.some(run => run.id === id && !['running', 'waiting_approval'].includes(run.status)));
+
+test('image input is checked before saving an attachment, steering, or resending historical images', async t => {
+  let available = false, calls = 0, release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const provider = async function* () { calls++; await pending; yield { type: 'delta', text: 'done' }; };
+  const host = { assertProviderAvailable(_id, _model, options) { if (options.hasImages && !available) throw new Error('Missing vision companion'); } };
+  const { runtime, chat } = await fixture(t, 'openai', undefined, provider, host);
+  const attachment = { chatId: chat.id, text: 'Read this', images: [png] };
+  await assert.rejects(runtime.request('chat.send', attachment), /Missing vision companion/);
+  assert.equal((await runtime.request('state.get')).chats[0].messages.length, 0);
+  available = true;
+  const { runId } = await runtime.request('chat.send', attachment);
+  await until(runtime, state => state.runs[0]?.modelCalls.length > 0);
+  available = false;
+  await assert.rejects(runtime.request('chat.send', attachment), /Missing vision companion/);
+  await assert.rejects(runtime.request('chat.steer', { ...attachment, runId }), /Missing vision companion/);
+  release();
+  assert.equal((await finish(runtime, runId)).runs[0].status, 'completed');
+  const followup = await runtime.request('chat.send', { chatId: chat.id, text: 'Read the same image again' });
+  assert.match((await finish(runtime, followup.runId)).runs.at(-1).error, /Missing vision companion/);
+  assert.equal(calls, 1);
+});
 
 for (const kind of ['ollama', 'openai', 'openai-responses']) test(`${kind}: image-only and historical user images, actual per-call usage survives persistence`, async t => {
   const requests = [];

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest } from '../renderer/model-helpers.mjs';
+import { formatBytes, formatParameters, formatVram, selectedFiles, downloadProgress, requestGate, quantizationGroups, modelDownloadRequest, availableVisionCompanions } from '../renderer/model-helpers.mjs';
 
 test('model metadata distinguishes unknown values from real zero and estimates', () => {
   for (const value of [null, undefined, NaN, Infinity, -1, '1024']) assert.equal(formatBytes(value), 'Unknown');
@@ -53,4 +53,13 @@ test('quantization groups keep exact identities and all authoritative shard path
   assert.deepEqual(modelDownloadRequest(model, ['ignored.gguf'], first), { repoId: 'org/model', revision: model.revision, quantizationId: 'first' });
   assert.deepEqual(modelDownloadRequest(model, ['manual.gguf']), { repoId: 'org/model', revision: model.revision, files: ['manual.gguf'] });
   assert.throws(() => modelDownloadRequest(model, [], high), /Missing shard 2/);
+});
+
+test('vision choices prefer the matching Q8 companion and preserve companion-only file requests', () => {
+  const q8 = { path: 'Model.mmproj-Q8_0.gguf', modelFiles: ['Model.Q4_K_M.gguf'], size: 10 }, f16 = { ...q8, path: 'Model.mmproj-f16.gguf', size: 20 };
+  const model = { id: 'org/model', revision: 'a'.repeat(40), visionCompanions: [f16, { ...q8, path: 'Other.mmproj-Q8_0.gguf', modelFiles: ['Other.gguf'] }, q8] };
+  assert.deepEqual(availableVisionCompanions(model, ['Model.Q4_K_M.gguf']), [q8, f16]);
+  const variant = { id: 'variant', complete: true };
+  assert.deepEqual(modelDownloadRequest(model, [], variant, undefined, q8.path), { repoId: model.id, revision: model.revision, quantizationId: 'variant', projector: q8.path });
+  assert.deepEqual(modelDownloadRequest(model, [q8.path]), { repoId: model.id, revision: model.revision, files: [q8.path] });
 });
