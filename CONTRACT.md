@@ -6,7 +6,7 @@ voice activation and upgrades authored by agents. Local inference is the first
 live target. Faber is a separate application. It does not migrate other
 applications' data or change their launchers.
 
-This contract describes Faber a3.0.2 (application version 3.0.2), including
+This contract describes Faber a3.0.3 (application version 3.0.3), including
 steering, project authority, profiles, recovery, core snapshots, external access
 and compaction hardening. Source/application validation is recorded in
 [VERIFICATION.md](VERIFICATION.md); artifact/publication records accompany release
@@ -120,6 +120,12 @@ Closing the manager revokes it; unrelated tools receive no authority.
 `browser_download` requires ordinary files permission and receives no automatic
 authority. Persistent browser sessions and tabs belong to the calling chat;
 human takeover pauses all its agent browser tools until explicit Resume. See [BROWSER.md](BROWSER.md).
+
+The read-only web crawler uses the ordinary `network` approval and a dedicated
+stdio MCP worker for each calling chat run. Stop, run completion or revocation
+closes the worker. Crawled data is untrusted, kept in bounded memory, and read
+in pages by the owning run. Website credentials stay in the browser. Safe Mode
+omits the crawler tools. [Built-in web research](MCP.md#built-in-web-research)
 
 Each tool is `{name, description, parameters, permission, execute(args, ctx)}`.
 Names use underscores for provider compatibility. Permission is one of `read`,

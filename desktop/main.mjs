@@ -26,6 +26,7 @@ import {createRemoteService,remoteMethods} from './remote-service.mjs';
 import {createGateway} from './gateway.mjs';
 import {workbookTools} from '../tools/workbook.mjs';
 import {createMcp,mcpMethods} from './mcp.mjs';
+import {createCrawlerMcp} from './crawler-mcp.mjs';
 import {createOutlook,outlookMethods} from './outlook.mjs';
 import {createChatGPT} from './chatgpt.mjs';
 import {externalWebUrl,releaseLabel} from '../core/bug-report.mjs';
@@ -82,7 +83,7 @@ const profileMethods=new Set(['profiles.list','profiles.create','profiles.rename
 const methods=new Set(['state.get','project.create','project.update','chat.create','chat.update','chat.send','chat.steer','chat.compact','chat.stop','chat.archive','chat.controls','chat.forceStop','chat.delete','chat.move','project.archive','project.delete','provider.save','provider.test','approval.resolve','tool.run','settings.update','promptPresets.save','promptPresets.delete','promptPresets.reset','app.bugReportDraft','app.reportIssue','app.openLink','extensions.reload','voice.start','voice.stop','voice.speak','voice.status','app.openPath','app.restart','app.recoveryStatus','app.restartNormal','app.uiReady',...modelMethods,...localMethods,...uiMethods,...addonMethods,...chatGPTMethods,...gatewayMethods,...remoteMethods,...profileMethods,...browserMethods,...mediaMethods]);
 methods.add('upgrades.list');
 for(const method of [...workerMethods,...Object.keys(routineSchemas),...mcpMethods,...outlookMethods,...captureMethods])methods.add(method);
-let liveShare,mcp,mcpError,outlook,outlookError;
+let liveShare,mcp,mcpError,outlook,outlookError,crawlerMcp;
 let browserViewRequest=0,browserStartupError,browserChromeFocus,browser,browserParking,browserChats=[],window,runtime,media,music,voice,extensions,modelHub,localModels,uiReload,chatgpt,gateway,remote,remoteStartupError,upgrades,chatGPTStartupError,featureFixture,reloadFixture,bootTimer,uiReady=false,startupFailed=false,quitting=false,shutdownComplete=false,switchingProfile=false,voiceBusy=false,voiceOperations=0,lastZoom;
 let worker,tray,openWindow,showRequested=false,desktopLocked=false,routineBackups,bootControl,workerControl,installerQuiescing=false,interactive;
 for(const method of backupMethods)methods.add(method);
@@ -145,6 +146,7 @@ async function shutdown(){
   try{await remote?.close();}catch(error){failures.push(error);}
   try{await gateway?.close();}catch(error){failures.push(error);}
   try{await mcp?.close();}catch(error){failures.push(error);}
+  try{await crawlerMcp?.close();}catch(error){failures.push(error);}
   try{await outlook?.close();}catch(error){failures.push(error);}
   const results=await Promise.allSettled([browser?.close(),music?.close(),modelHub?.close(),runtime?.close(),chatgpt?.close(),secretQueue]);
   for(const result of results)if(result.status==='rejected')failures.push(result.reason);
@@ -234,6 +236,7 @@ await upgrades.expireStages().catch(error=>console.error('Expired upgrade cleanu
 voice=createVoice({runtime,emit:event=>{if(['starting','listening','speaking'].includes(event.status))voiceBusy=true;else if(event.status==='off')voiceBusy=false;runtime.emit(event);}});
 uiReload=createUIReload({activationStatus:()=>upgrades.activationStatus(),assertAllowed:()=>{if(voiceBusy||voiceOperations)throw new Error('Stop voice before reloading the UI.');},reload:()=>window.webContents.reloadIgnoringCache(),emit:event=>runtime.emit(event)});
 runtime.registerTools([...(workerSmoke?workerSmoke.workerFileTools(fileTools()):fileTools()),...imageTools(),...mediaTools(),...workbookTools(),...music.tools(),shellTool(),...nativeTools(),...extensionTools(extensions,sourceDir),...addonTools(extensions),...upgradeTools(upgrades),...modelHub.tools(),...localModels.tools(),...browser.tools()]);
+crawlerMcp=await createCrawlerMcp({runtime,sourceDir,safeMode:recoveryStatus.safeMode});
 let extensionStartupError;
 try{await extensions.initialize();}catch(error){extensionStartupError=error.message;await runtime.replaceExtensionTools([],[]);console.error('Extension startup failed:',error.message);}
 try{mcp=await createMcp({dataDir,runtime,host,emit,safeMode:recoveryStatus.safeMode});void mcp.restore().catch(error=>{mcpError=error.message;});}catch(error){mcpError=error.message;}

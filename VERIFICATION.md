@@ -5,6 +5,14 @@ Machine-local reports and screenshots are retained in the ignored
 `release/verification/` folder. Original development evidence remains in source
 history and the local release archive.
 
+## a3.0.3 web research
+
+The release-source suite passed 869 tests with two optional skips. Crawler tests cover network approval, parent and child chat isolation, cancellation, Safe Mode, bounded retention, extraction and passage readback.
+
+On a local HTTP fixture, 250 synthetic origins exposed 500 readable pages and 250 robots-denied paths. The test used actual TCP sockets and the MCP stdio transport. Reading sequentially took 11.6 seconds. Sixteen concurrent reads took 0.43 to 0.52 seconds over two runs. The reader made zero requests to denied paths. These timings describe the fixture.
+
+A separate run retrieved six public documentation sites over HTTPS. Local Qwen found the official Python gzip documentation, read the passage about decompressing multiple members and cited the source. Earlier runs with the same model reread the beginning and missed the fact. Long pages now return a continuation and support direct phrase lookup. Web search coverage and the model's choice of evidence vary by task.
+
 ## a3.0 closed integration
 
 The release-labelled a2.9 source was merged with live capture, receipt/recovery
