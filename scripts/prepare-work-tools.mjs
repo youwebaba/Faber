@@ -6,7 +6,9 @@ import {build} from 'esbuild';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 for(const [file,source,notices] of [
   ['desktop/vendor/mcp-client.cjs',"export {Client,StreamableHTTPClientTransport} from '@modelcontextprotocol/client'; export {StdioClientTransport} from '@modelcontextprotocol/client/stdio';",'MCP-CLIENT-NOTICES'],
-  ['tools/vendor/workbook.cjs',"export {unzipSync,zipSync} from 'fflate'; export {DOMParser,XMLSerializer} from '@xmldom/xmldom';",'WORKBOOK-NOTICES']
+  ['tools/vendor/workbook.cjs',"export {unzipSync,zipSync} from 'fflate'; export {DOMParser,XMLSerializer} from '@xmldom/xmldom';",'WORKBOOK-NOTICES'],
+  ['tools/vendor/web-html.cjs',"export {parse} from 'parse5';",'WEB-HTML-NOTICES'],
+  ['tools/vendor/crawler-mcp-server.cjs',"export {Server} from '@modelcontextprotocol/server'; export {StdioServerTransport} from '@modelcontextprotocol/server/stdio';",'CRAWLER-MCP-NOTICES']
 ]){
   const result=await build({absWorkingDir:root,stdin:{contents:source,resolveDir:root},outfile:path.join(root,file),bundle:true,platform:'node',format:'cjs',target:'node24',minify:true,metafile:true,legalComments:'eof'});
   const manifests=new Map();

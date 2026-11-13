@@ -1,5 +1,10 @@
 Faber bundled runtime notices
 
+The built-in web crawler bundles the Model Context Protocol TypeScript server
+SDK and parse5. Their exact versions and the notices for their included
+dependencies accompany this distribution in CRAWLER-MCP-NOTICES.txt and
+WEB-HTML-NOTICES.txt.
+
 Native Safetensors chat uses the official Mistral.rs 0.9.5 library (MIT),
 source commit 465191d0b0a7e2432d327b0de06204ab3f94d3a2, through a separate
 Faber worker using inherited pipes. The stock Mistral.rs server is not bundled.

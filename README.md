@@ -1,4 +1,4 @@
-# Faber a3.0.2
+# Faber a3.0.3
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
@@ -7,6 +7,8 @@ with a Codex-style interface, shared tools, agent delegation, voice, and upgrade
 the agents can author. It has its own source, launchers and release lifecycle.
 
 Faber is in closed development. Versioned installers and patch notes are available to authorized testers in this private repository.
+
+**a3.0.3 adds web research to chats and their agents.** Ask Faber to find public sources, read a long article or crawl a list of websites in parallel. It can open the built-in browser when a task reaches a sign-in, form or upload. [a3.0.3 notes](docs/a3.0.3-release-notes.md)
 
 **a3.0.2 connects GGUF vision models to their matching vision companion.**
 The model browser includes a compatible projector with the selected quantization
@@ -184,6 +186,8 @@ internal version reuses its workbench. See [INSTALLING.md](INSTALLING.md).
   gateway deadlines and Stop/Force stop still apply.
 
 Clustering, installer signing and online addon sharing remain excluded.
+
+For public web research, chats and child agents can search for sources, read a page or crawl a batch of sites in parallel through the built-in MCP crawler. Ask for sources in chat or supply the URLs to read. [Web research tools](MCP.md#built-in-web-research)
 
 The **Browser** toolbar button opens a tabbed Chromium pane beside the chat.
 Drag its divider or use the divider's arrow keys to resize it; Faber remembers the

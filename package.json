@@ -2,7 +2,7 @@
   "name": "faber",
   "productName": "Faber",
   "description": "Faber desktop AI workspace",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "private": true,
   "type": "module",
   "main": "desktop/bootstrap.cjs",
@@ -36,18 +36,20 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
     "@xmldom/xmldom": "0.9.12",
     "electron": "45.2.1",
     "electron-builder": "26.18.0",
     "esbuild": "0.28.2",
     "fflate": "0.8.3",
     "marked": "18.1.3",
+    "parse5": "8.1.1",
     "three": "0.187.0"
   },
   "build": {
     "appId": "ai.clocal.faber",
     "productName": "Faber",
-    "buildVersion": "3.0.2.0",
+    "buildVersion": "3.0.3.0",
     "asar": true,
     "directories": {
       "output": "release",
@@ -124,7 +126,7 @@
       ],
       "executableName": "Faber",
       "icon": "build/faber.ico",
-      "artifactName": "Faber-Setup-a3.0.2-${arch}.${ext}"
+      "artifactName": "Faber-Setup-a3.0.3-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
