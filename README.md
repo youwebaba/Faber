@@ -1,4 +1,4 @@
-# Faber a3.0.3
+# Faber a3.0.3 (Early alpha build)
 
 <img src="renderer/assets/faber-wordmark.svg" alt="Faber — Maker of Things" width="440">
 
